@@ -51,6 +51,15 @@ impl Theme {
     pub fn on_selected() -> Rgba {
         rgb(0x00a6_f2cd)
     }
+    pub fn removed() -> Rgba {
+        rgb(0x00ff_8a80)
+    }
+    pub fn added_bg() -> Rgba {
+        rgb(0x0016_3326)
+    }
+    pub fn removed_bg() -> Rgba {
+        rgb(0x003a_1f1f)
+    }
     pub fn on_accent() -> Rgba {
         rgb(0x0000_3825)
     }

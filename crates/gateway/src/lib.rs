@@ -3,6 +3,7 @@ mod error;
 mod events;
 mod terminal;
 mod tls;
+mod tool_input;
 mod topics;
 mod translate;
 

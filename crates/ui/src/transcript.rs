@@ -7,7 +7,6 @@ use gpui::{
 };
 use model::chat::{Exchange, ExchangeState, Step, group_summary, running_label, thought_summary};
 use model::markdown::{Block, parse};
-use model::session::{ToolCall, ToolState};
 
 use crate::markdown_view;
 use crate::session_pane::SessionPane;
@@ -31,6 +30,7 @@ pub enum Fold {
     Exchange(usize),
     Group(usize, usize),
     Thought(usize, usize),
+    Tool(usize, usize, usize),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,7 +43,7 @@ impl Folds {
         }
     }
 
-    fn open(&self, fold: Fold) -> bool {
+    pub fn open(&self, fold: Fold) -> bool {
         self.0.contains(&fold)
     }
 }
@@ -53,35 +53,18 @@ pub struct Context<'a> {
     pub folds: &'a Folds,
     pub column: Pixels,
     pub pane: WeakEntity<SessionPane>,
+    pub cwd: Option<&'a str>,
+    pub home: Option<&'a str>,
 }
 
-fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
+pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
     div().id(id).cursor_pointer().on_click(move |_, _, cx| {
         pane.update(cx, |pane, cx| pane.toggle_fold(fold, cx)).ok();
     })
 }
 
-fn chevron(open: bool) -> &'static str {
+pub fn chevron(open: bool) -> &'static str {
     if open { "▾" } else { "▸" }
-}
-
-fn tool_row(tool: &ToolCall) -> impl IntoElement {
-    let (dot, label) = match tool.state {
-        ToolState::Running => (Theme::accent(), "running"),
-        ToolState::Done => (Theme::ink_dim(), ""),
-        ToolState::Failed => (Theme::warn(), "failed"),
-    };
-    div()
-        .h(px(24.))
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .pl(px(22.))
-        .text_size(px(13.))
-        .text_color(Theme::ink_dim())
-        .child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(dot))
-        .child(tool.name.clone())
-        .child(div().text_color(Theme::warn()).child(label))
 }
 
 fn step(
@@ -168,7 +151,11 @@ fn step(
                     .child(label)
                     .child(div().text_xs().child(format!("{}", tools.len()))),
                 )
-                .when(open, |group| group.children(tools.iter().map(tool_row)))
+                .when(open, |group| {
+                    group.children(tools.iter().enumerate().map(|(tool, call)| {
+                        crate::tool_view::row(call, Fold::Tool(ix, step_index, tool), cx)
+                    }))
+                })
                 .into_any_element()
         }
     }
