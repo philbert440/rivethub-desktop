@@ -1,11 +1,38 @@
 use gpui::SharedString;
 
+fn without_markup(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        let tail = &rest[open + 1..];
+        let tag = tail.find('>').map(|close| &tail[..close]).filter(|tag| {
+            let name = tag.trim_start_matches('/');
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        });
+        if let Some(tag) = tag {
+            out.push_str(&rest[..open]);
+            out.push(' ');
+            rest = &tail[tag.len() + 1..];
+        } else {
+            out.push_str(&rest[..=open]);
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn one_line(title: Option<&str>) -> SharedString {
-    let title = title
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("Untitled");
-    title.split_whitespace().collect::<Vec<_>>().join(" ").into()
+    let words = title.map(without_markup).unwrap_or_default();
+    let line = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        "Untitled".into()
+    } else {
+        line.into()
+    }
 }
 
 pub fn now_ms() -> i64 {
@@ -24,5 +51,26 @@ pub fn ago(now_ms: i64, at_ms: i64) -> String {
         60..1440 => format!("{}h", minutes / 60),
         1440..20160 => format!("{}d", minutes / 1440),
         _ => format!("{}w", minutes / 10080),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::one_line;
+
+    #[test]
+    fn titles_lose_harness_markup_but_keep_comparisons() {
+        assert_eq!(
+            one_line(Some(
+                "<local-command-caveat>The command\nran</local-command-caveat>"
+            ))
+            .as_ref(),
+            "The command ran"
+        );
+        assert_eq!(
+            one_line(Some("if a < b and c > d")).as_ref(),
+            "if a < b and c > d"
+        );
+        assert_eq!(one_line(Some("<x></x>")).as_ref(), "Untitled");
     }
 }
