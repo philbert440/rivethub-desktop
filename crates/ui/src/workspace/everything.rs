@@ -177,6 +177,42 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn suggestion_chip(
+        &self,
+        index: usize,
+        session: &SessionSummary,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let suggestion = self.suggestions.get(&session.id)?;
+        let label = suggestion
+            .topic
+            .as_ref()
+            .and_then(|topic| self.topic(topic))
+            .map_or_else(
+                || format!("+ {}", suggestion.name),
+                |topic| format!("→ {}", topic.name),
+            );
+        let accept = session.id.clone();
+        Some(
+            div()
+                .id(("suggest", index))
+                .max_w(px(150.))
+                .truncate()
+                .px_2()
+                .rounded(px(9.))
+                .border_1()
+                .border_color(Theme::accent())
+                .text_color(Theme::accent())
+                .hover(|chip| chip.bg(Theme::selected()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.accept_suggestion(accept.clone(), cx);
+                }))
+                .child(label)
+                .into_any_element(),
+        )
+    }
+
     fn forming_tile(
         &self,
         index: usize,
@@ -249,6 +285,7 @@ impl Workspace {
                         format!("↳ {count} {noun}")
                     }))
                     .child(div().flex_1())
+                    .children(self.suggestion_chip(index, session, cx))
                     .child(
                         div()
                             .id(("place", index))

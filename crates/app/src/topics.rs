@@ -1,5 +1,7 @@
 use gateway::GatewayError;
-use model::topics::{Placements, Topic};
+use std::collections::HashMap;
+
+use model::topics::{Placements, Suggestion, Topic};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -18,6 +20,24 @@ impl Hub {
                 .flat_map(|(topic, sessions)| sessions.into_iter().map(|session| (session, topic.id.clone())))
                 .collect();
             Ok((topics, placements))
+        })
+        .await
+    }
+
+    pub async fn suggestions(
+        &self,
+        sessions: Vec<SessionId>,
+    ) -> Result<HashMap<SessionId, Suggestion>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            let found =
+                futures::future::try_join_all(sessions.iter().map(|session| gateway.suggestion(session)))
+                    .await?;
+            Ok(sessions
+                .into_iter()
+                .zip(found)
+                .filter_map(|(session, suggestion)| Some((session, suggestion?)))
+                .collect())
         })
         .await
     }

@@ -244,6 +244,8 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
         HarnessId::new("claude-code"),
         model::NativeSessionId::new(format!("00000000-0000-4000-8000-{stamp:012}")),
     );
+    let unplaced = hub.suggestions(vec![session.clone()]).await?;
+    assert!(unplaced.is_empty());
     let name = format!("Desktop smoke {stamp}");
     let created = hub.place_in_new(session.clone(), name.clone()).await?;
     let (topics, placements) = hub.topics().await?;

@@ -10,7 +10,7 @@ use gpui::{
     Styled, Subscription, Window, actions, div, img, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
-use model::topics::{Atlas, Board, Placements, Topic, Windows};
+use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::session_pane::SessionPane;
@@ -50,6 +50,7 @@ pub struct Workspace {
     sessions: Vec<SessionSummary>,
     topics: Vec<Topic>,
     placements: Placements,
+    suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
     folded: HashSet<SessionId>,
     problem: Option<String>,
@@ -104,6 +105,7 @@ impl Workspace {
             sessions: Vec::new(),
             topics: Vec::new(),
             placements: Placements::new(),
+            suggestions: HashMap::new(),
             subagents: HashMap::new(),
             folded: HashSet::new(),
             problem: None,
@@ -151,7 +153,42 @@ impl Workspace {
             *self.subagents.entry(parent).or_default() += 1;
         }
         self.sync_panel(cx);
+        self.load_suggestions(cx);
         cx.notify();
+    }
+
+    fn load_suggestions(&self, cx: &mut Context<Self>) {
+        let forming: Vec<SessionId> = self
+            .board()
+            .forming
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+        if forming.is_empty() {
+            return;
+        }
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let found = hub.suggestions(forming).await;
+            this.update(cx, |this, cx| {
+                if let Ok(found) = found {
+                    this.suggestions = found;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn accept_suggestion(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        let Some(suggestion) = self.suggestions.remove(&session) else {
+            return;
+        };
+        match suggestion.topic.filter(|topic| self.topic(topic).is_some()) {
+            Some(topic) => self.place(session, topic, cx),
+            None => self.place_in_new(session, suggestion.name, cx),
+        }
     }
 
     fn board(&self) -> Board<'_> {
