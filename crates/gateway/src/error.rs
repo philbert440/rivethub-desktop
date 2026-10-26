@@ -19,3 +19,9 @@ pub enum GatewayError {
     #[error("not a session id: {0}")]
     SessionId(String),
 }
+
+impl GatewayError {
+    pub fn is_turn_in_flight(&self) -> bool {
+        matches!(self, Self::Status { status: 409, detail } if detail.contains("turn_in_flight"))
+    }
+}

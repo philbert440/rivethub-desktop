@@ -86,6 +86,32 @@ impl Gateway {
         }
     }
 
+    pub async fn decide(
+        &self,
+        session: &SessionId,
+        request_id: &str,
+        decision: model::session::Decision,
+    ) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = format!(
+            "{}/api/harness-sessions/{segment}/approvals/{request_id}",
+            self.base_url
+        );
+        let decision = match decision {
+            model::session::Decision::Allow => "allow",
+            model::session::Decision::AllowForSession => "allow-session",
+            model::session::Decision::Deny => "deny",
+        };
+        let reply = self
+            .http
+            .post(url)
+            .json(&serde_json::json!({ "decision": decision }))
+            .send()
+            .await
+            .map_err(GatewayError::Http)?;
+        Self::check(reply).await.map(drop)
+    }
+
     pub async fn stop(&self, session: &SessionId) -> Result<(), GatewayError> {
         let url = format!("{}/api/harness-sessions/{session}/stop", self.base_url);
         let reply = self.http.post(url).send().await.map_err(GatewayError::Http)?;

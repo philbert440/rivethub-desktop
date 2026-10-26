@@ -1,9 +1,10 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gateway::Gateway;
 use model::SessionId;
-use model::session::{SessionEvent, SessionView};
+use model::session::{Decision, SessionEvent, SessionView};
 use parking_lot::RwLock;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
@@ -16,12 +17,15 @@ const COMMAND_BUFFER: usize = 32;
 enum Command {
     Send(String),
     Stop,
+    Unqueue(usize),
+    Decide { request_id: String, decision: Decision },
 }
 
 #[derive(Debug, Clone)]
 pub struct SessionHandle {
     id: SessionId,
     view: Arc<RwLock<SessionView>>,
+    queue: Arc<RwLock<VecDeque<String>>>,
     revision: watch::Receiver<u64>,
     commands: mpsc::Sender<Command>,
 }
@@ -46,19 +50,67 @@ impl SessionHandle {
     pub fn stop(&self) {
         let _ = self.commands.try_send(Command::Stop);
     }
+
+    pub fn queued(&self) -> Vec<String> {
+        self.queue.read().iter().cloned().collect()
+    }
+
+    pub fn unqueue(&self, index: usize) {
+        let _ = self.commands.try_send(Command::Unqueue(index));
+    }
+
+    pub fn decide(&self, request_id: String, decision: Decision) {
+        let _ = self.commands.try_send(Command::Decide { request_id, decision });
+    }
 }
 
 struct Actor {
     gateway: Gateway,
     id: SessionId,
     view: Arc<RwLock<SessionView>>,
+    queue: Arc<RwLock<VecDeque<String>>>,
     revision: watch::Sender<u64>,
 }
 
 impl Actor {
-    fn apply(&self, event: SessionEvent) {
-        self.view.write().apply(event);
+    fn changed(&self) {
         self.revision.send_modify(|revision| *revision += 1);
+    }
+
+    async fn apply(&self, event: SessionEvent) {
+        let finished = event == SessionEvent::TurnComplete;
+        self.view.write().apply(event);
+        self.changed();
+        if finished {
+            self.drain().await;
+        }
+    }
+
+    async fn drain(&self) {
+        if self.view.read().busy() {
+            return;
+        }
+        let Some(next) = self.queue.write().pop_front() else {
+            return;
+        };
+        self.changed();
+        self.send(next).await;
+    }
+
+    async fn send(&self, text: String) {
+        match self.gateway.send_turn(&self.id, &text).await {
+            Ok(()) => {}
+            Err(err) if err.is_turn_in_flight() => {
+                self.queue.write().push_front(text);
+                self.changed();
+            }
+            Err(err) => self.fail(&err.to_string()),
+        }
+    }
+
+    fn fail(&self, message: &str) {
+        self.view.write().apply(SessionEvent::Error(message.to_owned()));
+        self.changed();
     }
 
     async fn run(self, mut commands: mpsc::Receiver<Command>) {
@@ -71,7 +123,7 @@ impl Actor {
                     loop {
                         tokio::select! {
                             event = stream.events.recv() => match event {
-                                Some(event) => self.apply(event),
+                                Some(event) => self.apply(event).await,
                                 None => break,
                             },
                             command = commands.recv() => match command {
@@ -81,7 +133,7 @@ impl Actor {
                         }
                     }
                 }
-                Err(err) => self.apply(SessionEvent::Error(err.to_string())),
+                Err(err) => self.fail(&err.to_string()),
             }
             tokio::select! {
                 () = tokio::time::sleep(retry) => {}
@@ -96,29 +148,48 @@ impl Actor {
 
     async fn handle(&self, command: Command) {
         let outcome = match command {
-            Command::Send(text) => self.gateway.send_turn(&self.id, &text).await,
+            Command::Send(text) => {
+                if self.view.read().busy() || !self.queue.read().is_empty() {
+                    self.queue.write().push_back(text);
+                    self.changed();
+                } else {
+                    self.send(text).await;
+                }
+                Ok(())
+            }
+            Command::Unqueue(index) => {
+                self.queue.write().remove(index);
+                self.changed();
+                Ok(())
+            }
             Command::Stop => self.gateway.stop(&self.id).await,
+            Command::Decide { request_id, decision } => {
+                self.gateway.decide(&self.id, &request_id, decision).await
+            }
         };
         if let Err(err) = outcome {
-            self.apply(SessionEvent::Error(err.to_string()));
+            self.fail(&err.to_string());
         }
     }
 }
 
 pub fn spawn(runtime: &Handle, gateway: Gateway, id: SessionId) -> SessionHandle {
     let view = Arc::new(RwLock::new(SessionView::default()));
+    let queue = Arc::new(RwLock::new(VecDeque::new()));
     let (revision_tx, revision) = watch::channel(0);
     let (commands, commands_rx) = mpsc::channel(COMMAND_BUFFER);
     let actor = Actor {
         gateway,
         id: id.clone(),
         view: Arc::clone(&view),
+        queue: Arc::clone(&queue),
         revision: revision_tx,
     };
     runtime.spawn(actor.run(commands_rx));
     SessionHandle {
         id,
         view,
+        queue,
         revision,
         commands,
     }

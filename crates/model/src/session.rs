@@ -95,6 +95,13 @@ pub struct Approval {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Allow,
+    AllowForSession,
+    Deny,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     Snapshot {
@@ -213,6 +220,10 @@ impl SessionView {
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    pub fn busy(&self) -> bool {
+        self.live.is_some() || self.activity != Activity::Idle
     }
 
     pub fn needs_you(&self) -> bool {

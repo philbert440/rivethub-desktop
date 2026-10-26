@@ -7,7 +7,7 @@ use gpui::{
     px, relative,
 };
 use model::chat::exchanges;
-use model::session::{SessionSummary, SessionView};
+use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
 
 use crate::input::{Submitted, TextInput};
@@ -41,6 +41,7 @@ pub struct SessionPane {
     composer: Entity<TextInput>,
     _revisions: Task<()>,
     _submitted: Subscription,
+    _typed: Subscription,
 }
 
 impl SessionPane {
@@ -50,6 +51,7 @@ impl SessionPane {
         let submitted = cx.subscribe(&composer, |this, _, Submitted(text), _| {
             this.handle.send(text.clone());
         });
+        let typed = cx.observe(&composer, |_, _, cx| cx.notify());
         let mut revisions = handle.revisions();
         let watcher = cx.spawn(async move |this, cx| {
             while revisions.changed().await.is_ok() {
@@ -71,6 +73,7 @@ impl SessionPane {
             composer,
             _revisions: watcher,
             _submitted: submitted,
+            _typed: typed,
         }
     }
 
@@ -288,26 +291,175 @@ impl SessionPane {
         )
     }
 
-    fn needs_you(view: &SessionView) -> Option<impl IntoElement> {
+    fn decision_button(
+        &self,
+        label: &'static str,
+        decision: Decision,
+        primary: bool,
+        request_id: &str,
+    ) -> impl IntoElement {
+        let handle = self.handle.clone();
+        let request_id = request_id.to_owned();
+        div()
+            .id(label)
+            .h(px(34.))
+            .px_4()
+            .rounded(px(17.))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .when(primary, |button| {
+                button.bg(Theme::accent()).text_color(Theme::on_accent())
+            })
+            .when(!primary, |button| {
+                button
+                    .border_1()
+                    .border_color(Theme::line())
+                    .text_color(Theme::ink())
+            })
+            .on_click(move |_, _, _| handle.decide(request_id.clone(), decision))
+            .child(label)
+    }
+
+    fn approval_card(&self, view: &SessionView) -> Option<AnyElement> {
         let approval = view.approvals().first()?;
-        let reason = approval.reason.clone().unwrap_or_default();
+        let request_id = approval.request_id.clone();
         Some(
             div()
-                .p_4()
-                .rounded(px(18.))
+                .w_full()
+                .p_5()
+                .rounded(px(28.))
                 .bg(Theme::warn_container())
                 .border_1()
                 .border_color(Theme::warn_line())
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap_3()
                 .child(
                     div()
+                        .text_xs()
                         .text_color(Theme::warn())
-                        .child(format!("Approval: {}", approval.tool)),
+                        .child("Waiting for approval"),
                 )
-                .child(div().text_color(Theme::ink()).child(reason)),
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .text_color(Theme::ink())
+                        .child(approval.tool.clone()),
+                )
+                .children(approval.reason.clone().map(|reason| {
+                    div()
+                        .font_family(Theme::MONO)
+                        .text_size(px(12.))
+                        .text_color(Theme::ink_dim())
+                        .child(reason)
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(self.decision_button("Reject", Decision::Deny, false, &request_id))
+                        .child(self.decision_button(
+                            "Allow for session",
+                            Decision::AllowForSession,
+                            false,
+                            &request_id,
+                        ))
+                        .child(self.decision_button("Allow once", Decision::Allow, true, &request_id)),
+                )
+                .into_any_element(),
         )
+    }
+
+    fn queue_dock(&self) -> Option<AnyElement> {
+        let queued = self.handle.queued();
+        if queued.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .w_full()
+                .px_4()
+                .py_2()
+                .rounded(px(18.))
+                .bg(Theme::panel())
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
+                    "{} queued {}",
+                    queued.len(),
+                    if queued.len() == 1 { "message" } else { "messages" }
+                )))
+                .children(queued.into_iter().enumerate().map(|(index, text)| {
+                    let handle = self.handle.clone();
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .text_color(Theme::ink())
+                                .child(crate::text::one_line(Some(&text))),
+                        )
+                        .child(
+                            div()
+                                .id(("unqueue", index))
+                                .cursor_pointer()
+                                .text_color(Theme::ink_dim())
+                                .on_click(move |_, _, _| handle.unqueue(index))
+                                .child("×"),
+                        )
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn composer_card(&self, view: &SessionView, cx: &mut Context<Self>) -> AnyElement {
+        let busy = view.busy();
+        let draft = !self.composer.read(cx).is_empty();
+        let (label, enabled) = match (busy, draft) {
+            (true, false) => ("■", true),
+            (true, true) => ("Queue", true),
+            (false, draft) => ("↑", draft),
+        };
+        let button = div()
+            .id("send")
+            .h(px(34.))
+            .min_w(px(34.))
+            .px_3()
+            .rounded(px(17.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(Theme::accent())
+            .text_color(Theme::on_accent())
+            .when(!enabled, |button| button.opacity(0.4))
+            .when(enabled, gpui::Styled::cursor_pointer)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if busy && !draft {
+                    this.handle.stop();
+                } else if let Some(text) = this.composer.update(cx, super::input::TextInput::take) {
+                    this.handle.send(text);
+                }
+            }))
+            .child(label);
+        div()
+            .w_full()
+            .pl_5()
+            .pr_2()
+            .py_2()
+            .rounded(px(28.))
+            .bg(Theme::card())
+            .flex()
+            .items_end()
+            .gap_2()
+            .child(div().flex_1().py_1().child(self.composer.clone()))
+            .child(button)
+            .into_any_element()
     }
 }
 
@@ -330,7 +482,6 @@ impl Render for SessionPane {
             .flex()
             .flex_col()
             .gap_3()
-            .children(Self::needs_you(&view))
             .children(error.map(|message| div().text_color(Theme::warn()).child(message)))
             .children(Self::context_bar(&view));
         let prompt = self.spawn_prompt(cx);
@@ -395,13 +546,9 @@ impl Render for SessionPane {
                     .child(div().flex_1().w_full().pt_2().child(transcript))
                     .children(back)
                     .child(
-                        footer.child(
-                            div()
-                                .px_5()
-                                .py_3()
-                                .rounded(px(28.))
-                                .bg(Theme::card())
-                                .child(self.composer.clone()),
+                        footer.children(self.queue_dock()).child(
+                            self.approval_card(&view)
+                                .unwrap_or_else(|| self.composer_card(&view, cx)),
                         ),
                     )
             }

@@ -8,6 +8,9 @@ impl Theme {
     pub fn window() -> Rgba {
         rgb(0x000f_1512)
     }
+    pub fn panel() -> Rgba {
+        rgb(0x0014_1a17)
+    }
     pub fn surface() -> Rgba {
         rgb(0x0018_1e1b)
     }
