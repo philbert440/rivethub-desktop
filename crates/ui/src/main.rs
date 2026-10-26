@@ -76,13 +76,45 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
+fn log_file() -> Option<std::fs::File> {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
+    let dir = state.join("rivethub-desktop");
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("rivethub-desktop.log"))
+        .ok()
+}
+
+fn init_logging() {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    match log_file() {
+        Some(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::io::stderr.and(std::sync::Mutex::new(file)))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        tracing::error!(
+            thread = thread.name().unwrap_or("unnamed"),
+            location = info.location().map(ToString::to_string).unwrap_or_default(),
+            backtrace = %std::backtrace::Backtrace::force_capture(),
+            "panic: {}",
+            info.payload_as_str().unwrap_or("non-string panic payload"),
+        );
+    }));
+}
+
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    init_logging();
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -104,31 +136,33 @@ fn main() -> ExitCode {
         endpoint.ca_pem.clone(),
         device_identity(),
     );
-    gpui_platform::application().run(move |cx: &mut App| {
-        bind_keys(cx);
-        if let Err(err) = cx.text_system().add_fonts(brand::fonts()) {
-            tracing::warn!(%err, "loading the bundled fonts failed");
-        }
-        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("RivetHub".into()),
+    gpui_platform::application()
+        .with_assets(brand::Icons)
+        .run(move |cx: &mut App| {
+            bind_keys(cx);
+            if let Err(err) = cx.text_system().add_fonts(brand::fonts()) {
+                tracing::warn!(%err, "loading the bundled fonts failed");
+            }
+            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("RivetHub".into()),
+                    ..Default::default()
+                }),
+                app_id: Some("rivethub-desktop".into()),
                 ..Default::default()
-            }),
-            app_id: Some("rivethub-desktop".into()),
-            ..Default::default()
-        };
-        let opened = cx.open_window(options, |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
-            window.focus(&workspace.focus_handle(cx), cx);
-            workspace
+            };
+            let opened = cx.open_window(options, |window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
+                window.focus(&workspace.focus_handle(cx), cx);
+                workspace
+            });
+            if opened.is_err() {
+                cx.quit();
+            }
+            cx.activate(true);
         });
-        if opened.is_err() {
-            cx.quit();
-        }
-        cx.activate(true);
-    });
     drop(runtime);
     ExitCode::SUCCESS
 }
