@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use app::Hub;
-use gateway::{Endpoint, Gateway};
+use gateway::{Endpoint, Gateway, Identity};
 use gpui::{
     App, AppContext, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
@@ -26,7 +26,22 @@ fn endpoint() -> Endpoint {
     let base_url = std::env::var("RIVETHUB_URL").unwrap_or_else(|_| "https://127.0.0.1:5174".into());
     let ca_pem =
         std::env::var_os("RIVETHUB_CA").map_or_else(|| home.join(".rivethub/step-root.crt"), PathBuf::from);
-    Endpoint { base_url, ca_pem }
+    Endpoint {
+        base_url,
+        ca_pem,
+        identity: None,
+    }
+}
+
+fn device_identity() -> Option<Identity> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let dir = std::env::var_os("RIVETHUB_DEVICE_DIR")
+        .map_or_else(|| home.join(".config/RivetHub/mtls"), PathBuf::from);
+    let identity = Identity {
+        cert_pem: dir.join("device.crt"),
+        key_pem: dir.join("device.key"),
+    };
+    (identity.cert_pem.is_file() && identity.key_pem.is_file()).then_some(identity)
 }
 
 fn bind_keys(cx: &mut App) {
@@ -78,7 +93,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let hub = Hub::new(runtime.handle().clone(), gateway);
+    let hub = Hub::new(
+        runtime.handle().clone(),
+        gateway,
+        endpoint.ca_pem.clone(),
+        device_identity(),
+    );
     gpui_platform::application().run(move |cx: &mut App| {
         bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);

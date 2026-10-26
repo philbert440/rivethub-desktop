@@ -16,9 +16,16 @@ use rustls::ClientConfig;
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
+pub struct Identity {
+    pub cert_pem: PathBuf,
+    pub key_pem: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct Endpoint {
     pub base_url: String,
     pub ca_pem: PathBuf,
+    pub identity: Option<Identity>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +46,7 @@ struct CreateSession<'a> {
 
 impl Gateway {
     pub fn connect(endpoint: &Endpoint) -> Result<Self, GatewayError> {
-        let tls = Arc::new(tls::client_config(&endpoint.ca_pem)?);
+        let tls = Arc::new(tls::client_config(&endpoint.ca_pem, endpoint.identity.as_ref())?);
         let http = reqwest::Client::builder()
             .tls_backend_preconfigured(ClientConfig::clone(&tls))
             .build()
@@ -55,6 +62,21 @@ impl Gateway {
         let url = format!("{}/api/harnesses/{}/sessions", self.base_url, harness.as_str());
         let list: wire::harness::HarnessSessionList = self.get_json(&url).await?;
         Ok(list.sessions.into_iter().map(translate::summary).collect())
+    }
+
+    pub async fn mesh(&self) -> Result<Vec<model::mesh::Node>, GatewayError> {
+        let overview: wire::gateway::devices::MeshOverview =
+            self.get_json(&format!("{}/mesh.json", self.base_url)).await?;
+        Ok(overview
+            .nodes
+            .into_iter()
+            .map(|node| model::mesh::Node {
+                id: node.id,
+                name: node.name,
+                url: node.url,
+                online: node.online,
+            })
+            .collect())
     }
 
     pub async fn agents(&self) -> Result<model::agents::Roster, GatewayError> {

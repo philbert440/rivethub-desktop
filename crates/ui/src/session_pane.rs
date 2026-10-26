@@ -47,7 +47,7 @@ pub struct SessionPane {
 
 impl SessionPane {
     pub fn new(hub: Hub, summary: SessionSummary, cx: &mut Context<Self>) -> Self {
-        let handle = hub.open_session(summary.id.clone());
+        let handle = hub.open_session(&summary);
         let composer = cx.new(|cx| TextInput::new("Message claude…", cx));
         let submitted = cx.subscribe(&composer, |this, _, Submitted(text), _| {
             this.handle.send(text.clone());
@@ -95,10 +95,10 @@ impl SessionPane {
 
     fn check_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
-        let id = self.summary.id.clone();
+        let summary = self.summary.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let running = hub.has_terminal(id).await.unwrap_or(false);
+            let running = hub.has_terminal(&summary).await.unwrap_or(false);
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| {
                     if running {
@@ -118,7 +118,7 @@ impl SessionPane {
     fn attach_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_spawn = false;
         let terminal = self.terminal.get_or_insert_with(|| {
-            let handle = self.hub.open_terminal(self.summary.id.clone(), FIRST_TERMINAL);
+            let handle = self.hub.open_terminal(&self.summary, FIRST_TERMINAL);
             cx.new(|cx| TerminalView::new(handle, cx))
         });
         window.focus(&terminal.focus_handle(cx), cx);

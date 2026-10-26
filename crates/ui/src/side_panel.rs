@@ -151,6 +151,7 @@ impl SidePanel {
                 cwd: None,
                 updated_at_ms: found.latest_ms,
                 parent: None,
+                node: None,
             })
     }
 

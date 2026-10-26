@@ -6,6 +6,10 @@ pub enum GatewayError {
     Ca { path: String, source: std::io::Error },
     #[error("the CA bundle at {0} holds no certificates")]
     EmptyCa(String),
+    #[error("the device key at {0} holds no private key")]
+    Key(String),
+    #[error("no reachable gateway for node {0}")]
+    UnknownNode(String),
     #[error("tls: {0}")]
     Tls(#[from] rustls::Error),
     #[error("http: {0}")]
