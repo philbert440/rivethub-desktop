@@ -2,6 +2,7 @@ mod brand;
 mod input;
 mod markdown_view;
 mod session_pane;
+mod side_panel;
 mod terminal_view;
 mod text;
 mod theme;
@@ -18,7 +19,7 @@ use gpui::{
     App, AppContext, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 use session_pane::ToggleTerminal;
-use workspace::{NewSession, Workspace, ZoomOut};
+use workspace::{NewSession, ToggleSidePanel, Workspace, ZoomOut};
 
 fn endpoint() -> Endpoint {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
@@ -32,6 +33,7 @@ fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-up", ZoomOut, Some("Workspace")),
         KeyBinding::new("ctrl-t", NewSession, Some("Workspace")),
+        KeyBinding::new("ctrl-b", ToggleSidePanel, Some("Workspace")),
         KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("shift-enter", input::Newline, Some("TextInput")),
@@ -90,7 +92,7 @@ fn main() -> ExitCode {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(hub, cx));
+            let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
             window.focus(&workspace.focus_handle(cx), cx);
             workspace
         });
