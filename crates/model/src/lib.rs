@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod chat;
 pub mod ids;
+pub mod lineage;
 pub mod markdown;
 pub mod nav;
 pub mod search;
