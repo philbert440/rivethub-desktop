@@ -131,8 +131,7 @@ impl Workspace {
             .iter()
             .filter(|session| self.feed.needs_you(session))
             .count();
-        let count = card.sessions.len();
-        let noun = if count == 1 { "session" } else { "sessions" };
+        let active = ago(now, card.active_ms);
         div()
             .id(("topic", index))
             .w(px(TILE_WIDTH))
@@ -174,12 +173,10 @@ impl Workspace {
                     )
                     .when(waiting > 0, |row| row.child(Self::needs_you_chip())),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child(format!("{count} {noun} · {}", ago(now, card.active_ms))),
-            )
+            .child(match self.counts(card.sessions.iter().copied()) {
+                Some(counts) => counts.child(format!("\u{a0}·\u{a0}{active}")),
+                None => div().text_xs().text_color(Theme::ink_dim()).child(active),
+            })
             .children(card.sessions.iter().take(CARD_SESSIONS).map(|session| {
                 div()
                     .flex()
