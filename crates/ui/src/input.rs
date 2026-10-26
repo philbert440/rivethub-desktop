@@ -764,6 +764,10 @@ impl TextInput {
         }
     }
 
+    pub fn text(&self) -> &str {
+        self.content.trim()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.content.trim().is_empty()
     }

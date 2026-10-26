@@ -1,54 +1,40 @@
+mod everything;
+mod topic_view;
+
+use std::collections::{HashMap, HashSet};
+
 use app::Hub;
+use gateway::GatewayError;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window, actions, div, img, prelude::*, px,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Rgba, SharedString,
+    Styled, Subscription, Window, actions, div, img, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
-use model::{Altitude, HarnessId};
+use model::topics::{Atlas, Board, Placements, Topic, Windows};
+use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::session_pane::SessionPane;
-use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, SidePanel};
+use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
+use crate::text::now_ms;
+use crate::topic_picker::{PickerEvent, TopicPicker};
 use crate::{brand, theme::Theme};
 
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
 const CLAUDE: &str = "claude-code";
-const FORMING_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+const HOUR_MS: i64 = 60 * 60 * 1000;
+const FORMING_MS: i64 = 24 * HOUR_MS;
+const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-        })
-}
+type Loaded = (
+    Result<Vec<SessionSummary>, GatewayError>,
+    Result<(Vec<Topic>, Placements), GatewayError>,
+);
 
-fn history(sessions: &[SessionSummary], now_ms: i64) -> Vec<SessionSummary> {
-    let young: std::collections::HashSet<&model::SessionId> = sessions
-        .iter()
-        .filter(|session| session.parent.is_none() && now_ms - session.updated_at_ms <= FORMING_WINDOW_MS)
-        .map(|session| &session.id)
-        .collect();
-    let mut older: Vec<SessionSummary> = sessions
-        .iter()
-        .filter(|session| !young.contains(&session.id))
-        .filter(|session| {
-            session
-                .parent
-                .as_ref()
-                .is_none_or(|parent| !young.contains(parent))
-        })
-        .cloned()
-        .collect();
-    older.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-    older
-}
-
-fn forming(mut sessions: Vec<SessionSummary>, now_ms: i64) -> Vec<SessionSummary> {
-    sessions
-        .retain(|session| session.parent.is_none() && now_ms - session.updated_at_ms <= FORMING_WINDOW_MS);
-    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-    sessions
+struct Placing {
+    session: SessionId,
+    picker: Entity<TopicPicker>,
+    _events: Subscription,
 }
 
 pub struct Workspace {
@@ -56,14 +42,17 @@ pub struct Workspace {
     hub: Hub,
     altitude: Altitude,
     sessions: Vec<SessionSummary>,
-    forming: Vec<SessionSummary>,
-    subagents: std::collections::HashMap<model::SessionId, usize>,
+    topics: Vec<Topic>,
+    placements: Placements,
+    subagents: HashMap<SessionId, usize>,
+    folded: HashSet<SessionId>,
     problem: Option<String>,
     pane: Option<Entity<SessionPane>>,
     panel: Entity<SidePanel>,
     panel_open: bool,
+    placing: Option<Placing>,
     feed: app::WorkspaceFeed,
-    _panel_events: gpui::Subscription,
+    _panel_events: Subscription,
     _feed: [gpui::Task<()>; 2],
 }
 
@@ -76,7 +65,8 @@ impl Workspace {
                 window,
                 |this, _, event: &PanelEvent, window, cx| match event {
                     PanelEvent::Open(summary) => this.open(summary.clone(), window, cx),
-                    PanelEvent::Start(agent) => this.start_with(agent.clone(), window, cx),
+                    PanelEvent::OpenTopic(topic) => this.open_topic(topic.clone(), window, cx),
+                    PanelEvent::Start(agent) => this.start_with(agent.clone(), None, window, cx),
                 },
             );
         let feed = hub.watch_workspace();
@@ -87,7 +77,7 @@ impl Workspace {
                     .timer(std::time::Duration::from_millis(750))
                     .await;
                 changes.borrow_and_update();
-                if this.update(cx, |this, cx| this.load_forming(cx)).is_err() {
+                if this.update(cx, |this, cx| this.load(cx)).is_err() {
                     break;
                 }
             }
@@ -105,54 +95,112 @@ impl Workspace {
             hub,
             altitude: Altitude::Everything,
             sessions: Vec::new(),
-            forming: Vec::new(),
-            subagents: std::collections::HashMap::new(),
+            topics: Vec::new(),
+            placements: Placements::new(),
+            subagents: HashMap::new(),
+            folded: HashSet::new(),
             problem: None,
             pane: None,
             panel,
             panel_open: true,
+            placing: None,
             feed,
             _panel_events: panel_events,
             _feed: [refresh, repaint],
         };
-        workspace.load_forming(cx);
+        workspace.load(cx);
         workspace
     }
 
-    fn load_forming(&self, cx: &mut Context<Self>) {
+    fn load(&self, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let loaded = hub.recent_sessions(HarnessId::new(CLAUDE)).await;
-            this.update(cx, |this, cx| {
-                match loaded {
-                    Ok(sessions) => {
-                        let now = now_ms();
-                        let history = history(&sessions, now);
-                        this.panel
-                            .update(cx, |panel, cx| panel.set_sessions(history, sessions.clone(), cx));
-                        this.sessions.clone_from(&sessions);
-                        this.forming = forming(sessions, now);
-                        this.problem = None;
-                    }
-                    Err(err) => this.problem = Some(err.to_string()),
-                }
-                cx.notify();
-            })
-            .ok();
+            let loaded: Loaded = (
+                hub.recent_sessions(HarnessId::new(CLAUDE)).await,
+                hub.topics().await,
+            );
+            this.update(cx, |this, cx| this.loaded(loaded, cx)).ok();
         })
         .detach();
     }
 
+    fn loaded(&mut self, (sessions, topics): Loaded, cx: &mut Context<Self>) {
+        let mut problems = Vec::new();
+        match sessions {
+            Ok(sessions) => self.sessions = sessions,
+            Err(err) => problems.push(err.to_string()),
+        }
+        match topics {
+            Ok((topics, placements)) => {
+                self.topics = topics;
+                self.placements = placements;
+            }
+            Err(err) => problems.push(format!("topics: {err}")),
+        }
+        self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
+        self.subagents.clear();
+        for parent in self.sessions.iter().filter_map(|session| session.parent.clone()) {
+            *self.subagents.entry(parent).or_default() += 1;
+        }
+        self.sync_panel(cx);
+        cx.notify();
+    }
+
+    fn board(&self) -> Board<'_> {
+        let windows = Windows {
+            now_ms: now_ms(),
+            forming_ms: FORMING_MS,
+            recent_ms: RECENT_MS,
+        };
+        model::topics::board(&self.topics, &self.sessions, &self.placements, windows)
+    }
+
+    fn sync_panel(&self, cx: &mut Context<Self>) {
+        let board = self.board();
+        let history: Vec<SessionSummary> = board.history.iter().map(|session| (*session).clone()).collect();
+        let past: Vec<PastTopic> = board
+            .past
+            .iter()
+            .map(|card| PastTopic {
+                id: card.topic.id.clone(),
+                name: card.topic.name.clone(),
+                sessions: card.sessions.len(),
+                active_ms: card.active_ms,
+            })
+            .collect();
+        let topics = self.topics.clone();
+        let known = self.sessions.clone();
+        self.panel.update(cx, |panel, cx| {
+            panel.set_sessions(history, known, cx);
+            panel.set_topics(topics, past, cx);
+        });
+    }
+
+    fn home_of(&self, session: &SessionSummary) -> Option<TopicId> {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        atlas.topic_of(session).map(|topic| atlas.root(topic).clone())
+    }
+
+    fn topic(&self, id: &TopicId) -> Option<&Topic> {
+        self.topics.iter().find(|topic| &topic.id == id)
+    }
+
     fn open(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
-        let id = summary.id.clone();
-        let hub = self.hub.clone();
-        let pane = cx.new(|cx| SessionPane::new(hub, summary, cx));
+        let topic = self.home_of(&summary);
+        let session = summary.id.clone();
+        let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
         self.pane = Some(pane);
-        self.altitude = Altitude::Session {
-            topic: None,
-            session: id,
-        };
+        self.placing = None;
+        self.altitude = Altitude::Session { topic, session };
+        cx.notify();
+    }
+
+    fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
+        self.pane = None;
+        self.placing = None;
+        self.altitude = Altitude::Topic(topic);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -170,6 +218,61 @@ impl Workspace {
         }
     }
 
+    fn begin_placing(&mut self, session: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        let topics = self.topics.clone();
+        let picker = cx.new(|cx| TopicPicker::new(topics, cx));
+        let target = session.clone();
+        let events = cx.subscribe(&picker, move |this, _, event: &PickerEvent, cx| {
+            this.placing = None;
+            match event {
+                PickerEvent::Chose(topic) => this.place(target.clone(), topic.clone(), cx),
+                PickerEvent::Create(name) => this.place_in_new(target.clone(), name.clone(), cx),
+                PickerEvent::Dismissed => {}
+            }
+            cx.notify();
+        });
+        window.focus(&picker.focus_handle(cx), cx);
+        self.placing = Some(Placing {
+            session,
+            picker,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn place(&mut self, session: SessionId, topic: TopicId, cx: &mut Context<Self>) {
+        self.placements.insert(session.clone(), topic.clone());
+        self.sync_panel(cx);
+        cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let placed = hub.place(session, topic).await;
+            this.update(cx, |this, cx| {
+                if let Err(err) = placed {
+                    this.problem = Some(format!("placing the session failed: {err}"));
+                }
+                this.load(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn place_in_new(&mut self, session: SessionId, name: String, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let created = hub.place_in_new(session, name).await;
+            this.update(cx, |this, cx| {
+                if let Err(err) = created {
+                    this.problem = Some(format!("creating the topic failed: {err}"));
+                }
+                this.load(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
         self.start_session(window, cx);
     }
@@ -180,42 +283,62 @@ impl Workspace {
 
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
+        let topic = match &self.altitude {
+            Altitude::Topic(topic) => Some(topic.clone()),
+            Altitude::Everything | Altitude::Session { .. } => None,
+        };
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let started = hub.start_session(HarnessId::new(CLAUDE)).await;
             cx.update_window(window_handle, |_, window, cx| {
-                this.update(cx, |this, cx| match started {
-                    Ok(summary) => this.open(summary, window, cx),
-                    Err(err) => {
-                        this.problem = Some(err.to_string());
-                        cx.notify();
-                    }
-                })
-                .ok();
+                this.update(cx, |this, cx| this.started(started, topic, window, cx))
+                    .ok();
             })
             .ok();
         })
         .detach();
     }
 
-    fn start_with(&mut self, agent: model::agents::Agent, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_with(
+        &mut self,
+        agent: model::agents::Agent,
+        topic: Option<TopicId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let started = hub.start_with(agent).await;
             cx.update_window(window_handle, |_, window, cx| {
-                this.update(cx, |this, cx| match started {
-                    Ok(summary) => this.open(summary, window, cx),
-                    Err(err) => {
-                        this.problem = Some(err.to_string());
-                        cx.notify();
-                    }
-                })
-                .ok();
+                this.update(cx, |this, cx| this.started(started, topic, window, cx))
+                    .ok();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn started(
+        &mut self,
+        started: Result<SessionSummary, GatewayError>,
+        topic: Option<TopicId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match started {
+            Ok(summary) => {
+                if let Some(topic) = topic {
+                    self.place(summary.id.clone(), topic, cx);
+                }
+                self.sessions.push(summary.clone());
+                self.open(summary, window, cx);
+            }
+            Err(err) => {
+                self.problem = Some(err.to_string());
+                cx.notify();
+            }
+        }
     }
 
     fn toggle_panel(&mut self, _: &ToggleSidePanel, _: &mut Window, cx: &mut Context<Self>) {
@@ -236,21 +359,46 @@ impl Workspace {
         self.altitude = self.altitude.zoom_out();
         if !matches!(self.altitude, Altitude::Session { .. }) {
             self.pane = None;
-            self.load_forming(cx);
+            self.load(cx);
         }
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
     fn breadcrumb(&self) -> SharedString {
+        let named = |topic: &TopicId| {
+            self.topic(topic)
+                .map_or_else(|| topic.as_str().to_owned(), |t| t.name.clone())
+        };
         match &self.altitude {
             Altitude::Everything => "Everything".into(),
             Altitude::Topic(topic)
             | Altitude::Session {
                 topic: Some(topic), ..
-            } => format!("Everything › {}", topic.as_str()).into(),
+            } => format!("Everything › {}", named(topic)).into(),
             Altitude::Session { topic: None, .. } => "Everything › Forming".into(),
         }
+    }
+
+    fn dot(&self, session: &SessionSummary) -> Rgba {
+        if self.feed.needs_you(session) {
+            Theme::warn()
+        } else if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
+            Theme::accent()
+        } else {
+            Theme::ink_dim()
+        }
+    }
+
+    fn needs_you_chip() -> impl IntoElement {
+        div()
+            .flex_none()
+            .px_2()
+            .rounded(px(9.))
+            .bg(Theme::warn_container())
+            .text_xs()
+            .text_color(Theme::warn())
+            .child("Needs you")
     }
 
     fn icon_button(
@@ -286,6 +434,11 @@ impl Workspace {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let in_session = matches!(self.altitude, Altitude::Session { .. });
+        let back = match self.altitude.zoom_out() {
+            Altitude::Topic(_) => "Ctrl ↑ Topic",
+            _ => "Ctrl ↑ Everything",
+        };
         div()
             .h(px(52.))
             .flex_none()
@@ -295,33 +448,27 @@ impl Workspace {
             .px_5()
             .child(div().text_color(Theme::ink()).child(self.breadcrumb()))
             .child(div().flex_1())
-            .children(matches!(self.altitude, Altitude::Session { .. }).then(|| {
-                div()
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child("Ctrl ↑ Everything")
-            }))
-            .when(
-                !matches!(self.altitude, Altitude::Session { .. }) && !self.panel_open,
-                |header| {
-                    header
-                        .child(Self::icon_button(
-                            "open-search",
-                            "⌕",
-                            cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                                this.reveal_panel(true, window, cx);
-                            }),
-                        ))
-                        .child(Self::icon_button(
-                            "open-history",
-                            "◷",
-                            cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                                this.reveal_panel(false, window, cx);
-                            }),
-                        ))
-                },
-            )
-            .when(!matches!(self.altitude, Altitude::Session { .. }), |header| {
+            .when(self.altitude != Altitude::Everything, |header| {
+                header.child(div().text_xs().text_color(Theme::ink_dim()).child(back))
+            })
+            .when(!in_session && !self.panel_open, |header| {
+                header
+                    .child(Self::icon_button(
+                        "open-search",
+                        "⌕",
+                        cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                            this.reveal_panel(true, window, cx);
+                        }),
+                    ))
+                    .child(Self::icon_button(
+                        "open-history",
+                        "◷",
+                        cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                            this.reveal_panel(false, window, cx);
+                        }),
+                    ))
+            })
+            .when(!in_session, |header| {
                 header.child(Self::icon_button(
                     "toggle-panel",
                     "▥",
@@ -345,130 +492,6 @@ impl Workspace {
                     .child("+ New session"),
             )
     }
-
-    fn forming_tile(
-        &self,
-        index: usize,
-        session: &SessionSummary,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let summary = session.clone();
-        let waiting = self.feed.needs_you(session);
-        let dot = if waiting {
-            Theme::warn()
-        } else if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
-            Theme::accent()
-        } else {
-            Theme::ink_dim()
-        };
-        div()
-            .id(("forming", index))
-            .w(px(320.))
-            .p_4()
-            .rounded(px(16.))
-            .bg(Theme::card())
-            .border_1()
-            .border_color(if waiting {
-                Theme::warn_line()
-            } else {
-                Theme::card()
-            })
-            .cursor_pointer()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open(summary.clone(), window, cx);
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().flex_none().size(px(8.)).rounded(px(4.)).bg(dot))
-                    .child(
-                        div()
-                            .text_color(Theme::ink())
-                            .truncate()
-                            .child(crate::text::one_line(session.title.as_deref())),
-                    )
-                    .when(waiting, |row| {
-                        row.child(
-                            div()
-                                .ml_auto()
-                                .flex_none()
-                                .px_2()
-                                .rounded(px(9.))
-                                .bg(Theme::warn_container())
-                                .text_xs()
-                                .text_color(Theme::warn())
-                                .child("Needs you"),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child(session.model.clone().unwrap_or_else(|| "claude".into())),
-            )
-            .children(self.subagents.get(&session.id).map(|count| {
-                let noun = if *count == 1 { "subagent" } else { "subagents" };
-                div()
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child(format!("↳ {count} {noun}"))
-            }))
-            .into_any_element()
-    }
-
-    fn everything(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.forming.is_empty() {
-            let line = self
-                .problem
-                .clone()
-                .unwrap_or_else(|| "Start a session and it will find its topic.".into());
-            return div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .child(img(brand::ghost()).size(px(96.)))
-                .child(div().text_color(Theme::ink()).child("No topics yet"))
-                .child(div().text_color(Theme::ink_dim()).child(line))
-                .into_any_element();
-        }
-        div()
-            .size_full()
-            .p_6()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .items_baseline()
-                    .child(div().text_color(Theme::ink()).child("FORMING"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(format!("{} sessions without a topic yet", self.forming.len())),
-                    ),
-            )
-            .child(
-                div().flex().flex_wrap().gap_3().children(
-                    self.forming
-                        .iter()
-                        .enumerate()
-                        .map(|(index, session)| self.forming_tile(index, session, cx)),
-                ),
-            )
-            .into_any_element()
-    }
 }
 
 impl Focusable for Workspace {
@@ -479,9 +502,10 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let everything = !matches!(self.altitude, Altitude::Session { .. });
+        let in_session = matches!(self.altitude, Altitude::Session { .. });
         let content = match (&self.altitude, &self.pane) {
             (Altitude::Session { .. }, Some(pane)) => pane.clone().into_any_element(),
+            (Altitude::Topic(topic), _) => self.topic_view(&topic.clone(), cx),
             _ => self.everything(cx),
         };
         let tile = div()
@@ -492,11 +516,11 @@ impl Render for Workspace {
             .rounded(px(28.))
             .bg(Theme::surface())
             .overflow_hidden()
-            .when(everything, |tile| {
+            .when(self.altitude == Altitude::Everything, |tile| {
                 tile.drag_over::<DraggedAgent>(|style, _, _, _| style.bg(Theme::selected()))
                     .drag_over::<DraggedSession>(|style, _, _, _| style.bg(Theme::selected()))
                     .on_drop(cx.listener(|this, dragged: &DraggedAgent, window, cx| {
-                        this.start_with(dragged.0.clone(), window, cx);
+                        this.start_with(dragged.0.clone(), None, window, cx);
                     }))
                     .on_drop(cx.listener(|this, dragged: &DraggedSession, window, cx| {
                         this.open(dragged.0.clone(), window, cx);
@@ -523,7 +547,7 @@ impl Render for Workspace {
                         .flex_1()
                         .flex()
                         .child(tile)
-                        .when(everything && self.panel_open, |row| {
+                        .when(!in_session && self.panel_open, |row| {
                             row.child(
                                 div()
                                     .mb_3()

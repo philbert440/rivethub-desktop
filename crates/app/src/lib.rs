@@ -1,6 +1,7 @@
 mod feed;
 mod session;
 mod terminal;
+mod topics;
 
 pub use feed::WorkspaceFeed;
 pub use session::SessionHandle;

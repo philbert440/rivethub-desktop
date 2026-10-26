@@ -199,6 +199,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gateway",
  "model",
  "parking_lot",
@@ -7234,7 +7235,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=4be3dba#4be3dbae199a1d6b9de024370eaa6ad2e522b87d"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=96044a6#96044a6e77889bca4a3347bc806dce45ac94e8aa"
 dependencies = [
  "base64 0.22.1",
  "chrono",

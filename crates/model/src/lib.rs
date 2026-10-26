@@ -8,6 +8,7 @@ pub mod mesh;
 pub mod nav;
 pub mod search;
 pub mod session;
+pub mod topics;
 
 pub use ids::{HarnessId, NativeSessionId, SessionId, TopicId};
 pub use nav::Altitude;
