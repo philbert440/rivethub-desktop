@@ -17,6 +17,7 @@ app = { path = "crates/app" }
 term = { path = "crates/term" }
 alacritty_terminal = "0.26.0"
 parking_lot = "0.12"
+pulldown-cmark = { version = "0.13", default-features = false }
 gpui = { git = "https://github.com/zed-industries/zed", tag = "v1.25.3" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", tag = "v1.25.3", features = ["font-kit", "wayland", "x11"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }

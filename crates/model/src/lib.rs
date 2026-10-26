@@ -1,4 +1,6 @@
+pub mod chat;
 pub mod ids;
+pub mod markdown;
 pub mod nav;
 pub mod session;
 

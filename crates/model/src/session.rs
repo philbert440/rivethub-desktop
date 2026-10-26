@@ -26,6 +26,7 @@ pub struct Turn {
     pub text: String,
     pub thinking: String,
     pub tools: Vec<ToolCall>,
+    pub ends_with_text: bool,
 }
 
 impl Turn {
@@ -35,6 +36,7 @@ impl Turn {
             text: String::new(),
             thinking: String::new(),
             tools: Vec::new(),
+            ends_with_text: false,
         }
     }
 }
@@ -138,7 +140,11 @@ impl SessionView {
                     self.context = context;
                 }
             }
-            SessionEvent::AssistantText(text) => self.live_turn().text.push_str(&text),
+            SessionEvent::AssistantText(text) => {
+                let turn = self.live_turn();
+                turn.text.push_str(&text);
+                turn.ends_with_text = true;
+            }
             SessionEvent::Reasoning(text) => self.live_turn().thinking.push_str(&text),
             SessionEvent::ToolStarted { id, name } => {
                 self.live_turn().tools.push(ToolCall {
@@ -224,6 +230,7 @@ mod tests {
             text: text.into(),
             thinking: String::new(),
             tools: Vec::new(),
+            ends_with_text: true,
         }
     }
 
