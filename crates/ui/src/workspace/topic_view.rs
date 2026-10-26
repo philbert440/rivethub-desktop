@@ -6,6 +6,7 @@ use model::topics::{Atlas, Topic};
 use model::{TopicId, lineage};
 
 use super::Workspace;
+use crate::brand;
 use crate::side_panel::{DraggedAgent, DraggedSession};
 use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
@@ -61,7 +62,7 @@ impl Workspace {
     }
 
     pub(super) fn topic_view(&self, root: &TopicId, cx: &mut Context<Self>) -> AnyElement {
-        let Some(topic) = self.topic(root) else {
+        if self.topic(root).is_none() {
             return div()
                 .size_full()
                 .flex()
@@ -70,15 +71,10 @@ impl Workspace {
                 .text_color(Theme::ink_dim())
                 .child("This topic is gone. Ctrl ↑ goes back to Everything.")
                 .into_any_element();
-        };
+        }
         let now = now_ms();
         let sections = self.sections(root);
-        let total: usize = sections.iter().map(|section| section.sessions.len()).sum();
-        let waiting: usize = sections
-            .iter()
-            .flat_map(|section| &section.sessions)
-            .filter(|session| self.feed.needs_you(session))
-            .count();
+        let counts = self.counts(sections.iter().flat_map(|section| &section.sessions));
         let dropped_session = root.clone();
         let dropped_agent = root.clone();
         let mut row = 0_usize;
@@ -98,27 +94,35 @@ impl Workspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedAgent, window, cx| {
                 this.start_with(dragged.0.clone(), Some(dropped_agent.clone()), window, cx);
             }))
-            .child(
-                div()
-                    .flex()
-                    .items_baseline()
-                    .gap_3()
-                    .child(div().text_xl().text_color(Theme::ink()).child(topic.name.clone()))
-                    .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
-                        "{total} sessions{}",
-                        if waiting > 0 {
-                            format!(" · {waiting} need you")
-                        } else {
-                            String::new()
-                        }
-                    ))),
-            )
+            .children(counts)
             .children(
                 sections
                     .into_iter()
                     .map(|section| self.section_view(section, root, &mut row, now, cx)),
             )
+            .child(Self::new_session_bar(cx))
             .into_any_element()
+    }
+
+    /// A short bar under the list; it starts a session in this topic.
+    fn new_session_bar(cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("topic-new-session")
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py(px(10.))
+            .rounded(px(14.))
+            .border_1()
+            .border_dashed()
+            .border_color(Theme::line())
+            .cursor_pointer()
+            .hover(|bar| bar.bg(Theme::card()))
+            .text_color(Theme::ink_dim())
+            .on_click(cx.listener(Self::start))
+            .child(brand::icon("icons/plus.svg", 16., Theme::ink_dim()))
+            .child("New session")
     }
 
     fn section_view(

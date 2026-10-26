@@ -566,6 +566,38 @@ impl Workspace {
         }
     }
 
+    /// "2 active · 1 waiting on you · 3 idle", leaving out zero counts; `None` when all are zero.
+    fn counts<'a>(&self, sessions: impl IntoIterator<Item = &'a SessionSummary>) -> Option<gpui::Div> {
+        let (mut active, mut waiting, mut idle) = (0_usize, 0_usize, 0_usize);
+        for session in sessions {
+            if self.feed.needs_you(session) {
+                waiting += 1;
+            } else if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
+                active += 1;
+            } else {
+                idle += 1;
+            }
+        }
+        let parts = [
+            (active, format!("{active} active"), Theme::ink_dim()),
+            (waiting, format!("{waiting} waiting on you"), Theme::warn()),
+            (idle, format!("{idle} idle"), Theme::ink_dim()),
+        ];
+        let mut line = div().flex().text_xs().text_color(Theme::ink_dim());
+        let mut any = false;
+        for (count, label, color) in parts {
+            if count == 0 {
+                continue;
+            }
+            if any {
+                line = line.child("\u{a0}·\u{a0}");
+            }
+            line = line.child(div().text_color(color).child(label));
+            any = true;
+        }
+        any.then_some(line)
+    }
+
     fn needs_you_chip() -> impl IntoElement {
         div()
             .flex_none()
@@ -699,6 +731,7 @@ impl Render for Workspace {
         let tile = div()
             .id("everything-drop")
             .flex_1()
+            .min_w_0()
             .mr_3()
             .mb_3()
             .rounded(px(28.))
@@ -755,22 +788,28 @@ impl Render for Workspace {
             .text_sm()
             .child(Self::rail())
             .child(
-                div().flex_1().flex().flex_col().child(self.header(cx)).child(
-                    div()
-                        .flex_1()
-                        .flex()
-                        .child(tile)
-                        .when(!in_session && self.panel_open, |row| {
-                            row.child(
-                                div()
-                                    .mb_3()
-                                    .mr_3()
-                                    .rounded(px(20.))
-                                    .overflow_hidden()
-                                    .child(self.panel.clone()),
-                            )
-                        }),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(self.header(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .child(tile)
+                            .when(!in_session && self.panel_open, |row| {
+                                row.child(
+                                    div()
+                                        .mb_3()
+                                        .mr_3()
+                                        .rounded(px(20.))
+                                        .overflow_hidden()
+                                        .child(self.panel.clone()),
+                                )
+                            }),
+                    ),
             )
             .children(launcher)
     }
