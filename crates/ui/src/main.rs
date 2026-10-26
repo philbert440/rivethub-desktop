@@ -6,6 +6,7 @@ mod terminal_view;
 mod text;
 mod theme;
 mod transcript;
+mod turn_rail;
 mod workspace;
 
 use std::path::PathBuf;

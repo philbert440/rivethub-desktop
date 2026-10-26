@@ -110,6 +110,10 @@ impl Screen {
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
+    pub fn background(&self) -> Rgb {
+        palette::background(self.term.colors())
+    }
+
     pub fn app_cursor(&self) -> bool {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
