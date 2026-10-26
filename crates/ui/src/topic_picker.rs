@@ -16,25 +16,28 @@ const SHOWN: usize = 5;
 pub enum PickerEvent {
     Chose(TopicId),
     Create(String),
+    NoTopic,
     Dismissed,
 }
 
 pub struct TopicPicker {
     input: Entity<TextInput>,
     topics: Vec<Topic>,
+    no_topic: Option<&'static str>,
     _input: [Subscription; 2],
 }
 
 impl EventEmitter<PickerEvent> for TopicPicker {}
 
 impl TopicPicker {
-    pub fn new(topics: Vec<Topic>, cx: &mut Context<Self>) -> Self {
+    pub fn new(topics: Vec<Topic>, no_topic: Option<&'static str>, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| TextInput::new("Topic name", cx));
         let submitted = cx.subscribe(&input, |this, _, Submitted(text), cx| this.submit(text, cx));
         let typed = cx.observe(&input, |_, _, cx| cx.notify());
         Self {
             input,
             topics,
+            no_topic,
             _input: [submitted, typed],
         }
     }
@@ -111,6 +114,9 @@ impl Render for TopicPicker {
                     .child(self.input.clone()),
             )
             .children(picks)
+            .when_some(self.no_topic.filter(|_| typed.is_empty()), |list, label| {
+                list.child(Self::row(("none", 0), label.to_owned(), cx, PickerEvent::NoTopic))
+            })
             .when(!typed.is_empty() && !exact, |list| {
                 list.child(Self::row(
                     ("create", 0),
