@@ -6,6 +6,7 @@ mod side_panel;
 mod terminal_view;
 mod text;
 mod theme;
+mod topic_picker;
 mod transcript;
 mod turn_rail;
 mod workspace;
@@ -51,6 +52,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-b", ToggleSidePanel, Some("Workspace")),
         KeyBinding::new("ctrl-j", NextNeedingYou, Some("Workspace")),
         KeyBinding::new("ctrl-j", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("escape", topic_picker::Dismiss, Some("TopicPicker")),
         KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("shift-enter", input::Newline, Some("TextInput")),

@@ -232,3 +232,28 @@ async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::erro
     assert!(ticked, "the feed never reported the new session's turn");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a running rh gateway with topics; run with --ignored"]
+async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box<dyn std::error::Error>> {
+    let hub = hub()?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let session = model::SessionId::new(
+        HarnessId::new("claude-code"),
+        model::NativeSessionId::new(format!("00000000-0000-4000-8000-{stamp:012}")),
+    );
+    let name = format!("Desktop smoke {stamp}");
+    let created = hub.place_in_new(session.clone(), name.clone()).await?;
+    let (topics, placements) = hub.topics().await?;
+    assert!(
+        topics
+            .iter()
+            .any(|topic| topic.id == created.id && topic.name == name)
+    );
+    assert_eq!(placements.get(&session), Some(&created.id));
+    let found = hub.search_topics(name.to_lowercase()).await?;
+    assert_eq!(found.first().map(|topic| &topic.id), Some(&created.id));
+    Ok(())
+}

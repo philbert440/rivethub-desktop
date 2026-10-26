@@ -6,7 +6,8 @@ use gpui::{
 use model::agents::{Agent, Roster};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
-use model::{SessionId, lineage};
+use model::topics::Topic;
+use model::{SessionId, TopicId, lineage};
 
 use crate::input::{Submitted, TextInput};
 use crate::theme::Theme;
@@ -14,7 +15,16 @@ use crate::theme::Theme;
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
     Open(SessionSummary),
+    OpenTopic(TopicId),
     Start(Agent),
+}
+
+#[derive(Debug, Clone)]
+pub struct PastTopic {
+    pub id: TopicId,
+    pub name: String,
+    pub sessions: usize,
+    pub active_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -23,7 +33,7 @@ pub struct DraggedAgent(pub Agent);
 #[derive(Debug, Clone)]
 pub struct DraggedSession(pub SessionSummary);
 
-pub struct DragGhost(SharedString);
+pub struct DragGhost(pub SharedString);
 
 impl Render for DragGhost {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -48,7 +58,10 @@ pub struct SidePanel {
     roster: Roster,
     history: Vec<SessionSummary>,
     known: Vec<SessionSummary>,
+    topics: Vec<Topic>,
+    past: Vec<PastTopic>,
     agents_open: bool,
+    past_open: bool,
     history_open: bool,
     collapsed: std::collections::HashSet<SessionId>,
     _submitted: Subscription,
@@ -71,7 +84,10 @@ impl SidePanel {
             roster: Roster::default(),
             history: Vec::new(),
             known: Vec::new(),
+            topics: Vec::new(),
+            past: Vec::new(),
             agents_open: true,
+            past_open: true,
             history_open: true,
             collapsed: std::collections::HashSet::new(),
             _submitted: submitted,
@@ -92,6 +108,12 @@ impl SidePanel {
     ) {
         self.history = history;
         self.known = known;
+        cx.notify();
+    }
+
+    pub fn set_topics(&mut self, topics: Vec<Topic>, past: Vec<PastTopic>, cx: &mut Context<Self>) {
+        self.topics = topics;
+        self.past = past;
         cx.notify();
     }
 
@@ -290,11 +312,94 @@ impl SidePanel {
             .into_any_element()
     }
 
+    fn past_topics(&self, cx: &mut Context<Self>) -> AnyElement {
+        let now = crate::text::now_ms();
+        div()
+            .flex()
+            .flex_col()
+            .pb_2()
+            .children(self.past.iter().enumerate().map(|(index, past)| {
+                let open = past.id.clone();
+                div()
+                    .id(("past", index))
+                    .px_2()
+                    .py(px(7.))
+                    .rounded(px(12.))
+                    .cursor_pointer()
+                    .hover(|line| line.bg(Theme::card()))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(PanelEvent::OpenTopic(open.clone()));
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .text_color(Theme::ink())
+                            .child(past.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .child(past.sessions.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .child(crate::text::ago(now, past.active_ms)),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    fn topic_hits(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let asked = self.asked.as_deref()?;
+        let hits = model::topics::suggest(&self.topics, asked, 5);
+        if hits.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .pb_2()
+                .child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(Theme::ink_dim())
+                        .child("Topics"),
+                )
+                .children(hits.into_iter().enumerate().map(|(index, topic)| {
+                    let open = topic.id.clone();
+                    div()
+                        .id(("topic-hit", index))
+                        .px_2()
+                        .py(px(7.))
+                        .rounded(px(12.))
+                        .cursor_pointer()
+                        .hover(|line| line.bg(Theme::card()))
+                        .text_color(Theme::ink())
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            cx.emit(PanelEvent::OpenTopic(open.clone()));
+                        }))
+                        .child(topic.name.clone())
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn results(&self, found: &[SessionMatch], cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()
             .flex_col()
             .gap_1()
+            .children(self.topic_hits(cx))
             .child(
                 div()
                     .px_2()
@@ -384,6 +489,19 @@ impl Render for SidePanel {
                     ))
                     .when(self.agents_open, |section| section.child(self.agents(cx)))
                     .child(div().h(px(1.)).mx_2().bg(Theme::line()))
+                    .when(!self.past.is_empty(), |section| {
+                        section
+                            .child(Self::section(
+                                "past-header",
+                                "Past topics",
+                                self.past.len().to_string(),
+                                self.past_open,
+                                |this, _| this.past_open = !this.past_open,
+                                cx,
+                            ))
+                            .when(self.past_open, |section| section.child(self.past_topics(cx)))
+                            .child(div().h(px(1.)).mx_2().bg(Theme::line()))
+                    })
                     .child(Self::section(
                         "history-header",
                         "History",

@@ -3,6 +3,7 @@ mod error;
 mod events;
 mod terminal;
 mod tls;
+mod topics;
 mod translate;
 
 pub use chat::SessionStream;

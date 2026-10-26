@@ -1,0 +1,123 @@
+use gpui::{
+    ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Subscription, Window, actions, div, prelude::*, px,
+};
+use model::TopicId;
+use model::topics::{Topic, suggest};
+
+use crate::input::{Submitted, TextInput};
+use crate::theme::Theme;
+
+actions!(topic_picker, [Dismiss]);
+
+const SHOWN: usize = 5;
+
+#[derive(Debug, Clone)]
+pub enum PickerEvent {
+    Chose(TopicId),
+    Create(String),
+    Dismissed,
+}
+
+pub struct TopicPicker {
+    input: Entity<TextInput>,
+    topics: Vec<Topic>,
+    _input: [Subscription; 2],
+}
+
+impl EventEmitter<PickerEvent> for TopicPicker {}
+
+impl TopicPicker {
+    pub fn new(topics: Vec<Topic>, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| TextInput::new("Topic name", cx));
+        let submitted = cx.subscribe(&input, |this, _, Submitted(text), cx| this.submit(text, cx));
+        let typed = cx.observe(&input, |_, _, cx| cx.notify());
+        Self {
+            input,
+            topics,
+            _input: [submitted, typed],
+        }
+    }
+
+    fn submit(&self, text: &str, cx: &mut Context<Self>) {
+        let event = match suggest(&self.topics, text, 1).first() {
+            Some(topic) => PickerEvent::Chose(topic.id.clone()),
+            None => PickerEvent::Create(text.to_owned()),
+        };
+        cx.emit(event);
+    }
+
+    fn row(
+        id: (&'static str, usize),
+        label: String,
+        cx: &mut Context<Self>,
+        event: PickerEvent,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .px_3()
+            .py(px(6.))
+            .rounded(px(10.))
+            .cursor_pointer()
+            .hover(|row| row.bg(Theme::raised()))
+            .text_color(Theme::ink())
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                cx.emit(event.clone());
+            }))
+            .child(label)
+    }
+}
+
+impl Focusable for TopicPicker {
+    fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
+        self.input.focus_handle(cx)
+    }
+}
+
+impl Render for TopicPicker {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let typed = self.input.read(cx).text().to_owned();
+        let shown: Vec<(TopicId, String)> = suggest(&self.topics, &typed, SHOWN)
+            .into_iter()
+            .map(|topic| (topic.id.clone(), topic.name.clone()))
+            .collect();
+        let exact = shown.iter().any(|(_, name)| name.eq_ignore_ascii_case(&typed));
+        let picks: Vec<_> = shown
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, name))| {
+                Self::row(("pick", index), name, cx, PickerEvent::Chose(id)).into_any_element()
+            })
+            .collect();
+        div()
+            .key_context("TopicPicker")
+            .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(PickerEvent::Dismissed)))
+            .mt_2()
+            .p_2()
+            .rounded(px(14.))
+            .bg(Theme::surface())
+            .border_1()
+            .border_color(Theme::line())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(10.))
+                    .bg(Theme::card())
+                    .child(self.input.clone()),
+            )
+            .children(picks)
+            .when(!typed.is_empty() && !exact, |list| {
+                list.child(Self::row(
+                    ("create", 0),
+                    format!("Create topic “{typed}”"),
+                    cx,
+                    PickerEvent::Create(typed.clone()),
+                ))
+            })
+    }
+}
