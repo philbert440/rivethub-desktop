@@ -315,6 +315,8 @@ impl SessionPane {
         let exchanges = Arc::clone(&self.exchanges);
         let folds = Arc::clone(&self.folds);
         let pane = cx.entity().downgrade();
+        let cwd = self.summary.cwd.clone();
+        let home = std::env::var("HOME").ok();
         let transcript = list(
             self.turns.clone(),
             move |index, window: &mut Window, _: &mut App| {
@@ -326,6 +328,8 @@ impl SessionPane {
                             folds: &folds,
                             column,
                             pane: pane.clone(),
+                            cwd: cwd.as_deref(),
+                            home: home.as_deref(),
                         };
                         transcript::exchange(exchange, &context, window)
                     },
@@ -390,7 +394,10 @@ impl SessionPane {
     pub fn toggle_fold(&mut self, fold: Fold, cx: &mut Context<Self>) {
         Arc::make_mut(&mut self.folds).toggle(fold);
         let index = match fold {
-            Fold::Exchange(index) | Fold::Group(index, _) | Fold::Thought(index, _) => index,
+            Fold::Exchange(index)
+            | Fold::Group(index, _)
+            | Fold::Thought(index, _)
+            | Fold::Tool(index, _, _) => index,
         };
         if index < self.turns.item_count() {
             self.turns.splice(index..index + 1, 1);

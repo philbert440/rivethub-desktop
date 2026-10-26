@@ -1,4 +1,5 @@
 use crate::SessionId;
+use crate::tools::{ToolInput, ToolOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -18,6 +19,8 @@ pub struct ToolCall {
     pub id: Option<String>,
     pub name: String,
     pub state: ToolState,
+    pub input: ToolInput,
+    pub output: Option<ToolOutput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,10 +118,12 @@ pub enum SessionEvent {
     ToolStarted {
         id: String,
         name: String,
+        input: ToolInput,
     },
     ToolFinished {
         id: String,
         failed: bool,
+        output: ToolOutput,
     },
     ApprovalRequested(Approval),
     ApprovalResolved {
@@ -142,7 +147,8 @@ pub struct SessionView {
 impl SessionView {
     pub fn apply(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::Snapshot { turns, context } => {
+            SessionEvent::Snapshot { mut turns, context } => {
+                self.keep_outputs(&mut turns);
                 self.turns = turns;
                 self.live = None;
                 if context.is_some() {
@@ -155,14 +161,16 @@ impl SessionView {
                 turn.ends_with_text = true;
             }
             SessionEvent::Reasoning(text) => self.live_turn().thinking.push_str(&text),
-            SessionEvent::ToolStarted { id, name } => {
+            SessionEvent::ToolStarted { id, name, input } => {
                 self.live_turn().tools.push(ToolCall {
                     id: Some(id),
                     name,
                     state: ToolState::Running,
+                    input,
+                    output: None,
                 });
             }
-            SessionEvent::ToolFinished { id, failed } => {
+            SessionEvent::ToolFinished { id, failed, output } => {
                 let state = if failed {
                     ToolState::Failed
                 } else {
@@ -174,6 +182,7 @@ impl SessionView {
                     .and_then(|turn| turn.tools.iter_mut().find(|tool| tool.id.as_deref() == Some(&id)))
                 {
                     tool.state = state;
+                    tool.output = Some(output);
                 }
             }
             SessionEvent::ApprovalRequested(approval) => {
@@ -208,6 +217,23 @@ impl SessionView {
         self.live.as_ref()
     }
 
+    fn keep_outputs(&self, incoming: &mut [Turn]) {
+        let mut known: std::collections::HashMap<&str, &ToolOutput> = self
+            .turns
+            .iter()
+            .chain(self.live.as_ref())
+            .flat_map(|turn| &turn.tools)
+            .filter_map(|tool| Some((tool.id.as_deref()?, tool.output.as_ref()?)))
+            .collect();
+        for tool in incoming.iter_mut().flat_map(|turn| &mut turn.tools) {
+            if tool.output.is_none()
+                && let Some(output) = tool.id.as_deref().and_then(|id| known.remove(id))
+            {
+                tool.output = Some(output.clone());
+            }
+        }
+    }
+
     pub fn approvals(&self) -> &[Approval] {
         &self.approvals
     }
@@ -236,6 +262,7 @@ impl SessionView {
 #[cfg(test)]
 mod tests {
     use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolState, Turn};
+    use crate::tools::{ToolInput, ToolOutput};
 
     fn said(role: Role, text: &str) -> Turn {
         Turn {
@@ -255,10 +282,15 @@ mod tests {
         view.apply(SessionEvent::ToolStarted {
             id: "t1".into(),
             name: "Bash".into(),
+            input: ToolInput::Unknown,
         });
         view.apply(SessionEvent::ToolFinished {
             id: "t1".into(),
             failed: true,
+            output: ToolOutput {
+                text: "Exit code 1".into(),
+                exit_code: Some(1),
+            },
         });
         let live = view.live().cloned().unwrap_or_else(|| said(Role::User, ""));
         assert_eq!(live.text, "Hello");
@@ -297,5 +329,40 @@ mod tests {
             request_id: "r1".into(),
         });
         assert!(!view.needs_you());
+    }
+
+    #[test]
+    fn a_snapshot_keeps_the_live_output_of_a_tool_it_lists_without_one() {
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::ToolStarted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            input: ToolInput::Unknown,
+        });
+        view.apply(SessionEvent::ToolFinished {
+            id: "t1".into(),
+            failed: false,
+            output: ToolOutput {
+                text: "hello".into(),
+                exit_code: None,
+            },
+        });
+        let mut settled = said(Role::Assistant, "done");
+        settled.tools.push(super::ToolCall {
+            id: Some("t1".into()),
+            name: "Bash".into(),
+            state: ToolState::Done,
+            input: ToolInput::Unknown,
+            output: None,
+        });
+        view.apply(SessionEvent::Snapshot {
+            turns: vec![settled],
+            context: None,
+        });
+        let kept = view.turns()[0].tools[0]
+            .output
+            .as_ref()
+            .map(|output| output.text.as_str());
+        assert_eq!(kept, Some("hello"));
     }
 }

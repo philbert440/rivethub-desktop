@@ -257,3 +257,39 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
     assert_eq!(found.first().map(|topic| &topic.id), Some(&created.id));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a running rh gateway; run with --ignored"]
+async fn a_command_tool_call_arrives_typed_with_its_output() -> Result<(), Box<dyn std::error::Error>> {
+    let hub = hub()?;
+    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let session = hub.open_session(&summary);
+    let mut revisions = session.revisions();
+    session.send("Use the Bash tool to run exactly: echo tool-check-42 . Then reply done.".into());
+    let seen = tokio::time::timeout(Duration::from_secs(240), async {
+        loop {
+            if revisions.changed().await.is_err() {
+                return None;
+            }
+            let view = session.view();
+            let view = view.read();
+            for approval in view.approvals() {
+                session.decide(approval.request_id.clone(), model::session::Decision::Allow);
+            }
+            let finished = view.turns().iter().chain(view.live()).flat_map(|turn| &turn.tools).find(|tool| {
+                matches!(&tool.input, model::tools::ToolInput::Command { command, .. } if command.contains("tool-check-42"))
+                    && tool.output.as_ref().is_some_and(|output| output.text.contains("tool-check-42"))
+            });
+            if let Some(tool) = finished {
+                return Some(tool.clone());
+            }
+        }
+    })
+    .await?;
+    session.stop();
+    assert!(
+        seen.is_some(),
+        "no Bash call with its command and output reached the view"
+    );
+    Ok(())
+}

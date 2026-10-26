@@ -260,6 +260,8 @@ mod tests {
                     id: None,
                     name: (*name).into(),
                     state: *state,
+                    input: crate::tools::ToolInput::Unknown,
+                    output: None,
                 })
                 .collect(),
         }
@@ -325,6 +327,8 @@ mod tests {
                 id: None,
                 name: (*name).into(),
                 state: ToolState::Done,
+                input: crate::tools::ToolInput::Unknown,
+                output: None,
             })
             .collect();
         assert_eq!(group_summary(&tools[..2]), "Read files and ran commands");

@@ -6,6 +6,7 @@ mod side_panel;
 mod terminal_view;
 mod text;
 mod theme;
+mod tool_view;
 mod topic_picker;
 mod transcript;
 mod turn_rail;

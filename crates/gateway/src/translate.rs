@@ -109,14 +109,24 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
             .tools
             .unwrap_or_default()
             .into_iter()
-            .map(|tool| ToolCall {
-                id: tool.id,
-                name: tool.name,
-                state: match tool.status {
+            .map(|tool| {
+                let state = match tool.status {
                     TranscriptToolStatus::Running => ToolState::Running,
                     TranscriptToolStatus::Done => ToolState::Done,
                     TranscriptToolStatus::Error => ToolState::Failed,
-                },
+                };
+                let input = crate::tool_input::parse(&tool.name, tool.input.as_ref().or(tool.args.as_ref()));
+                let output = tool
+                    .result_text
+                    .as_deref()
+                    .map(|text| crate::tool_input::output(&tool.name, text, state == ToolState::Failed));
+                ToolCall {
+                    id: tool.id,
+                    name: tool.name,
+                    state,
+                    input,
+                    output,
+                }
             })
             .collect(),
     }
@@ -137,19 +147,29 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
         HarnessEvent::AssistantDelta { text, .. } => SessionEvent::AssistantText(text),
         HarnessEvent::ReasoningDelta { text, .. } => SessionEvent::Reasoning(text),
         HarnessEvent::ToolUse {
-            tool_call_id, name, ..
+            tool_call_id,
+            name,
+            input,
+            ..
         } => SessionEvent::ToolStarted {
             id: tool_call_id,
+            input: crate::tool_input::parse(&name, Some(&input)),
             name,
         },
         HarnessEvent::ToolResult {
             tool_call_id,
+            name,
+            output,
             is_error,
             ..
-        } => SessionEvent::ToolFinished {
-            id: tool_call_id,
-            failed: is_error.unwrap_or(false),
-        },
+        } => {
+            let failed = is_error.unwrap_or(false);
+            SessionEvent::ToolFinished {
+                id: tool_call_id,
+                failed,
+                output: crate::tool_input::output(&name, &output, failed),
+            }
+        }
         HarnessEvent::ApprovalRequest {
             request_id,
             name,
