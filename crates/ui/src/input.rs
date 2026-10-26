@@ -226,6 +226,10 @@ impl TextInput {
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        // An empty input lays out its placeholder, whose offsets aren't the content's.
+        if self.content.is_empty() {
+            return 0;
+        }
         let (Some(bounds), Some(layout)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else {
             return 0;
         };
