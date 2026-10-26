@@ -101,6 +101,9 @@ fn main() -> ExitCode {
     );
     gpui_platform::application().run(move |cx: &mut App| {
         bind_keys(cx);
+        if let Err(err) = cx.text_system().add_fonts(brand::fonts()) {
+            tracing::warn!(%err, "loading the bundled fonts failed");
+        }
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

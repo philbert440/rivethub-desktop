@@ -465,6 +465,7 @@ impl Render for Workspace {
             .size_full()
             .flex()
             .bg(Theme::window())
+            .font_family(Theme::SANS)
             .text_color(Theme::ink())
             .text_sm()
             .child(Self::rail())

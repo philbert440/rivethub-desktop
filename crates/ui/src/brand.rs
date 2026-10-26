@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use gpui::{Image, ImageFormat};
@@ -22,4 +23,17 @@ pub fn rh() -> Arc<Image> {
 
 pub fn ghost() -> Arc<Image> {
     Arc::clone(&GHOST)
+}
+
+pub fn fonts() -> Vec<Cow<'static, [u8]>> {
+    vec![
+        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-400.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-500.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-600.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-700.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf").as_slice()),
+    ]
 }

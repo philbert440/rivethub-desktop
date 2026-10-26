@@ -3,7 +3,8 @@ use gpui::{Rgba, rgb};
 pub struct Theme;
 
 impl Theme {
-    pub const MONO: &str = "JetBrainsMono Nerd Font";
+    pub const MONO: &str = "JetBrains Mono";
+    pub const SANS: &str = "Roboto Flex";
 
     pub fn window() -> Rgba {
         rgb(0x000f_1512)
