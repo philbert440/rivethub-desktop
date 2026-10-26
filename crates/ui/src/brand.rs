@@ -37,3 +37,29 @@ pub fn fonts() -> Vec<Cow<'static, [u8]>> {
         Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf").as_slice()),
     ]
 }
+
+pub struct Icons;
+
+impl gpui::AssetSource for Icons {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        let bytes: &'static [u8] = match path {
+            "icons/search.svg" => include_bytes!("../assets/icons/search.svg"),
+            "icons/history.svg" => include_bytes!("../assets/icons/history.svg"),
+            "icons/side-panel.svg" => include_bytes!("../assets/icons/side-panel.svg"),
+            "icons/workspace.svg" => include_bytes!("../assets/icons/workspace.svg"),
+            "icons/rename.svg" => include_bytes!("../assets/icons/rename.svg"),
+            "icons/plus.svg" => include_bytes!("../assets/icons/plus.svg"),
+            _ => return Ok(None),
+        };
+        Ok(Some(Cow::Borrowed(bytes)))
+    }
+
+    fn list(&self, _path: &str) -> gpui::Result<Vec<gpui::SharedString>> {
+        Ok(Vec::new())
+    }
+}
+
+pub fn icon(name: &'static str, size: f32, color: gpui::Rgba) -> gpui::Svg {
+    use gpui::Styled;
+    gpui::svg().path(name).size(gpui::px(size)).text_color(color)
+}

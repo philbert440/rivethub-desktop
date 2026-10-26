@@ -490,22 +490,21 @@ impl Workspace {
 
     fn icon_button(
         id: &'static str,
-        glyph: &'static str,
+        icon: &'static str,
         listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         div()
             .id(id)
-            .size(px(34.))
-            .rounded(px(17.))
+            .size(px(36.))
+            .rounded(px(18.))
             .bg(Theme::card())
-            .text_color(Theme::ink_dim())
             .flex()
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .hover(|button| button.text_color(Theme::ink()))
+            .hover(|button| button.bg(Theme::raised()))
             .on_click(listener)
-            .child(glyph)
+            .child(brand::icon(icon, 18., Theme::ink()))
     }
 
     fn rail() -> impl IntoElement {
@@ -516,8 +515,19 @@ impl Workspace {
             .flex_col()
             .items_center()
             .pt_3()
+            .gap_4()
             .bg(Theme::window())
             .child(img(brand::rh()).size(px(32.)))
+            .child(
+                div()
+                    .size(px(44.))
+                    .rounded(px(22.))
+                    .bg(Theme::selected())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(brand::icon("icons/workspace.svg", 20., Theme::on_selected())),
+            )
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -542,14 +552,14 @@ impl Workspace {
                 header
                     .child(Self::icon_button(
                         "open-search",
-                        "⌕",
+                        "icons/search.svg",
                         cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                             this.reveal_panel(true, window, cx);
                         }),
                     ))
                     .child(Self::icon_button(
                         "open-history",
-                        "◷",
+                        "icons/history.svg",
                         cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                             this.reveal_panel(false, window, cx);
                         }),
@@ -558,7 +568,7 @@ impl Workspace {
             .when(!in_session, |header| {
                 header.child(Self::icon_button(
                     "toggle-panel",
-                    "▥",
+                    "icons/side-panel.svg",
                     cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                         this.toggle_panel(&ToggleSidePanel, window, cx);
                     }),
@@ -574,9 +584,11 @@ impl Workspace {
                     .text_color(Theme::on_accent())
                     .flex()
                     .items_center()
+                    .gap_2()
                     .cursor_pointer()
                     .on_click(cx.listener(Self::start))
-                    .child("+ New session"),
+                    .child(brand::icon("icons/plus.svg", 16., Theme::on_accent()))
+                    .child("New session"),
             )
     }
 }
