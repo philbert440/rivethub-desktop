@@ -170,6 +170,34 @@ impl Gateway {
         Self::check(reply).await.map(drop)
     }
 
+    pub async fn tool_output(
+        &self,
+        session: &SessionId,
+        tool_call_id: &str,
+        tool_name: &str,
+    ) -> Result<Option<model::tools::ToolOutput>, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .map_err(|err| GatewayError::Refused(format!("gateway url: {err}")))?;
+        url.path_segments_mut()
+            .map_err(|()| GatewayError::Refused("gateway url cannot take a path".into()))?
+            .extend([
+                "api",
+                "harness-sessions",
+                &segment,
+                "tools",
+                tool_call_id,
+                "output",
+            ]);
+        let fetched: Result<wire::gateway::sessions::HarnessToolOutput, GatewayError> =
+            Self::read_json(self.http.get(url).send().await)?.await;
+        match fetched {
+            Ok(output) => Ok(Some(tool_input::output(tool_name, &output.text, output.is_error))),
+            Err(err) if err.is_missing_route() => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn rename(&self, session: &SessionId, title: &str) -> Result<SessionSummary, GatewayError> {
         let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
         let url = format!("{}/api/harness-sessions/{segment}/title", self.base_url);

@@ -86,6 +86,7 @@ pub struct Context<'a> {
     pub pane: WeakEntity<SessionPane>,
     pub cwd: Option<&'a str>,
     pub home: Option<&'a str>,
+    pub fetched: &'a std::collections::HashMap<String, model::tools::ToolOutput>,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
