@@ -54,6 +54,12 @@ impl Hub {
             .await
     }
 
+    pub async fn unplace(&self, session: SessionId) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.unplace(&session).await })
+            .await
+    }
+
     pub async fn place_in_new(&self, session: SessionId, name: String) -> Result<Topic, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {

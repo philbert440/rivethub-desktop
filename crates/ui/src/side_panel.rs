@@ -346,12 +346,15 @@ impl SidePanel {
                             .text_color(Theme::ink_dim())
                             .child(past.sessions.to_string()),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(crate::text::ago(now, past.active_ms)),
-                    )
+                    // A topic with no activity has no age to show, not one since 1970.
+                    .when(past.active_ms > 0, |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(Theme::ink_dim())
+                                .child(crate::text::ago(now, past.active_ms)),
+                        )
+                    })
             }))
             .into_any_element()
     }

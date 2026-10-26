@@ -257,6 +257,9 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
     assert_eq!(placements.get(&session), Some(&created.id));
     let found = hub.search_topics(name.to_lowercase()).await?;
     assert_eq!(found.first().map(|topic| &topic.id), Some(&created.id));
+    hub.unplace(session.clone()).await?;
+    let (_, placements) = hub.topics().await?;
+    assert!(!placements.contains_key(&session));
     Ok(())
 }
 

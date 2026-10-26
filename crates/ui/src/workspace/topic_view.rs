@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
 use model::session::SessionSummary;
 use model::topics::{Atlas, Topic};
-use model::{TopicId, lineage};
+use model::{SessionId, TopicId, lineage};
 
 use super::Workspace;
 use crate::brand;
@@ -275,6 +275,25 @@ impl Workspace {
                         }),
                 )
             })
+            .when(line.depth == 0, |item| {
+                item.child(Self::unplace_button(row, session.id.clone(), cx))
+            })
             .into_any_element()
+    }
+
+    /// Takes the session out of this topic, back to Forming or History.
+    fn unplace_button(row: usize, session: SessionId, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id(("topic-unplace", row))
+            .flex_none()
+            .px_1()
+            .rounded(px(6.))
+            .text_color(Theme::ink_dim())
+            .hover(|button| button.bg(Theme::raised()).text_color(Theme::ink()))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.unplace(session.clone(), cx);
+            }))
+            .child("✕")
     }
 }
