@@ -487,7 +487,8 @@ impl SessionPane {
                                 crate::turn_rail::rail(&rail, cx)
                             })
                             .flatten(),
-                    ),
+                    )
+                    .child(Self::fade()),
             )
             .children(back)
             .child(
@@ -496,6 +497,22 @@ impl SessionPane {
                         .unwrap_or_else(|| self.composer_card(&view, cx)),
                 ),
             )
+    }
+
+    fn fade() -> impl IntoElement {
+        let mut clear: gpui::Hsla = Theme::surface().into();
+        clear.a = 0.;
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(36.))
+            .bg(gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(clear, 0.),
+                gpui::linear_color_stop(Theme::surface(), 1.),
+            ))
     }
 
     pub fn toggle_fold(&mut self, fold: Fold, cx: &mut Context<Self>) {
