@@ -28,4 +28,8 @@ impl GatewayError {
     pub fn is_turn_in_flight(&self) -> bool {
         matches!(self, Self::Status { status: 409, detail } if detail.contains("turn_in_flight"))
     }
+
+    pub fn is_missing_route(&self) -> bool {
+        matches!(self, Self::Status { status: 404, .. })
+    }
 }

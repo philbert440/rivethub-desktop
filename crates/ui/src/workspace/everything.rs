@@ -9,6 +9,8 @@ use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
 
 const CARD_SESSIONS: usize = 3;
+const FORMING_SHOWN: usize = 6;
+const TILE_WIDTH: f32 = 300.;
 
 impl Workspace {
     pub(super) fn everything(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -59,10 +61,35 @@ impl Workspace {
                                 board
                                     .forming
                                     .iter()
+                                    .take(if self.forming_open {
+                                        usize::MAX
+                                    } else {
+                                        FORMING_SHOWN
+                                    })
                                     .enumerate()
                                     .map(|(index, session)| self.forming_tile(index, session, now, cx)),
                             ),
-                        ),
+                        )
+                        .when(board.forming.len() > FORMING_SHOWN, |lane| {
+                            let label = if self.forming_open {
+                                "Show fewer".to_owned()
+                            } else {
+                                format!("Show all {}", board.forming.len())
+                            };
+                            lane.child(
+                                div()
+                                    .id("forming-more")
+                                    .text_xs()
+                                    .text_color(Theme::ink_dim())
+                                    .cursor_pointer()
+                                    .hover(|more| more.text_color(Theme::ink()))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.forming_open = !this.forming_open;
+                                        cx.notify();
+                                    }))
+                                    .child(label),
+                            )
+                        }),
                 )
             })
             .when(!board.recent.is_empty(), |page| {
@@ -108,7 +135,7 @@ impl Workspace {
         let noun = if count == 1 { "session" } else { "sessions" };
         div()
             .id(("topic", index))
-            .w(px(320.))
+            .w(px(TILE_WIDTH))
             .p_4()
             .rounded(px(16.))
             .bg(Theme::card())
@@ -230,7 +257,7 @@ impl Workspace {
             .map(|placing| placing.picker.clone());
         div()
             .id(("forming", index))
-            .w(px(320.))
+            .w(px(TILE_WIDTH))
             .p_4()
             .rounded(px(16.))
             .bg(Theme::card())

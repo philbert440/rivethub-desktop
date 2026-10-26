@@ -53,6 +53,7 @@ pub struct Workspace {
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
     folded: HashSet<SessionId>,
+    forming_open: bool,
     problem: Option<String>,
     pane: Option<Entity<SessionPane>>,
     pane_events: Option<Subscription>,
@@ -109,6 +110,7 @@ impl Workspace {
             suggestions: HashMap::new(),
             subagents: HashMap::new(),
             folded: HashSet::new(),
+            forming_open: false,
             problem: None,
             pane: None,
             pane_events: None,
@@ -146,6 +148,9 @@ impl Workspace {
             Ok((topics, placements)) => {
                 self.topics = topics;
                 self.placements = placements;
+            }
+            Err(err) if err.is_missing_route() => {
+                problems.push("Topics need a newer rh on this node.".to_owned());
             }
             Err(err) => problems.push(format!("topics: {err}")),
         }
