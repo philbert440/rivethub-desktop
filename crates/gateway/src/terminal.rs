@@ -24,6 +24,7 @@ pub enum TermInput {
     Bytes(Vec<u8>),
     Resize { columns: u16, rows: u16 },
     Claim { columns: u16, rows: u16 },
+    Kill,
 }
 
 #[derive(Debug)]
@@ -40,6 +41,7 @@ fn frame(input: TermInput) -> Message {
             cols: Some(columns),
             rows: Some(rows),
         },
+        TermInput::Kill => TermClientFrame::Kill,
     };
     Message::Text(serde_json::to_string(&control).unwrap_or_default().into())
 }

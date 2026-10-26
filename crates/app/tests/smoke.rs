@@ -94,8 +94,17 @@ async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::e
         }
     })
     .await?;
-    terminal.write(b"/exit\r".to_vec());
+    terminal.end();
+    let exited = tokio::time::timeout(Duration::from_secs(20), async {
+        while terminal.state() != app::TerminalState::Exited {
+            if revisions.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
     assert!(drew, "the terminal stream closed before the TUI drew anything");
+    assert!(exited.is_ok(), "the terminal did not end");
     Ok(())
 }
 
@@ -196,5 +205,30 @@ async fn an_agent_on_another_node_starts_and_answers_there() -> Result<(), Box<d
     .await?;
     session.stop();
     assert!(answered, "the remote session never answered");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a running rh gateway; run with --ignored"]
+async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::error::Error>> {
+    let hub = hub()?;
+    let feed = hub.watch_workspace();
+    let mut changes = feed.changes();
+    tokio::time::timeout(Duration::from_secs(10), changes.changed()).await??;
+    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let session = hub.open_session(&summary);
+    session.send("Reply with exactly the word: noticed".into());
+    let seen = *changes.borrow_and_update();
+    let ticked = tokio::time::timeout(Duration::from_secs(120), async {
+        while changes.changed().await.is_ok() {
+            if *changes.borrow_and_update() > seen {
+                return true;
+            }
+        }
+        false
+    })
+    .await?;
+    session.stop();
+    assert!(ticked, "the feed never reported the new session's turn");
     Ok(())
 }

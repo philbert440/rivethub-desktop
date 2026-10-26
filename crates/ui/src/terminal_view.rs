@@ -35,6 +35,10 @@ impl TerminalView {
         }
     }
 
+    pub fn end(&self) {
+        self.handle.end();
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         let mods = Modifiers {
