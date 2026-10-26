@@ -1,4 +1,4 @@
-use model::topics::Topic;
+use model::topics::{Suggestion, Topic};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     PlacementReply, PlacementRequest, TopicCreateRequest, TopicList, TopicRecord, TopicSessionList,
@@ -64,6 +64,16 @@ impl Gateway {
         };
         let created: TopicRecord = Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
         Ok(topic(created, None))
+    }
+
+    pub async fn suggestion(&self, session: &SessionId) -> Result<Option<Suggestion>, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "placement"])?;
+        let reply: PlacementReply = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(reply.suggestion.map(|suggestion| Suggestion {
+            name: suggestion.name,
+            topic: suggestion.topic_id.map(TopicId::new),
+        }))
     }
 
     pub async fn place(&self, session: &SessionId, topic: &TopicId) -> Result<(), GatewayError> {

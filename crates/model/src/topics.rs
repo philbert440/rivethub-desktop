@@ -18,6 +18,12 @@ pub struct Topic {
 pub type Placements = HashMap<SessionId, TopicId>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    pub name: String,
+    pub topic: Option<TopicId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card<'a> {
     pub topic: &'a Topic,
     pub sessions: Vec<&'a SessionSummary>,
