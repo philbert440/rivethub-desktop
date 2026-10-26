@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod attention;
 pub mod chat;
 pub mod ids;
 pub mod lineage;

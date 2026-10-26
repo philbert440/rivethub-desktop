@@ -1,46 +1,28 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use model::{HarnessId, NativeSessionId, SessionId};
+use model::SessionId;
 use rustls::ClientConfig;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message};
 use wire::events::{Activity, AgentEventKind, SessionBroadcast};
+use wire::harness::HarnessEvent;
 
-use crate::GatewayError;
+use crate::{GatewayError, translate};
 
 const BUFFER: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceEvent {
-    Snapshot(Vec<SessionId>),
     Changed,
     Activity { native: String, working: bool },
+    Blocked { id: SessionId, blocked: bool },
     Closed,
 }
 
-fn harness_name(harness: Option<&wire::harness::SessionHarness>) -> String {
-    harness
-        .and_then(|harness| serde_json::to_value(harness).ok())
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
-fn decode(text: &str) -> Option<WorkspaceEvent> {
+fn broadcast(text: &str) -> Option<WorkspaceEvent> {
     match serde_json::from_str::<SessionBroadcast>(text).ok()? {
-        SessionBroadcast::Snapshot(snapshot) => Some(WorkspaceEvent::Snapshot(
-            snapshot
-                .sessions
-                .into_iter()
-                .map(|live| {
-                    SessionId::new(
-                        HarnessId::new(harness_name(live.harness.as_ref())),
-                        NativeSessionId::new(live.id),
-                    )
-                })
-                .collect(),
-        )),
-        SessionBroadcast::Removed(_) => Some(WorkspaceEvent::Changed),
+        SessionBroadcast::Snapshot(_) | SessionBroadcast::Removed(_) => Some(WorkspaceEvent::Changed),
         SessionBroadcast::Event(event) => match event.kind {
             AgentEventKind::Activity { activity, .. } => Some(WorkspaceEvent::Activity {
                 native: event.session,
@@ -54,16 +36,51 @@ fn decode(text: &str) -> Option<WorkspaceEvent> {
     }
 }
 
+fn registry(text: &str) -> Option<WorkspaceEvent> {
+    match serde_json::from_str::<HarnessEvent>(text).ok()? {
+        HarnessEvent::SessionCreated { .. } => Some(WorkspaceEvent::Changed),
+        HarnessEvent::SessionUpdated {
+            session_id,
+            blocked: Some(blocked),
+            ..
+        } => Some(WorkspaceEvent::Blocked {
+            id: translate::session(&session_id),
+            blocked,
+        }),
+        _ => None,
+    }
+}
+
 pub async fn watch(
     base_url: &str,
     tls: Arc<ClientConfig>,
 ) -> Result<mpsc::Receiver<WorkspaceEvent>, GatewayError> {
+    follow(base_url, "/ws", tls, broadcast).await
+}
+
+pub async fn watch_registry(
+    base_url: &str,
+    tls: Arc<ClientConfig>,
+) -> Result<mpsc::Receiver<WorkspaceEvent>, GatewayError> {
+    follow(base_url, "/api/harnesses/ws", tls, registry).await
+}
+
+async fn follow(
+    base_url: &str,
+    path: &str,
+    tls: Arc<ClientConfig>,
+    decode: fn(&str) -> Option<WorkspaceEvent>,
+) -> Result<mpsc::Receiver<WorkspaceEvent>, GatewayError> {
     let ws_base = base_url
         .replacen("https://", "wss://", 1)
         .replacen("http://", "ws://", 1);
-    let (socket, _) =
-        connect_async_tls_with_config(format!("{ws_base}/ws"), None, false, Some(Connector::Rustls(tls)))
-            .await?;
+    let (socket, _) = connect_async_tls_with_config(
+        format!("{ws_base}{path}"),
+        None,
+        false,
+        Some(Connector::Rustls(tls)),
+    )
+    .await?;
     let (_, mut source) = socket.split();
     let (events, receiver) = mpsc::channel(BUFFER);
     tokio::spawn(async move {
