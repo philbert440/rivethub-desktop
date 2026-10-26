@@ -57,6 +57,27 @@ impl Gateway {
         Ok(list.sessions.into_iter().map(translate::summary).collect())
     }
 
+    pub async fn agents(&self) -> Result<model::agents::Roster, GatewayError> {
+        let list: wire::gateway::agents::AgentListResponse =
+            self.get_json(&format!("{}/api/agents", self.base_url)).await?;
+        Ok(translate::roster(list))
+    }
+
+    pub async fn search(&self, query: &str) -> Result<Vec<model::search::Hit>, GatewayError> {
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/api/memory/search", self.base_url),
+            &[("q", query), ("scope", "messages"), ("limit", "60")],
+        )
+        .map_err(|err| GatewayError::Refused(format!("search url: {err}")))?;
+        let reply = self.http.get(url).send().await.map_err(GatewayError::Http)?;
+        let found: wire::gateway::memory::MemorySearchResponse = Self::check(reply)
+            .await?
+            .json()
+            .await
+            .map_err(GatewayError::Http)?;
+        Ok(translate::hits(found))
+    }
+
     pub async fn start_session(
         &self,
         harness: &HarnessId,

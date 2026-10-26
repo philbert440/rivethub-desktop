@@ -32,6 +32,45 @@ pub fn roster_command(id: &SessionId) -> Result<String, GatewayError> {
         .ok_or_else(|| GatewayError::SessionId(id.to_string()))
 }
 
+pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::Roster {
+    let agents = raw
+        .agents
+        .into_iter()
+        .map(|agent| model::agents::Agent {
+            id: agent.id,
+            name: agent.name,
+            color: model::agents::parse_color(&agent.color),
+            harness: agent
+                .harness_id
+                .map(|harness| HarnessId::new(harness.to_string())),
+            model: Some(agent.model).filter(|model| !model.is_empty()),
+            node: agent.node,
+            directory: agent.directory,
+        })
+        .collect();
+    model::agents::Roster {
+        node: raw.node,
+        agents,
+    }
+}
+
+pub fn hits(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::search::Hit> {
+    use wire::message::Role as HitRole;
+    raw.results
+        .into_iter()
+        .filter(|hit| !matches!(hit.role, Some(HitRole::Tool | HitRole::System)))
+        .filter_map(|hit| {
+            let id = hit.session_id?;
+            let parsed: wire::session_id::SessionId = id.parse().ok()?;
+            Some(model::search::Hit {
+                session: session(&parsed),
+                text: hit.content,
+                at_ms: hit.created_at.timestamp_millis(),
+            })
+        })
+        .collect()
+}
+
 pub fn wire_session(id: &SessionId) -> Result<wire::session_id::SessionId, GatewayError> {
     id.to_string()
         .parse()

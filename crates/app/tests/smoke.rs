@@ -121,3 +121,17 @@ async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std:
     assert!(answered, "the queued message was never sent after the first turn");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a running rh gateway; run with --ignored"]
+async fn the_panel_reads_agents_and_groups_search_hits() -> Result<(), Box<dyn std::error::Error>> {
+    let hub = Hub::new(tokio::runtime::Handle::current(), Gateway::connect(&endpoint())?);
+    let roster = hub.agents().await?;
+    assert!(!roster.node.is_empty(), "the gateway did not name its node");
+    assert!(!roster.agents.is_empty(), "no agent presets came back");
+    let found = hub.search("renewal deadline".into()).await?;
+    assert!(!found.is_empty(), "search found no sessions");
+    let sessions: std::collections::HashSet<_> = found.iter().map(|hit| hit.session.clone()).collect();
+    assert_eq!(sessions.len(), found.len(), "a session appeared twice");
+    Ok(())
+}

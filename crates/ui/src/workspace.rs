@@ -7,9 +7,10 @@ use model::session::{SessionStatus, SessionSummary};
 use model::{Altitude, HarnessId};
 
 use crate::session_pane::SessionPane;
+use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, SidePanel};
 use crate::{brand, theme::Theme};
 
-actions!(workspace, [ZoomOut, NewSession]);
+actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel]);
 
 const CLAUDE: &str = "claude-code";
 const FORMING_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -20,6 +21,16 @@ fn now_ms() -> i64 {
         .map_or(0, |elapsed| {
             i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
         })
+}
+
+fn history(sessions: &[SessionSummary], now_ms: i64) -> Vec<SessionSummary> {
+    let mut older: Vec<SessionSummary> = sessions
+        .iter()
+        .filter(|session| session.parent.is_none() && now_ms - session.updated_at_ms > FORMING_WINDOW_MS)
+        .cloned()
+        .collect();
+    older.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
+    older
 }
 
 fn forming(mut sessions: Vec<SessionSummary>, now_ms: i64) -> Vec<SessionSummary> {
@@ -36,10 +47,23 @@ pub struct Workspace {
     forming: Vec<SessionSummary>,
     problem: Option<String>,
     pane: Option<Entity<SessionPane>>,
+    panel: Entity<SidePanel>,
+    panel_open: bool,
+    _panel_events: gpui::Subscription,
 }
 
 impl Workspace {
-    pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
+    pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let panel = cx.new(|cx| SidePanel::new(hub.clone(), cx));
+        let panel_events =
+            cx.subscribe_in(
+                &panel,
+                window,
+                |this, _, event: &PanelEvent, window, cx| match event {
+                    PanelEvent::Open(summary) => this.open(summary.clone(), window, cx),
+                    PanelEvent::Start(agent) => this.start_with(agent.clone(), window, cx),
+                },
+            );
         let workspace = Self {
             focus: cx.focus_handle(),
             hub,
@@ -47,6 +71,9 @@ impl Workspace {
             forming: Vec::new(),
             problem: None,
             pane: None,
+            panel,
+            panel_open: true,
+            _panel_events: panel_events,
         };
         workspace.load_forming(cx);
         workspace
@@ -59,7 +86,11 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match loaded {
                     Ok(sessions) => {
-                        this.forming = forming(sessions, now_ms());
+                        let now = now_ms();
+                        let history = history(&sessions, now);
+                        this.panel
+                            .update(cx, |panel, cx| panel.set_sessions(history, sessions.clone(), cx));
+                        this.forming = forming(sessions, now);
                         this.problem = None;
                     }
                     Err(err) => this.problem = Some(err.to_string()),
@@ -112,6 +143,40 @@ impl Workspace {
         .detach();
     }
 
+    fn start_with(&mut self, agent: model::agents::Agent, window: &mut Window, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let started = hub.start_with(agent).await;
+            cx.update_window(window_handle, |_, window, cx| {
+                this.update(cx, |this, cx| match started {
+                    Ok(summary) => this.open(summary, window, cx),
+                    Err(err) => {
+                        this.problem = Some(err.to_string());
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn toggle_panel(&mut self, _: &ToggleSidePanel, _: &mut Window, cx: &mut Context<Self>) {
+        self.panel_open = !self.panel_open;
+        cx.notify();
+    }
+
+    fn reveal_panel(&mut self, search: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel_open = true;
+        if search {
+            let query = self.panel.read(cx).query().clone();
+            window.focus(&query.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
     fn zoom_out(&mut self, _: &ZoomOut, window: &mut Window, cx: &mut Context<Self>) {
         self.altitude = self.altitude.zoom_out();
         if !matches!(self.altitude, Altitude::Session { .. }) {
@@ -131,6 +196,26 @@ impl Workspace {
             } => format!("Everything › {}", topic.as_str()).into(),
             Altitude::Session { topic: None, .. } => "Everything › Forming".into(),
         }
+    }
+
+    fn icon_button(
+        id: &'static str,
+        glyph: &'static str,
+        listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .size(px(34.))
+            .rounded(px(17.))
+            .bg(Theme::card())
+            .text_color(Theme::ink_dim())
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|button| button.text_color(Theme::ink()))
+            .on_click(listener)
+            .child(glyph)
     }
 
     fn rail() -> impl IntoElement {
@@ -161,6 +246,35 @@ impl Workspace {
                     .text_color(Theme::ink_dim())
                     .child("Ctrl ↑ Everything")
             }))
+            .when(
+                !matches!(self.altitude, Altitude::Session { .. }) && !self.panel_open,
+                |header| {
+                    header
+                        .child(Self::icon_button(
+                            "open-search",
+                            "⌕",
+                            cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                                this.reveal_panel(true, window, cx);
+                            }),
+                        ))
+                        .child(Self::icon_button(
+                            "open-history",
+                            "◷",
+                            cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                                this.reveal_panel(false, window, cx);
+                            }),
+                        ))
+                },
+            )
+            .when(!matches!(self.altitude, Altitude::Session { .. }), |header| {
+                header.child(Self::icon_button(
+                    "toggle-panel",
+                    "▥",
+                    cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                        this.toggle_panel(&ToggleSidePanel, window, cx);
+                    }),
+                ))
+            })
             .child(
                 div()
                     .id("new-session")
@@ -272,15 +386,36 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let everything = !matches!(self.altitude, Altitude::Session { .. });
         let content = match (&self.altitude, &self.pane) {
             (Altitude::Session { .. }, Some(pane)) => pane.clone().into_any_element(),
             _ => self.everything(cx),
         };
+        let tile = div()
+            .id("everything-drop")
+            .flex_1()
+            .mr_3()
+            .mb_3()
+            .rounded(px(28.))
+            .bg(Theme::surface())
+            .overflow_hidden()
+            .when(everything, |tile| {
+                tile.drag_over::<DraggedAgent>(|style, _, _, _| style.bg(Theme::selected()))
+                    .drag_over::<DraggedSession>(|style, _, _, _| style.bg(Theme::selected()))
+                    .on_drop(cx.listener(|this, dragged: &DraggedAgent, window, cx| {
+                        this.start_with(dragged.0.clone(), window, cx);
+                    }))
+                    .on_drop(cx.listener(|this, dragged: &DraggedSession, window, cx| {
+                        this.open(dragged.0.clone(), window, cx);
+                    }))
+            })
+            .child(content);
         div()
             .key_context("Workspace")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::zoom_out))
             .on_action(cx.listener(Self::new_session))
+            .on_action(cx.listener(Self::toggle_panel))
             .size_full()
             .flex()
             .bg(Theme::window())
@@ -291,12 +426,18 @@ impl Render for Workspace {
                 div().flex_1().flex().flex_col().child(self.header(cx)).child(
                     div()
                         .flex_1()
-                        .mr_3()
-                        .mb_3()
-                        .rounded(px(28.))
-                        .bg(Theme::surface())
-                        .overflow_hidden()
-                        .child(content),
+                        .flex()
+                        .child(tile)
+                        .when(everything && self.panel_open, |row| {
+                            row.child(
+                                div()
+                                    .mb_3()
+                                    .mr_3()
+                                    .rounded(px(20.))
+                                    .overflow_hidden()
+                                    .child(self.panel.clone()),
+                            )
+                        }),
                 ),
             )
     }

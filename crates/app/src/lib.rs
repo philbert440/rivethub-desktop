@@ -47,6 +47,49 @@ impl Hub {
             .unwrap_or_else(|join| Err(GatewayError::Refused(format!("listing sessions stopped: {join}"))))
     }
 
+    pub async fn agents(&self) -> Result<model::agents::Roster, GatewayError> {
+        let gateway = self.gateway.clone();
+        self.runtime
+            .spawn(async move { gateway.agents().await })
+            .await
+            .unwrap_or_else(|join| Err(GatewayError::Refused(format!("listing agents stopped: {join}"))))
+    }
+
+    pub async fn search(&self, query: String) -> Result<Vec<model::search::SessionMatch>, GatewayError> {
+        let gateway = self.gateway.clone();
+        self.runtime
+            .spawn(async move {
+                gateway
+                    .search(&query)
+                    .await
+                    .map(|hits| model::search::group(hits, &query))
+            })
+            .await
+            .unwrap_or_else(|join| Err(GatewayError::Refused(format!("searching stopped: {join}"))))
+    }
+
+    pub async fn start_with(&self, agent: model::agents::Agent) -> Result<SessionSummary, GatewayError> {
+        let gateway = self.gateway.clone();
+        let Some(harness) = agent.harness.clone() else {
+            return Err(GatewayError::Refused(format!(
+                "{} has no harness to start",
+                agent.name
+            )));
+        };
+        self.runtime
+            .spawn(async move {
+                gateway
+                    .start_session(&harness, agent.model.as_deref(), agent.directory.as_deref())
+                    .await
+            })
+            .await
+            .unwrap_or_else(|join| {
+                Err(GatewayError::Refused(format!(
+                    "starting the session stopped: {join}"
+                )))
+            })
+    }
+
     pub async fn start_session(&self, harness: HarnessId) -> Result<SessionSummary, GatewayError> {
         let gateway = self.gateway.clone();
         self.runtime
