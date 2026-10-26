@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gateway::Gateway;
 use model::SessionId;
 use model::session::{Decision, SessionEvent, SessionView};
 use parking_lot::RwLock;
@@ -65,7 +64,8 @@ impl SessionHandle {
 }
 
 struct Actor {
-    gateway: Gateway,
+    hub: crate::Hub,
+    node: Option<String>,
     id: SessionId,
     view: Arc<RwLock<SessionView>>,
     queue: Arc<RwLock<VecDeque<String>>>,
@@ -73,6 +73,10 @@ struct Actor {
 }
 
 impl Actor {
+    async fn gateway(&self) -> Result<gateway::Gateway, gateway::GatewayError> {
+        self.hub.gateway_for(self.node.as_deref()).await
+    }
+
     fn changed(&self) {
         self.revision.send_modify(|revision| *revision += 1);
     }
@@ -98,7 +102,11 @@ impl Actor {
     }
 
     async fn send(&self, text: String) {
-        match self.gateway.send_turn(&self.id, &text).await {
+        let outcome = match self.gateway().await {
+            Ok(gateway) => gateway.send_turn(&self.id, &text).await,
+            Err(err) => Err(err),
+        };
+        match outcome {
             Ok(()) => {}
             Err(err) if err.is_turn_in_flight() => {
                 self.queue.write().push_front(text);
@@ -116,7 +124,11 @@ impl Actor {
     async fn run(self, mut commands: mpsc::Receiver<Command>) {
         let mut retry = FIRST_RETRY;
         loop {
-            match self.gateway.open_session(&self.id).await {
+            let opened = match self.gateway().await {
+                Ok(gateway) => gateway.open_session(&self.id).await,
+                Err(err) => Err(err),
+            };
+            match opened {
                 Ok(mut stream) => {
                     retry = FIRST_RETRY;
                     stream.resync();
@@ -162,10 +174,14 @@ impl Actor {
                 self.changed();
                 Ok(())
             }
-            Command::Stop => self.gateway.stop(&self.id).await,
-            Command::Decide { request_id, decision } => {
-                self.gateway.decide(&self.id, &request_id, decision).await
-            }
+            Command::Stop => match self.gateway().await {
+                Ok(gateway) => gateway.stop(&self.id).await,
+                Err(err) => Err(err),
+            },
+            Command::Decide { request_id, decision } => match self.gateway().await {
+                Ok(gateway) => gateway.decide(&self.id, &request_id, decision).await,
+                Err(err) => Err(err),
+            },
         };
         if let Err(err) = outcome {
             self.fail(&err.to_string());
@@ -173,13 +189,14 @@ impl Actor {
     }
 }
 
-pub fn spawn(runtime: &Handle, gateway: Gateway, id: SessionId) -> SessionHandle {
+pub fn spawn(runtime: &Handle, hub: crate::Hub, id: SessionId, node: Option<String>) -> SessionHandle {
     let view = Arc::new(RwLock::new(SessionView::default()));
     let queue = Arc::new(RwLock::new(VecDeque::new()));
     let (revision_tx, revision) = watch::channel(0);
     let (commands, commands_rx) = mpsc::channel(COMMAND_BUFFER);
     let actor = Actor {
-        gateway,
+        hub,
+        node,
         id: id.clone(),
         view: Arc::clone(&view),
         queue: Arc::clone(&queue),

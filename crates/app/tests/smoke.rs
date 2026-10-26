@@ -6,21 +6,38 @@ use gateway::{Endpoint, Gateway};
 use model::HarnessId;
 use model::session::Role;
 
+fn hub() -> Result<Hub, gateway::GatewayError> {
+    let endpoint = endpoint();
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let dir = home.join(".config/RivetHub/mtls");
+    let identity = gateway::Identity {
+        cert_pem: dir.join("device.crt"),
+        key_pem: dir.join("device.key"),
+    };
+    Ok(Hub::new(
+        tokio::runtime::Handle::current(),
+        Gateway::connect(&endpoint)?,
+        endpoint.ca_pem,
+        Some(identity),
+    ))
+}
+
 fn endpoint() -> Endpoint {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     Endpoint {
         base_url: std::env::var("RIVETHUB_URL").unwrap_or_else(|_| "https://127.0.0.1:5174".into()),
         ca_pem: std::env::var_os("RIVETHUB_CA")
             .map_or_else(|| home.join(".rivethub/step-root.crt"), PathBuf::from),
+        identity: None,
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a running rh gateway; run with --ignored"]
 async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::error::Error>> {
-    let hub = Hub::new(tokio::runtime::Handle::current(), Gateway::connect(&endpoint())?);
+    let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
-    let session = hub.open_session(summary.id);
+    let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
     session.send("Reply with exactly the word: ready".into());
     let answered = tokio::time::timeout(Duration::from_secs(180), async {
@@ -48,10 +65,10 @@ async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a running rh gateway; run with --ignored"]
 async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::error::Error>> {
-    let hub = Hub::new(tokio::runtime::Handle::current(), Gateway::connect(&endpoint())?);
+    let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
     let terminal = hub.open_terminal(
-        summary.id,
+        &summary,
         term::GridSize {
             columns: 100,
             rows: 30,
@@ -85,9 +102,9 @@ async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::e
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a running rh gateway; run with --ignored"]
 async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std::error::Error>> {
-    let hub = Hub::new(tokio::runtime::Handle::current(), Gateway::connect(&endpoint())?);
+    let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
-    let session = hub.open_session(summary.id);
+    let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
     session.send("Count from 1 to 60, one number per line, then write the word first.".into());
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -125,7 +142,7 @@ async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std:
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a running rh gateway; run with --ignored"]
 async fn the_panel_reads_agents_and_groups_search_hits() -> Result<(), Box<dyn std::error::Error>> {
-    let hub = Hub::new(tokio::runtime::Handle::current(), Gateway::connect(&endpoint())?);
+    let hub = hub()?;
     let roster = hub.agents().await?;
     assert!(!roster.node.is_empty(), "the gateway did not name its node");
     assert!(!roster.agents.is_empty(), "no agent presets came back");
@@ -133,5 +150,51 @@ async fn the_panel_reads_agents_and_groups_search_hits() -> Result<(), Box<dyn s
     assert!(!found.is_empty(), "search found no sessions");
     let sessions: std::collections::HashSet<_> = found.iter().map(|hit| hit.session.clone()).collect();
     assert_eq!(sessions.len(), found.len(), "a session appeared twice");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the mesh and a device certificate; run with --ignored"]
+async fn an_agent_on_another_node_starts_and_answers_there() -> Result<(), Box<dyn std::error::Error>> {
+    let hub = hub()?;
+    let roster = hub.agents().await?;
+    let remote = roster
+        .agents
+        .into_iter()
+        .find(|agent| {
+            agent
+                .harness
+                .as_ref()
+                .is_some_and(|harness| harness.as_str() == "claude-code")
+                && agent
+                    .node
+                    .as_deref()
+                    .is_some_and(|node| !node.eq_ignore_ascii_case(&roster.node))
+        })
+        .ok_or("no claude-code agent on another node")?;
+    let summary = hub.start_with(remote.clone()).await?;
+    assert_eq!(summary.node, remote.node);
+    let session = hub.open_session(&summary);
+    let mut revisions = session.revisions();
+    session.send("Reply with exactly the word: remote".into());
+    let answered = tokio::time::timeout(Duration::from_secs(180), async {
+        loop {
+            if revisions.changed().await.is_err() {
+                return false;
+            }
+            let view = session.view();
+            let view = view.read();
+            if view
+                .turns()
+                .iter()
+                .any(|turn| turn.role == Role::Assistant && turn.text.contains("remote"))
+            {
+                return true;
+            }
+        }
+    })
+    .await?;
+    session.stop();
+    assert!(answered, "the remote session never answered");
     Ok(())
 }

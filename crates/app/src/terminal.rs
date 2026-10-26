@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gateway::{Gateway, TermInput, TermOutput};
+use gateway::{TermInput, TermOutput};
 use model::SessionId;
 use parking_lot::RwLock;
 use term::{GridSize, Screen};
@@ -59,7 +59,8 @@ impl TerminalHandle {
 }
 
 struct Actor {
-    gateway: Gateway,
+    hub: crate::Hub,
+    node: Option<String>,
     session: SessionId,
     screen: Arc<RwLock<Screen>>,
     state: Arc<RwLock<TerminalState>>,
@@ -67,6 +68,14 @@ struct Actor {
 }
 
 impl Actor {
+    async fn attach(&self, size: GridSize) -> Result<gateway::TerminalStream, gateway::GatewayError> {
+        let gateway = self.hub.gateway_for(self.node.as_deref()).await?;
+        let pty = gateway
+            .session_terminal(&self.session, size.columns, size.rows)
+            .await?;
+        gateway.attach_terminal(&pty).await
+    }
+
     fn changed(&self) {
         self.revision.send_modify(|revision| *revision += 1);
     }
@@ -80,14 +89,7 @@ impl Actor {
         let mut retry = FIRST_RETRY;
         loop {
             let size = self.screen.read().size();
-            let attached = match self
-                .gateway
-                .session_terminal(&self.session, size.columns, size.rows)
-                .await
-            {
-                Ok(pty) => self.gateway.attach_terminal(&pty).await,
-                Err(err) => Err(err),
-            };
+            let attached = self.attach(size).await;
             match attached {
                 Ok(mut stream) => {
                     retry = FIRST_RETRY;
@@ -146,13 +148,20 @@ impl Actor {
     }
 }
 
-pub fn spawn(runtime: &Handle, gateway: Gateway, session: SessionId, size: GridSize) -> TerminalHandle {
+pub fn spawn(
+    runtime: &Handle,
+    hub: crate::Hub,
+    session: SessionId,
+    node: Option<String>,
+    size: GridSize,
+) -> TerminalHandle {
     let screen = Arc::new(RwLock::new(Screen::new(size)));
     let state = Arc::new(RwLock::new(TerminalState::default()));
     let (revision_tx, revision) = watch::channel(0);
     let (commands, commands_rx) = mpsc::channel(INPUT_BUFFER);
     let actor = Actor {
-        gateway,
+        hub,
+        node,
         session,
         screen: Arc::clone(&screen),
         state: Arc::clone(&state),

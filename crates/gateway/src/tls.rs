@@ -1,11 +1,11 @@
 use std::path::Path;
 
 use rustls::{ClientConfig, RootCertStore};
-use rustls_pki_types::{CertificateDer, pem::PemObject};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
-use crate::GatewayError;
+use crate::{GatewayError, Identity};
 
-pub fn client_config(ca_pem: &Path) -> Result<ClientConfig, GatewayError> {
+pub fn client_config(ca_pem: &Path, identity: Option<&Identity>) -> Result<ClientConfig, GatewayError> {
     let shown = ca_pem.display().to_string();
     let bytes = std::fs::read(ca_pem).map_err(|source| GatewayError::Ca {
         path: shown.clone(),
@@ -19,8 +19,22 @@ pub fn client_config(ca_pem: &Path) -> Result<ClientConfig, GatewayError> {
         return Err(GatewayError::EmptyCa(shown));
     }
     let provider = std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    Ok(ClientConfig::builder_with_provider(provider)
+    let builder = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
-        .with_root_certificates(roots)
-        .with_no_client_auth())
+        .with_root_certificates(roots);
+    let Some(identity) = identity else {
+        return Ok(builder.with_no_client_auth());
+    };
+    let read = |path: &Path| {
+        std::fs::read(path).map_err(|source| GatewayError::Ca {
+            path: path.display().to_string(),
+            source,
+        })
+    };
+    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&read(&identity.cert_pem)?)
+        .flatten()
+        .collect();
+    let key = PrivateKeyDer::from_pem_slice(&read(&identity.key_pem)?)
+        .map_err(|_| GatewayError::Key(identity.key_pem.display().to_string()))?;
+    Ok(builder.with_client_auth_cert(chain, key)?)
 }

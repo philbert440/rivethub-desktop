@@ -86,6 +86,7 @@ pub struct SessionSummary {
     pub cwd: Option<String>,
     pub updated_at_ms: i64,
     pub parent: Option<SessionId>,
+    pub node: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
