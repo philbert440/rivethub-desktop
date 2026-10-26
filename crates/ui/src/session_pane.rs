@@ -158,6 +158,13 @@ impl SessionPane {
             .into_any_element()
     }
 
+    fn end_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(terminal) = self.terminal.take() {
+            terminal.read(cx).end();
+        }
+        self.show(Mode::Chat, window, cx);
+    }
+
     fn toggle(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
         let next = if self.mode == Mode::Chat {
             Mode::Terminal
@@ -220,6 +227,26 @@ impl SessionPane {
                     .child(self.tab(Mode::Chat, "Chat", cx))
                     .child(self.tab(Mode::Terminal, "Terminal", cx)),
             )
+            .when(self.mode == Mode::Terminal && self.terminal.is_some(), |header| {
+                header.child(
+                    div()
+                        .id("end-terminal")
+                        .h(px(30.))
+                        .px_3()
+                        .rounded(px(15.))
+                        .border_1()
+                        .border_color(Theme::line())
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .text_color(Theme::ink_dim())
+                        .hover(|button| button.text_color(Theme::ink()))
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.end_terminal(window, cx)),
+                        )
+                        .child("End"),
+                )
+            })
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {

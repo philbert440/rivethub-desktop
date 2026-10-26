@@ -1,6 +1,8 @@
+mod feed;
 mod session;
 mod terminal;
 
+pub use feed::WorkspaceFeed;
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
 
@@ -85,6 +87,10 @@ impl Hub {
             .spawn(work)
             .await
             .unwrap_or_else(|join| Err(GatewayError::Refused(format!("the request stopped: {join}"))))
+    }
+
+    pub fn watch_workspace(&self) -> WorkspaceFeed {
+        feed::spawn(self)
     }
 
     pub fn open_session(&self, summary: &SessionSummary) -> SessionHandle {

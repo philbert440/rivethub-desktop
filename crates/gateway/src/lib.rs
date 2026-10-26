@@ -1,11 +1,13 @@
 mod chat;
 mod error;
+mod events;
 mod terminal;
 mod tls;
 mod translate;
 
 pub use chat::SessionStream;
 pub use error::GatewayError;
+pub use events::WorkspaceEvent;
 pub use terminal::{TermInput, TermOutput, TerminalStream};
 
 use std::path::PathBuf;
@@ -198,6 +200,10 @@ impl Gateway {
         let spawned: wire::gateway::term::TermSpawnResponse =
             Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
         Ok(spawned.id)
+    }
+
+    pub async fn watch(&self) -> Result<tokio::sync::mpsc::Receiver<WorkspaceEvent>, GatewayError> {
+        events::watch(&self.base_url, Arc::clone(&self.tls)).await
     }
 
     pub async fn attach_terminal(&self, pty: &str) -> Result<TerminalStream, GatewayError> {

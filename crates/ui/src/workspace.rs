@@ -61,7 +61,9 @@ pub struct Workspace {
     pane: Option<Entity<SessionPane>>,
     panel: Entity<SidePanel>,
     panel_open: bool,
+    feed: app::WorkspaceFeed,
     _panel_events: gpui::Subscription,
+    _feed: [gpui::Task<()>; 2],
 }
 
 impl Workspace {
@@ -76,6 +78,27 @@ impl Workspace {
                     PanelEvent::Start(agent) => this.start_with(agent.clone(), window, cx),
                 },
             );
+        let feed = hub.watch_workspace();
+        let mut changes = feed.changes();
+        let refresh = cx.spawn(async move |this, cx| {
+            while changes.changed().await.is_ok() {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(750))
+                    .await;
+                changes.borrow_and_update();
+                if this.update(cx, |this, cx| this.load_forming(cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut activity = feed.activity();
+        let repaint = cx.spawn(async move |this, cx| {
+            while activity.changed().await.is_ok() {
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        });
         let workspace = Self {
             focus: cx.focus_handle(),
             hub,
@@ -86,7 +109,9 @@ impl Workspace {
             pane: None,
             panel,
             panel_open: true,
+            feed,
             _panel_events: panel_events,
+            _feed: [refresh, repaint],
         };
         workspace.load_forming(cx);
         workspace
@@ -348,11 +373,12 @@ impl Workspace {
                     .gap_3()
                     .children(self.forming.iter().enumerate().map(|(index, session)| {
                         let summary = session.clone();
-                        let dot = if session.status == SessionStatus::Active {
-                            Theme::accent()
-                        } else {
-                            Theme::ink_dim()
-                        };
+                        let dot =
+                            if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
+                                Theme::accent()
+                            } else {
+                                Theme::ink_dim()
+                            };
                         div()
                             .id(("forming", index))
                             .w(px(320.))

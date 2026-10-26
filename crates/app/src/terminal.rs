@@ -24,6 +24,7 @@ pub enum TerminalState {
 enum Command {
     Bytes(Vec<u8>),
     Resize(GridSize),
+    End,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,10 @@ impl TerminalHandle {
 
     pub fn write(&self, bytes: Vec<u8>) {
         let _ = self.commands.try_send(Command::Bytes(bytes));
+    }
+
+    pub fn end(&self) {
+        let _ = self.commands.try_send(Command::End);
     }
 
     pub fn resize(&self, size: GridSize) {
@@ -127,6 +132,9 @@ impl Actor {
                                     let _ = stream.input.send(TermInput::Resize { columns: size.columns, rows: size.rows }).await;
                                     self.changed();
                                 }
+                                Some(Command::End) => {
+                                    let _ = stream.input.send(TermInput::Kill).await;
+                                }
                                 None => return,
                             },
                         }
@@ -139,7 +147,7 @@ impl Actor {
                 () = tokio::time::sleep(retry) => {}
                 command = commands.recv() => match command {
                     Some(Command::Resize(size)) => self.screen.write().resize(size),
-                    Some(Command::Bytes(_)) => {}
+                    Some(Command::Bytes(_) | Command::End) => {}
                     None => return,
                 },
             }
