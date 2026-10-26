@@ -147,18 +147,16 @@ impl Hub {
     }
 
     pub async fn start_with(&self, agent: Agent) -> Result<SessionSummary, GatewayError> {
-        let Some(harness) = agent.harness.clone() else {
+        if agent.harness.is_none() {
             return Err(GatewayError::Refused(format!(
                 "{} has no harness to start",
                 agent.name
             )));
-        };
+        }
         let hub = self.clone();
         self.on_runtime(async move {
             let gateway = hub.gateway_for(agent.node.as_deref()).await?;
-            let mut summary = gateway
-                .start_session(&harness, agent.model.as_deref(), agent.directory.as_deref())
-                .await?;
+            let mut summary = gateway.start_agent(&agent.id).await?;
             summary.node.clone_from(&agent.node);
             Ok(summary)
         })
@@ -167,7 +165,7 @@ impl Hub {
 
     pub async fn start_session(&self, harness: HarnessId) -> Result<SessionSummary, GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.start_session(&harness, None, None).await })
+        self.on_runtime(async move { gateway.start_session(&harness).await })
             .await
     }
 }

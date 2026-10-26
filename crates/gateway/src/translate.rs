@@ -45,7 +45,6 @@ pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::R
                 .map(|harness| HarnessId::new(harness.to_string())),
             model: Some(agent.model).filter(|model| !model.is_empty()),
             node: agent.node,
-            directory: agent.directory,
         })
         .collect();
     model::agents::Roster {
