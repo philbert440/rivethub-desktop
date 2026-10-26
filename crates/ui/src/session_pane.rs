@@ -38,6 +38,7 @@ pub struct SessionPane {
     turns: ListState,
     exchanges: Arc<Vec<ExchangeView>>,
     folds: Arc<Folds>,
+    hovered_turn: Option<usize>,
     composer: Entity<TextInput>,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -70,6 +71,7 @@ impl SessionPane {
             turns: ListState::new(0, ListAlignment::Bottom, px(600.)),
             exchanges: Arc::new(Vec::new()),
             folds: Arc::new(Folds::default()),
+            hovered_turn: None,
             composer,
             _revisions: watcher,
             _submitted: submitted,
@@ -250,6 +252,112 @@ impl SessionPane {
         }
         self.exchanges = Arc::new(views);
         cx.notify();
+    }
+
+    pub fn hover_turn(&mut self, turn: Option<usize>, cx: &mut Context<Self>) {
+        if self.hovered_turn != turn {
+            self.hovered_turn = turn;
+            cx.notify();
+        }
+    }
+
+    pub fn reveal_turn(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.turns.scroll_to_reveal_item(index);
+        cx.notify();
+    }
+
+    fn active_turn(&self) -> usize {
+        let last = self.exchanges.len().saturating_sub(1);
+        if self.turns.is_scrolled_to_end() == Some(false) {
+            self.turns.logical_scroll_top().item_ix.min(last)
+        } else {
+            last
+        }
+    }
+
+    fn chat_body(
+        &mut self,
+        column: Pixels,
+        behind: bool,
+        footer: gpui::Div,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let shared = self.handle.view();
+        let view = shared.read();
+        let exchanges = Arc::clone(&self.exchanges);
+        let folds = Arc::clone(&self.folds);
+        let pane = cx.entity().downgrade();
+        let transcript = list(
+            self.turns.clone(),
+            move |index, window: &mut Window, _: &mut App| {
+                exchanges.get(index).map_or_else(
+                    || div().into_any_element(),
+                    |exchange| {
+                        let context = transcript::Context {
+                            index,
+                            folds: &folds,
+                            column,
+                            pane: pane.clone(),
+                        };
+                        transcript::exchange(exchange, &context, window)
+                    },
+                )
+            },
+        )
+        .size_full();
+        let back = behind.then(|| {
+            div().w(column).flex().justify_end().child(
+                div()
+                    .id("back-to-bottom")
+                    .size(px(34.))
+                    .rounded(px(17.))
+                    .bg(Theme::raised())
+                    .text_color(Theme::ink())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.turns.scroll_to_end();
+                        cx.notify();
+                    }))
+                    .child("↓"),
+            )
+        });
+        div()
+            .flex_1()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .w_full()
+                    .pt_2()
+                    .child(transcript)
+                    .children(
+                        (window.viewport_size().width > px(900.))
+                            .then(|| {
+                                let rail = crate::turn_rail::Rail {
+                                    exchanges: &self.exchanges,
+                                    active: self.active_turn(),
+                                    hovered: self.hovered_turn,
+                                };
+                                crate::turn_rail::rail(&rail, cx)
+                            })
+                            .flatten(),
+                    ),
+            )
+            .children(back)
+            .child(
+                footer.children(self.queue_dock()).child(
+                    self.approval_card(&view)
+                        .unwrap_or_else(|| self.composer_card(&view, cx)),
+                ),
+            )
     }
 
     pub fn toggle_fold(&mut self, fold: Fold, cx: &mut Context<Self>) {
@@ -471,19 +579,23 @@ fn column_width(window: &Window) -> Pixels {
 impl Render for SessionPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let column = column_width(window);
-        let shared = self.handle.view();
-        let view = shared.read();
-        let error = view.error().map(str::to_owned);
         let behind = self.turns.is_scrolled_to_end() == Some(false);
-        let footer = div()
-            .w(column)
-            .pb_5()
-            .pt_2()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .children(error.map(|message| div().text_color(Theme::warn()).child(message)))
-            .children(Self::context_bar(&view));
+        let footer = {
+            let shared = self.handle.view();
+            let view = shared.read();
+            div()
+                .w(column)
+                .pb_5()
+                .pt_2()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .children(
+                    view.error()
+                        .map(|message| div().text_color(Theme::warn()).child(message.to_owned())),
+                )
+                .children(Self::context_bar(&view))
+        };
         let prompt = self.spawn_prompt(cx);
         let body = match (self.mode, &self.terminal) {
             (Mode::Terminal, None) => div().flex_1().w_full().child(prompt),
@@ -496,62 +608,7 @@ impl Render for SessionPane {
                 .px_4()
                 .child(div().flex_1().w_full().child(terminal.clone()))
                 .child(footer),
-            _ => {
-                let exchanges = Arc::clone(&self.exchanges);
-                let folds = Arc::clone(&self.folds);
-                let pane = cx.entity().downgrade();
-                let transcript = list(
-                    self.turns.clone(),
-                    move |index, window: &mut Window, _: &mut App| {
-                        exchanges.get(index).map_or_else(
-                            || div().into_any_element(),
-                            |exchange| {
-                                let context = transcript::Context {
-                                    index,
-                                    folds: &folds,
-                                    column,
-                                    pane: pane.clone(),
-                                };
-                                transcript::exchange(exchange, &context, window)
-                            },
-                        )
-                    },
-                )
-                .size_full();
-                let back = behind.then(|| {
-                    div().w(column).flex().justify_end().child(
-                        div()
-                            .id("back-to-bottom")
-                            .size(px(34.))
-                            .rounded(px(17.))
-                            .bg(Theme::raised())
-                            .text_color(Theme::ink())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.turns.scroll_to_end();
-                                cx.notify();
-                            }))
-                            .child("↓"),
-                    )
-                });
-                div()
-                    .flex_1()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(div().flex_1().w_full().pt_2().child(transcript))
-                    .children(back)
-                    .child(
-                        footer.children(self.queue_dock()).child(
-                            self.approval_card(&view)
-                                .unwrap_or_else(|| self.composer_card(&view, cx)),
-                        ),
-                    )
-            }
+            _ => self.chat_body(column, behind, footer, window, cx),
         };
         div()
             .key_context("Session")

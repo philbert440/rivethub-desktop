@@ -85,7 +85,7 @@ impl Render for TerminalView {
             .size_full()
             .p_3()
             .rounded(px(16.))
-            .bg(rgb(self.handle.screen().read().snapshot().background.to_u32()))
+            .bg(rgb(self.handle.screen().read().background().to_u32()))
             .flex()
             .flex_col()
             .children(status.map(|line| div().text_xs().text_color(Theme::ink_dim()).child(line)))
