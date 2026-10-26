@@ -6,6 +6,7 @@ use gpui::{
 use model::agents::{Agent, Roster};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
+use model::{SessionId, lineage};
 
 use crate::input::{Submitted, TextInput};
 use crate::theme::Theme;
@@ -49,6 +50,7 @@ pub struct SidePanel {
     known: Vec<SessionSummary>,
     agents_open: bool,
     history_open: bool,
+    collapsed: std::collections::HashSet<SessionId>,
     _submitted: Subscription,
 }
 
@@ -71,6 +73,7 @@ impl SidePanel {
             known: Vec::new(),
             agents_open: true,
             history_open: true,
+            collapsed: std::collections::HashSet::new(),
             _submitted: submitted,
         };
         panel.load_agents(cx);
@@ -227,30 +230,60 @@ impl SidePanel {
     }
 
     fn history(&self, cx: &mut Context<Self>) -> AnyElement {
+        let rows = lineage::nest(&self.history, &self.collapsed);
         div()
             .flex()
             .flex_col()
-            .children(self.history.iter().take(40).enumerate().map(|(index, session)| {
-                let open = session.clone();
+            .children(rows.into_iter().take(60).enumerate().map(|(index, row)| {
+                let open = row.session.clone();
+                let fold = row.session.id.clone();
+                let indent = px(16. * f32::from(u8::try_from(row.depth.min(4)).unwrap_or(4)));
                 div()
                     .id(("history", index))
-                    .px_2()
+                    .pl(px(8.) + indent)
+                    .pr_2()
                     .py(px(7.))
                     .rounded(px(12.))
                     .cursor_pointer()
-                    .hover(|row| row.bg(Theme::card()))
-                    .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
+                    .hover(|line| line.bg(Theme::card()))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .on_drag(DraggedSession(row.session.clone()), |dragged, _, _, cx| {
                         cx.new(|_| DragGhost(crate::text::one_line(dragged.0.title.as_deref())))
                     })
                     .on_click(
                         cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Open(open.clone()))),
                     )
+                    .when(row.depth > 0, |line| {
+                        line.child(div().text_color(Theme::ink_dim()).child("↳"))
+                    })
                     .child(
                         div()
+                            .flex_1()
                             .truncate()
                             .text_color(Theme::ink())
-                            .child(crate::text::one_line(session.title.as_deref())),
+                            .child(crate::text::one_line(row.session.title.as_deref())),
                     )
+                    .when(row.children > 0, |line| {
+                        line.child(
+                            div()
+                                .id(("fold", index))
+                                .text_color(Theme::ink_dim())
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    if !this.collapsed.remove(&fold) {
+                                        this.collapsed.insert(fold.clone());
+                                    }
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }))
+                                .child(if row.collapsed {
+                                    format!("▸ {}", row.children)
+                                } else {
+                                    "▾".to_owned()
+                                }),
+                        )
+                    })
             }))
             .into_any_element()
     }

@@ -24,9 +24,20 @@ fn now_ms() -> i64 {
 }
 
 fn history(sessions: &[SessionSummary], now_ms: i64) -> Vec<SessionSummary> {
+    let young: std::collections::HashSet<&model::SessionId> = sessions
+        .iter()
+        .filter(|session| session.parent.is_none() && now_ms - session.updated_at_ms <= FORMING_WINDOW_MS)
+        .map(|session| &session.id)
+        .collect();
     let mut older: Vec<SessionSummary> = sessions
         .iter()
-        .filter(|session| session.parent.is_none() && now_ms - session.updated_at_ms > FORMING_WINDOW_MS)
+        .filter(|session| !young.contains(&session.id))
+        .filter(|session| {
+            session
+                .parent
+                .as_ref()
+                .is_none_or(|parent| !young.contains(parent))
+        })
         .cloned()
         .collect();
     older.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
@@ -45,6 +56,7 @@ pub struct Workspace {
     hub: Hub,
     altitude: Altitude,
     forming: Vec<SessionSummary>,
+    subagents: std::collections::HashMap<model::SessionId, usize>,
     problem: Option<String>,
     pane: Option<Entity<SessionPane>>,
     panel: Entity<SidePanel>,
@@ -69,6 +81,7 @@ impl Workspace {
             hub,
             altitude: Altitude::Everything,
             forming: Vec::new(),
+            subagents: std::collections::HashMap::new(),
             problem: None,
             pane: None,
             panel,
@@ -372,6 +385,13 @@ impl Workspace {
                                     .text_color(Theme::ink_dim())
                                     .child(session.model.clone().unwrap_or_else(|| "claude".into())),
                             )
+                            .children(self.subagents.get(&session.id).map(|count| {
+                                let noun = if *count == 1 { "subagent" } else { "subagents" };
+                                div()
+                                    .text_xs()
+                                    .text_color(Theme::ink_dim())
+                                    .child(format!("↳ {count} {noun}"))
+                            }))
                     })),
             )
             .into_any_element()
