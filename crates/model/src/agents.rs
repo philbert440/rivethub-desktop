@@ -8,7 +8,6 @@ pub struct Agent {
     pub harness: Option<HarnessId>,
     pub model: Option<String>,
     pub node: Option<String>,
-    pub directory: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -47,7 +46,6 @@ mod tests {
             harness: harness.map(HarnessId::new),
             model: None,
             node: node.map(str::to_owned),
-            directory: None,
         }
     }
 
