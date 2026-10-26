@@ -764,6 +764,13 @@ impl TextInput {
         }
     }
 
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.reset();
+        self.content = text.to_owned().into();
+        self.selected_range = 0..self.content.len();
+        cx.notify();
+    }
+
     pub fn text(&self) -> &str {
         self.content.trim()
     }
