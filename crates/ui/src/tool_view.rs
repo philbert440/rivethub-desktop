@@ -28,6 +28,11 @@ fn glyph(name: &str) -> &'static str {
 fn expandable(tool: &ToolCall) -> bool {
     !matches!(tool.input, ToolInput::Unknown)
         || tool.output.as_ref().is_some_and(|output| !output.text.is_empty())
+        || fetchable(tool)
+}
+
+pub fn fetchable(tool: &ToolCall) -> bool {
+    tool.output.is_none() && tool.id.is_some() && tool.state != ToolState::Running
 }
 
 fn suffix(tool: &ToolCall) -> Option<AnyElement> {
@@ -155,6 +160,16 @@ fn body(tool: &ToolCall) -> Vec<AnyElement> {
 }
 
 pub fn row(tool: &ToolCall, fold: Fold, cx: &Context<'_>) -> AnyElement {
+    let fetched = tool
+        .output
+        .is_none()
+        .then(|| tool.id.as_ref().and_then(|id| cx.fetched.get(id)))
+        .flatten()
+        .map(|output| ToolCall {
+            output: Some(output.clone()),
+            ..tool.clone()
+        });
+    let tool = fetched.as_ref().unwrap_or(tool);
     let open = cx.folds.open(fold);
     let can_open = expandable(tool);
     let running = tool.state == ToolState::Running;

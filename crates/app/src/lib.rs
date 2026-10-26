@@ -94,6 +94,22 @@ impl Hub {
         feed::spawn(self)
     }
 
+    pub async fn tool_output(
+        &self,
+        summary: &SessionSummary,
+        tool_call_id: String,
+        tool_name: String,
+    ) -> Result<Option<model::tools::ToolOutput>, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            gateway.tool_output(&session, &tool_call_id, &tool_name).await
+        })
+        .await
+    }
+
     pub async fn rename(
         &self,
         summary: &SessionSummary,

@@ -48,6 +48,7 @@ pub struct SessionPane {
     turns: ListState,
     exchanges: Arc<Vec<ExchangeView>>,
     folds: Arc<Folds>,
+    fetched: Arc<std::collections::HashMap<String, model::tools::ToolOutput>>,
     hovered_turn: Option<usize>,
     composer: Entity<TextInput>,
     renaming: Option<Renaming>,
@@ -82,6 +83,7 @@ impl SessionPane {
             turns: ListState::new(0, ListAlignment::Bottom, px(600.)),
             exchanges: Arc::new(Vec::new()),
             folds: Arc::new(Folds::default()),
+            fetched: Arc::new(std::collections::HashMap::new()),
             hovered_turn: None,
             composer,
             renaming: None,
@@ -421,6 +423,7 @@ impl SessionPane {
         let view = shared.read();
         let exchanges = Arc::clone(&self.exchanges);
         let folds = Arc::clone(&self.folds);
+        let fetched = Arc::clone(&self.fetched);
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -437,6 +440,7 @@ impl SessionPane {
                             pane: pane.clone(),
                             cwd: cwd.as_deref(),
                             home: home.as_deref(),
+                            fetched: &fetched,
                         };
                         transcript::exchange(exchange, &context, window)
                     },
@@ -515,8 +519,49 @@ impl SessionPane {
             ))
     }
 
+    fn tool_at(&self, exchange: usize, step: usize, tool: usize) -> Option<&model::session::ToolCall> {
+        match self.exchanges.get(exchange)?.exchange.steps.get(step)? {
+            model::chat::Step::Tools(tools) => tools.get(tool),
+            _ => None,
+        }
+    }
+
+    fn fetch_output(&mut self, exchange: usize, step: usize, tool: usize, cx: &mut Context<Self>) {
+        let Some(call) = self
+            .tool_at(exchange, step, tool)
+            .filter(|call| crate::tool_view::fetchable(call))
+        else {
+            return;
+        };
+        let (Some(id), name) = (call.id.clone(), call.name.clone()) else {
+            return;
+        };
+        if self.fetched.contains_key(&id) {
+            return;
+        }
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        cx.spawn(async move |this, cx| {
+            let fetched = hub.tool_output(&summary, id.clone(), name).await;
+            this.update(cx, |this, cx| {
+                if let Ok(Some(output)) = fetched {
+                    Arc::make_mut(&mut this.fetched).insert(id, output);
+                    if exchange < this.turns.item_count() {
+                        this.turns.splice(exchange..exchange + 1, 1);
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub fn toggle_fold(&mut self, fold: Fold, cx: &mut Context<Self>) {
         Arc::make_mut(&mut self.folds).toggle(fold);
+        if let Fold::Tool(exchange, step, tool) = fold {
+            self.fetch_output(exchange, step, tool, cx);
+        }
         let index = match fold {
             Fold::Exchange(index)
             | Fold::Group(index, _)
