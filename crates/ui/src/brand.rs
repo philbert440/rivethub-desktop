@@ -61,5 +61,5 @@ impl gpui::AssetSource for Icons {
 
 pub fn icon(name: &'static str, size: f32, color: gpui::Rgba) -> gpui::Svg {
     use gpui::Styled;
-    gpui::svg().path(name).size(gpui::px(size)).text_color(color)
+    gpui::svg().path(name).flex_none().size(gpui::px(size)).text_color(color)
 }
