@@ -1,9 +1,11 @@
 mod brand;
 mod input;
+mod markdown_view;
 mod session_pane;
 mod terminal_view;
 mod text;
 mod theme;
+mod transcript;
 mod workspace;
 
 use std::path::PathBuf;

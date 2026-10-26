@@ -3,16 +3,17 @@ use std::sync::Arc;
 use app::{Hub, SessionHandle};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, Focusable, IntoElement, ListAlignment, ListState,
-    ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, list, prelude::*, px,
-    relative,
+    ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, list, prelude::*,
+    px, relative,
 };
-use model::session::{Role, SessionSummary, SessionView, ToolState, Turn};
-use parking_lot::RwLock;
+use model::chat::exchanges;
+use model::session::{SessionSummary, SessionView};
 use term::GridSize;
 
 use crate::input::{Submitted, TextInput};
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
+use crate::transcript::{self, ExchangeView, Fold, Folds};
 
 gpui::actions!(session, [ToggleTerminal]);
 
@@ -35,6 +36,8 @@ pub struct SessionPane {
     confirm_spawn: bool,
     handle: SessionHandle,
     turns: ListState,
+    exchanges: Arc<Vec<ExchangeView>>,
+    folds: Arc<Folds>,
     composer: Entity<TextInput>,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -63,6 +66,8 @@ impl SessionPane {
             confirm_spawn: false,
             handle,
             turns: ListState::new(0, ListAlignment::Bottom, px(600.)),
+            exchanges: Arc::new(Vec::new()),
+            folds: Arc::new(Folds::default()),
             composer,
             _revisions: watcher,
             _submitted: submitted,
@@ -213,18 +218,44 @@ impl SessionPane {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let count = {
+        let folded = {
             let view = self.handle.view();
             let view = view.read();
-            view.turns().len() + usize::from(view.live().is_some())
+            exchanges(view.turns(), view.live())
         };
+        let previous = Arc::clone(&self.exchanges);
+        let views: Vec<ExchangeView> = folded
+            .into_iter()
+            .enumerate()
+            .map(|(index, exchange)| match previous.get(index) {
+                Some(old) if old.exchange == exchange => old.clone(),
+                _ => ExchangeView::new(exchange),
+            })
+            .collect();
+        let count = views.len();
         let known = self.turns.item_count();
+        let first_changed = views
+            .iter()
+            .zip(previous.iter())
+            .position(|(new, old)| new != old)
+            .unwrap_or(known.min(count));
         if count < known {
             self.turns.reset(count);
-        } else if count > known {
-            self.turns.splice(known..known, count - known);
-        } else if count > 0 {
-            self.turns.splice(count - 1..count, 1);
+        } else {
+            let stale = first_changed.min(known);
+            self.turns.splice(stale..known, count - stale);
+        }
+        self.exchanges = Arc::new(views);
+        cx.notify();
+    }
+
+    pub fn toggle_fold(&mut self, fold: Fold, cx: &mut Context<Self>) {
+        Arc::make_mut(&mut self.folds).toggle(fold);
+        let index = match fold {
+            Fold::Exchange(index) | Fold::Group(index, _) | Fold::Thought(index, _) => index,
+        };
+        if index < self.turns.item_count() {
+            self.turns.splice(index..index + 1, 1);
         }
         cx.notify();
     }
@@ -280,64 +311,20 @@ impl SessionPane {
     }
 }
 
-fn render_turn(view: &Arc<RwLock<SessionView>>, index: usize) -> AnyElement {
-    let view = view.read();
-    let turn = view
-        .turns()
-        .get(index)
-        .or_else(|| view.live().filter(|_| index == view.turns().len()));
-    let Some(turn) = turn else {
-        return div().into_any_element();
-    };
-    turn_element(turn).into_any_element()
-}
-
-fn turn_element(turn: &Turn) -> impl IntoElement {
-    let row = div().w_full().flex().py_2();
-    match turn.role {
-        Role::User => row.justify_end().child(
-            div()
-                .max_w(px(600.))
-                .px_4()
-                .py_3()
-                .rounded(px(18.))
-                .bg(Theme::raised())
-                .child(turn.text.clone()),
-        ),
-        Role::Assistant => row.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .max_w(px(820.))
-                .children(turn.tools.iter().map(|tool| {
-                    let (label, color) = match tool.state {
-                        ToolState::Running => ("running", Theme::ink_dim()),
-                        ToolState::Done => ("done", Theme::accent()),
-                        ToolState::Failed => ("failed", Theme::warn()),
-                    };
-                    div()
-                        .flex()
-                        .gap_3()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(14.))
-                        .bg(Theme::card())
-                        .child(tool.name.clone())
-                        .child(div().text_color(color).child(label))
-                }))
-                .child(div().text_color(Theme::ink()).child(turn.text.clone())),
-        ),
-    }
+fn column_width(window: &Window) -> Pixels {
+    let body = window.viewport_size().width - px(68.);
+    (body * 0.64).clamp(px(680.), px(920.)).min(body - px(48.))
 }
 
 impl Render for SessionPane {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let column = column_width(window);
         let shared = self.handle.view();
         let view = shared.read();
         let error = view.error().map(str::to_owned);
+        let behind = self.turns.is_scrolled_to_end() == Some(false);
         let footer = div()
-            .w(px(820.))
+            .w(column)
             .pb_5()
             .pt_2()
             .flex()
@@ -358,31 +345,66 @@ impl Render for SessionPane {
                 .px_4()
                 .child(div().flex_1().w_full().child(terminal.clone()))
                 .child(footer),
-            _ => div()
-                .flex_1()
-                .w_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .child(
-                    div().flex_1().w(px(820.)).pt_2().child(
-                        list(self.turns.clone(), {
-                            let shared = Arc::clone(&shared);
-                            move |index, _: &mut Window, _: &mut App| render_turn(&shared, index)
-                        })
-                        .size_full(),
-                    ),
+            _ => {
+                let exchanges = Arc::clone(&self.exchanges);
+                let folds = Arc::clone(&self.folds);
+                let pane = cx.entity().downgrade();
+                let transcript = list(
+                    self.turns.clone(),
+                    move |index, window: &mut Window, _: &mut App| {
+                        exchanges.get(index).map_or_else(
+                            || div().into_any_element(),
+                            |exchange| {
+                                let context = transcript::Context {
+                                    index,
+                                    folds: &folds,
+                                    column,
+                                    pane: pane.clone(),
+                                };
+                                transcript::exchange(exchange, &context, window)
+                            },
+                        )
+                    },
                 )
-                .child(
-                    footer.child(
+                .size_full();
+                let back = behind.then(|| {
+                    div().w(column).flex().justify_end().child(
                         div()
-                            .px_5()
-                            .py_3()
-                            .rounded(px(24.))
-                            .bg(Theme::card())
-                            .child(self.composer.clone()),
-                    ),
-                ),
+                            .id("back-to-bottom")
+                            .size(px(34.))
+                            .rounded(px(17.))
+                            .bg(Theme::raised())
+                            .text_color(Theme::ink())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.turns.scroll_to_end();
+                                cx.notify();
+                            }))
+                            .child("↓"),
+                    )
+                });
+                div()
+                    .flex_1()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(div().flex_1().w_full().pt_2().child(transcript))
+                    .children(back)
+                    .child(
+                        footer.child(
+                            div()
+                                .px_5()
+                                .py_3()
+                                .rounded(px(28.))
+                                .bg(Theme::card())
+                                .child(self.composer.clone()),
+                        ),
+                    )
+            }
         };
         div()
             .key_context("Session")

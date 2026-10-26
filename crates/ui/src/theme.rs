@@ -35,6 +35,12 @@ impl Theme {
     pub fn warn_line() -> Rgba {
         rgb(0x005c_4d24)
     }
+    pub fn code() -> Rgba {
+        rgb(0x0011_1714)
+    }
+    pub fn line() -> Rgba {
+        rgb(0x0035_3d39)
+    }
     pub fn selected() -> Rgba {
         rgb(0x001f_4535)
     }

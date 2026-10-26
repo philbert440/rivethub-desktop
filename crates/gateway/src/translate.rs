@@ -5,7 +5,9 @@ use model::{
         ToolState, Turn,
     },
 };
-use wire::gateway::sessions::{HarnessTranscriptTurn, SessionMessageRole, TranscriptToolStatus};
+use wire::gateway::sessions::{
+    HarnessTranscriptTurn, SessionMessageRole, TranscriptBlock, TranscriptToolStatus,
+};
 use wire::harness::{HarnessEvent, HarnessSessionStatus, HarnessSessionSummary, HarnessStatus};
 
 use crate::GatewayError;
@@ -54,7 +56,9 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
 }
 
 fn turn(raw: HarnessTranscriptTurn) -> Turn {
+    let ends_with_text = raw.last_block.is_none_or(|block| block == TranscriptBlock::Text);
     Turn {
+        ends_with_text,
         role: match raw.role {
             SessionMessageRole::User => Role::User,
             SessionMessageRole::Assistant => Role::Assistant,
