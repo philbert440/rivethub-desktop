@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/model", "crates/gateway", "crates/ui"]
+members = ["crates/model", "crates/gateway", "crates/app", "crates/ui"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,8 @@ publish = false
 [workspace.dependencies]
 model = { path = "crates/model" }
 gateway = { path = "crates/gateway" }
+app = { path = "crates/app" }
+parking_lot = "0.12"
 gpui = { git = "https://github.com/zed-industries/zed", tag = "v1.25.3" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", tag = "v1.25.3", features = ["font-kit", "wayland", "x11"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
