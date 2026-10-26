@@ -33,7 +33,7 @@ fn endpoint() -> Endpoint {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway; run with --ignored"]
+#[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
@@ -63,7 +63,7 @@ async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway; run with --ignored"]
+#[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
@@ -109,7 +109,7 @@ async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::e
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway; run with --ignored"]
+#[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
@@ -149,7 +149,7 @@ async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std:
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway; run with --ignored"]
+#[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn the_panel_reads_agents_and_groups_search_hits() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let roster = hub.agents().await?;
@@ -209,7 +209,7 @@ async fn an_agent_on_another_node_starts_and_answers_there() -> Result<(), Box<d
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway; run with --ignored"]
+#[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let feed = hub.watch_workspace();
@@ -234,7 +234,7 @@ async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway with topics; run with --ignored"]
+#[ignore = "needs a running rh gateway with topics; run with --ignored --test-threads=1"]
 async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let stamp = std::time::SystemTime::now()
@@ -261,7 +261,7 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a running rh gateway; run with --ignored"]
+#[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_command_tool_call_arrives_typed_with_its_output() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub.start_session(HarnessId::new("claude-code")).await?;
