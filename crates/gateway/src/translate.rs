@@ -138,7 +138,7 @@ fn context(turns: &[HarnessTranscriptTurn], window: Option<u64>) -> Option<Conte
         .iter()
         .rev()
         .find_map(|turn| turn.usage.as_ref())
-        .map(|usage| usage.prompt_tokens + usage.cached_tokens + usage.completion_tokens)?;
+        .map(|usage| usage.prompt_tokens + usage.completion_tokens)?;
     Some(ContextUsage { used, window })
 }
 
@@ -203,4 +203,18 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
         | HarnessEvent::SessionUpdated { .. }
         | HarnessEvent::Prompt { .. } => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_counts_cached_prompt_tokens_once() {
+        let turn: HarnessTranscriptTurn = serde_json::from_str(
+            r#"{"role":"assistant","text":"hi","usage":{"promptTokens":15,"completionTokens":3,"cachedTokens":5}}"#,
+        )
+        .unwrap_or_else(|err| unreachable!("fixture: {err}"));
+        assert_eq!(context(&[turn], Some(100)).map(|usage| usage.used), Some(18));
+    }
 }

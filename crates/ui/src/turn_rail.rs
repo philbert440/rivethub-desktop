@@ -6,6 +6,7 @@ use crate::transcript::ExchangeView;
 
 const PITCH: f32 = 10.;
 const MAX_MARKS: usize = 42;
+const FADE_MARKS: usize = 4;
 
 pub struct Rail<'a> {
     pub exchanges: &'a [ExchangeView],
@@ -68,6 +69,16 @@ pub fn rail(rail: &Rail<'_>, cx: &mut Context<SessionPane>) -> Option<AnyElement
         .saturating_sub(MAX_MARKS / 2)
         .min(total.saturating_sub(MAX_MARKS));
     let shown = first..(first + MAX_MARKS).min(total);
+    let clipped_above = shown.start > 0;
+    let clipped_below = shown.end < total;
+    let fade = move |index: usize| {
+        let above = (clipped_above && index - shown.start < FADE_MARKS).then(|| index - shown.start);
+        let below = (clipped_below && shown.end - 1 - index < FADE_MARKS).then(|| shown.end - 1 - index);
+        above.into_iter().chain(below).min().map_or(1., |depth| {
+            let depth = u8::try_from(depth).map_or(1., f32::from);
+            0.25 + 0.75 * depth / 4.
+        })
+    };
     let marks = shown.clone().map(|index| {
         let active = index == rail.active;
         let hovered = rail.hovered == Some(index);
@@ -90,6 +101,7 @@ pub fn rail(rail: &Rail<'_>, cx: &mut Context<SessionPane>) -> Option<AnyElement
                 this.hover_turn(hovering.then_some(index), cx);
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.reveal_turn(index, cx)))
+            .opacity(if active || hovered { 1. } else { fade(index) })
             .child(div().h(px(2.)).w(px(width)).rounded(px(1.)).bg(color))
     });
     let card = rail
