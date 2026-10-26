@@ -148,7 +148,15 @@ impl SessionPane {
                 .cursor_text()
                 .hover(|title| title.text_color(Theme::accent()))
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.begin_rename(window, cx)))
-                .child(crate::text::one_line(self.summary.title.as_deref()))
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .truncate()
+                        .child(crate::text::one_line(self.summary.title.as_deref())),
+                )
+                .child(crate::brand::icon("icons/rename.svg", 14., Theme::ink_dim()))
                 .into_any_element();
         };
         div()

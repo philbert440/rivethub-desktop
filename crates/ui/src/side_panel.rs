@@ -535,7 +535,7 @@ impl Render for SidePanel {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_color(Theme::ink_dim()).child("⌕"))
+                    .child(crate::brand::icon("icons/search.svg", 16., Theme::ink_dim()))
                     .child(div().flex_1().child(self.query.clone()))
                     .when(searching, |bar| {
                         bar.child(
