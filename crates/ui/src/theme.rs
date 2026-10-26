@@ -18,6 +18,24 @@ impl Theme {
     pub fn accent() -> Rgba {
         rgb(0x006c_dbac)
     }
+    pub fn card() -> Rgba {
+        rgb(0x0023_2a26)
+    }
+    pub fn raised() -> Rgba {
+        rgb(0x002b_332e)
+    }
+    pub fn warn() -> Rgba {
+        rgb(0x00f5_c56b)
+    }
+    pub fn warn_container() -> Rgba {
+        rgb(0x002a_2618)
+    }
+    pub fn warn_line() -> Rgba {
+        rgb(0x005c_4d24)
+    }
+    pub fn selected() -> Rgba {
+        rgb(0x001f_4535)
+    }
     pub fn on_accent() -> Rgba {
         rgb(0x0000_3825)
     }
