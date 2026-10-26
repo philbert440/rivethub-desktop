@@ -15,7 +15,7 @@ use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
-use crate::text::now_ms;
+use crate::text::{now_ms, one_line};
 use crate::topic_picker::{PickerEvent, TopicPicker};
 use crate::{brand, theme::Theme};
 
@@ -443,28 +443,117 @@ impl Workspace {
     }
 
     fn zoom_out(&mut self, _: &ZoomOut, window: &mut Window, cx: &mut Context<Self>) {
-        self.altitude = self.altitude.zoom_out();
+        self.leave_to(self.altitude.zoom_out(), window, cx);
+    }
+
+    fn leave_to(&mut self, altitude: Altitude, window: &mut Window, cx: &mut Context<Self>) {
+        if altitude == self.altitude {
+            return;
+        }
+        self.altitude = altitude;
         if !matches!(self.altitude, Altitude::Session { .. }) {
             self.pane = None;
+            self.placing = None;
             self.load(cx);
         }
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
-    fn breadcrumb(&self) -> SharedString {
-        let named = |topic: &TopicId| {
-            self.topic(topic)
-                .map_or_else(|| topic.as_str().to_owned(), |t| t.name.clone())
+    /// The location bar, one chip per level; any step above the current one zooms out to it.
+    fn crumbs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let separator = || div().flex_none().child("›");
+        let mut bar = div()
+            .flex()
+            .flex_nowrap()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .max_w(gpui::relative(0.6))
+            .p_1()
+            .rounded(px(16.))
+            .border_1()
+            .border_color(Theme::line())
+            .bg(Theme::panel())
+            .shadow_md()
+            .text_sm()
+            .text_color(Theme::ink_dim())
+            .child(
+                Self::crumb(
+                    "crumb-everything",
+                    "Everything".into(),
+                    self.altitude == Altitude::Everything,
+                )
+                .flex_none()
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                    this.leave_to(Altitude::Everything, window, cx);
+                })),
+            );
+        let (topic, session) = match &self.altitude {
+            Altitude::Everything => return bar,
+            Altitude::Topic(topic) => (Some(topic.clone()), None),
+            Altitude::Session { topic, session } => (topic.clone(), Some(session.clone())),
         };
-        match &self.altitude {
-            Altitude::Everything => "Everything".into(),
-            Altitude::Topic(topic)
-            | Altitude::Session {
-                topic: Some(topic), ..
-            } => format!("Everything › {}", named(topic)).into(),
-            Altitude::Session { topic: None, .. } => "Everything › Forming".into(),
+        let topic_crumb = match topic {
+            Some(topic) => {
+                let name = self
+                    .topic(&topic)
+                    .map_or_else(|| topic.as_str().to_owned(), |known| known.name.clone());
+                let here = session.is_none();
+                Self::crumb("crumb-topic", name.into(), here).on_click(cx.listener(
+                    move |this, _: &gpui::ClickEvent, window, cx| {
+                        this.leave_to(Altitude::Topic(topic.clone()), window, cx);
+                    },
+                ))
+            }
+            None => Self::crumb("crumb-forming", "Forming".into(), false).on_click(cx.listener(
+                |this, _: &gpui::ClickEvent, window, cx| {
+                    this.forming_open = true;
+                    this.leave_to(Altitude::Everything, window, cx);
+                },
+            )),
+        };
+        bar = bar.child(separator()).child(topic_crumb);
+        if let Some(session) = session {
+            let title = self
+                .sessions
+                .iter()
+                .find(|known| known.id == session)
+                .map_or_else(|| "Untitled".into(), |known| one_line(known.title.as_deref()));
+            bar = bar
+                .child(separator())
+                .child(Self::crumb("crumb-session", title, true));
         }
+        bar
+    }
+
+    fn crumb(id: &'static str, label: SharedString, here: bool) -> gpui::Stateful<gpui::Div> {
+        let ink = if here { Theme::on_selected() } else { Theme::ink() };
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .min_w_0()
+            .px_3()
+            .py_1()
+            .rounded(px(999.))
+            .cursor_pointer()
+            .map(|chip| {
+                if here {
+                    chip.bg(Theme::selected())
+                        .text_color(Theme::on_selected())
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                } else {
+                    chip.bg(Theme::card())
+                        .text_color(Theme::ink())
+                        .hover(|chip| chip.bg(Theme::raised()))
+                }
+            })
+            .when(id == "crumb-everything", |chip| {
+                chip.child(brand::icon("icons/workspace.svg", 14., ink))
+            })
+            .child(div().min_w_0().truncate().child(label))
     }
 
     fn dot(&self, session: &SessionSummary) -> Rgba {
@@ -543,7 +632,7 @@ impl Workspace {
             .items_center()
             .gap_4()
             .px_5()
-            .child(div().text_color(Theme::ink()).child(self.breadcrumb()))
+            .child(self.crumbs(cx))
             .child(div().flex_1())
             .when(self.altitude != Altitude::Everything, |header| {
                 header.child(div().text_xs().text_color(Theme::ink_dim()).child(back))
