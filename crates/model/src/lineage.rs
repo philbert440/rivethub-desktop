@@ -89,6 +89,7 @@ mod tests {
             updated_at_ms: 0,
             parent: parent.map(id),
             node: None,
+            blocked: false,
         }
     }
 

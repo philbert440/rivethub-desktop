@@ -10,7 +10,7 @@ use crate::session_pane::SessionPane;
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, SidePanel};
 use crate::{brand, theme::Theme};
 
-actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel]);
+actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
 const CLAUDE: &str = "claude-code";
 const FORMING_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -55,6 +55,7 @@ pub struct Workspace {
     focus: FocusHandle,
     hub: Hub,
     altitude: Altitude,
+    sessions: Vec<SessionSummary>,
     forming: Vec<SessionSummary>,
     subagents: std::collections::HashMap<model::SessionId, usize>,
     problem: Option<String>,
@@ -103,6 +104,7 @@ impl Workspace {
             focus: cx.focus_handle(),
             hub,
             altitude: Altitude::Everything,
+            sessions: Vec::new(),
             forming: Vec::new(),
             subagents: std::collections::HashMap::new(),
             problem: None,
@@ -128,6 +130,7 @@ impl Workspace {
                         let history = history(&sessions, now);
                         this.panel
                             .update(cx, |panel, cx| panel.set_sessions(history, sessions.clone(), cx));
+                        this.sessions.clone_from(&sessions);
                         this.forming = forming(sessions, now);
                         this.problem = None;
                     }
@@ -151,6 +154,20 @@ impl Workspace {
             session: id,
         };
         cx.notify();
+    }
+
+    fn next_needing_you(&mut self, _: &NextNeedingYou, window: &mut Window, cx: &mut Context<Self>) {
+        let current = match &self.altitude {
+            Altitude::Session { session, .. } => Some(session.clone()),
+            Altitude::Everything | Altitude::Topic(_) => None,
+        };
+        let feed = &self.feed;
+        let next = model::attention::next_needing_you(&self.sessions, current.as_ref(), |session| {
+            feed.needs_you(session)
+        });
+        if let Some(next) = next.filter(|next| current.as_ref() != Some(&next.id)).cloned() {
+            self.open(next, window, cx);
+        }
     }
 
     fn new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
@@ -329,6 +346,82 @@ impl Workspace {
             )
     }
 
+    fn forming_tile(
+        &self,
+        index: usize,
+        session: &SessionSummary,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let summary = session.clone();
+        let waiting = self.feed.needs_you(session);
+        let dot = if waiting {
+            Theme::warn()
+        } else if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
+            Theme::accent()
+        } else {
+            Theme::ink_dim()
+        };
+        div()
+            .id(("forming", index))
+            .w(px(320.))
+            .p_4()
+            .rounded(px(16.))
+            .bg(Theme::card())
+            .border_1()
+            .border_color(if waiting {
+                Theme::warn_line()
+            } else {
+                Theme::card()
+            })
+            .cursor_pointer()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open(summary.clone(), window, cx);
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_none().size(px(8.)).rounded(px(4.)).bg(dot))
+                    .child(
+                        div()
+                            .text_color(Theme::ink())
+                            .truncate()
+                            .child(crate::text::one_line(session.title.as_deref())),
+                    )
+                    .when(waiting, |row| {
+                        row.child(
+                            div()
+                                .ml_auto()
+                                .flex_none()
+                                .px_2()
+                                .rounded(px(9.))
+                                .bg(Theme::warn_container())
+                                .text_xs()
+                                .text_color(Theme::warn())
+                                .child("Needs you"),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(session.model.clone().unwrap_or_else(|| "claude".into())),
+            )
+            .children(self.subagents.get(&session.id).map(|count| {
+                let noun = if *count == 1 { "subagent" } else { "subagents" };
+                div()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(format!("↳ {count} {noun}"))
+            }))
+            .into_any_element()
+    }
+
     fn everything(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.forming.is_empty() {
             let line = self
@@ -367,58 +460,12 @@ impl Workspace {
                     ),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_3()
-                    .children(self.forming.iter().enumerate().map(|(index, session)| {
-                        let summary = session.clone();
-                        let dot =
-                            if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
-                                Theme::accent()
-                            } else {
-                                Theme::ink_dim()
-                            };
-                        div()
-                            .id(("forming", index))
-                            .w(px(320.))
-                            .p_4()
-                            .rounded(px(16.))
-                            .bg(Theme::card())
-                            .cursor_pointer()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open(summary.clone(), window, cx);
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().flex_none().size(px(8.)).rounded(px(4.)).bg(dot))
-                                    .child(
-                                        div()
-                                            .text_color(Theme::ink())
-                                            .truncate()
-                                            .child(crate::text::one_line(session.title.as_deref())),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child(session.model.clone().unwrap_or_else(|| "claude".into())),
-                            )
-                            .children(self.subagents.get(&session.id).map(|count| {
-                                let noun = if *count == 1 { "subagent" } else { "subagents" };
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child(format!("↳ {count} {noun}"))
-                            }))
-                    })),
+                div().flex().flex_wrap().gap_3().children(
+                    self.forming
+                        .iter()
+                        .enumerate()
+                        .map(|(index, session)| self.forming_tile(index, session, cx)),
+                ),
             )
             .into_any_element()
     }
@@ -462,6 +509,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::zoom_out))
             .on_action(cx.listener(Self::new_session))
             .on_action(cx.listener(Self::toggle_panel))
+            .on_action(cx.listener(Self::next_needing_you))
             .size_full()
             .flex()
             .bg(Theme::window())

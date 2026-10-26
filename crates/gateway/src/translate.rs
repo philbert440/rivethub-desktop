@@ -91,6 +91,7 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
         updated_at_ms: raw.updated_at.timestamp_millis(),
         parent: raw.parent_session_id.as_ref().map(session),
         node: None,
+        blocked: raw.blocked.unwrap_or(false),
     }
 }
 

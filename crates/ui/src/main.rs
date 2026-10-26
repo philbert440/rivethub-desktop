@@ -19,7 +19,7 @@ use gpui::{
     App, AppContext, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 use session_pane::ToggleTerminal;
-use workspace::{NewSession, ToggleSidePanel, Workspace, ZoomOut};
+use workspace::{NewSession, NextNeedingYou, ToggleSidePanel, Workspace, ZoomOut};
 
 fn endpoint() -> Endpoint {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
@@ -49,6 +49,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-up", ZoomOut, Some("Workspace")),
         KeyBinding::new("ctrl-t", NewSession, Some("Workspace")),
         KeyBinding::new("ctrl-b", ToggleSidePanel, Some("Workspace")),
+        KeyBinding::new("ctrl-j", NextNeedingYou, Some("Workspace")),
+        KeyBinding::new("ctrl-j", gpui::NoAction, Some("Terminal")),
         KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("shift-enter", input::Newline, Some("TextInput")),
