@@ -1,3 +1,4 @@
+mod directory;
 mod everything;
 mod topic_view;
 
@@ -10,7 +11,7 @@ use gpui::{
     Styled, Subscription, Window, actions, div, img, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
-use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
+use model::topics::{Atlas, Board, Placements, Suggestion, Topic, TopicDirectory, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::session_pane::{PaneEvent, SessionPane};
@@ -60,6 +61,7 @@ pub struct Workspace {
     panel: Entity<SidePanel>,
     panel_open: bool,
     placing: Option<Placing>,
+    directing: Option<directory::Directing>,
     launching: Option<(Entity<TopicPicker>, Subscription)>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
@@ -112,6 +114,7 @@ impl Workspace {
             folded: HashSet::new(),
             forming_open: false,
             problem: None,
+            directing: None,
             pane: None,
             pane_events: None,
             panel,
@@ -369,11 +372,28 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The directory a session launched into this topic works in: its own, else the nearest parent's.
+    fn directory_for(&self, launch: &Launch) -> Option<TopicDirectory> {
+        let Launch::In(topic) = launch else {
+            return None;
+        };
+        let mut topic = self.topic(topic);
+        for _ in 0..8 {
+            let current = topic?;
+            if let Some(directory) = &current.directory {
+                return Some(directory.clone());
+            }
+            topic = current.parent.as_ref().and_then(|parent| self.topic(parent));
+        }
+        None
+    }
+
     fn start_session(&mut self, launch: Launch, window: &mut Window, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
+        let directory = self.directory_for(&launch);
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let started = hub.start_session(HarnessId::new(CLAUDE)).await;
+            let started = hub.start_session(HarnessId::new(CLAUDE), directory).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| this.started(started, launch, window, cx))
                     .ok();
@@ -392,9 +412,10 @@ impl Workspace {
     ) {
         let hub = self.hub.clone();
         let launch = topic.map_or(Launch::Forming, Launch::In);
+        let directory = self.directory_for(&launch);
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let started = hub.start_with(agent).await;
+            let started = hub.start_with(agent, directory).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| this.started(started, launch, window, cx))
                     .ok();
@@ -451,6 +472,7 @@ impl Workspace {
             return;
         }
         self.altitude = altitude;
+        self.directing = None;
         if !matches!(self.altitude, Altitude::Session { .. }) {
             self.pane = None;
             self.placing = None;

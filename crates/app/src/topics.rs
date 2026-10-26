@@ -1,7 +1,7 @@
 use gateway::GatewayError;
 use std::collections::HashMap;
 
-use model::topics::{Placements, Suggestion, Topic};
+use model::topics::{Placements, Suggestion, Topic, TopicDirectory};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -51,6 +51,16 @@ impl Hub {
     pub async fn place(&self, session: SessionId, topic: TopicId) -> Result<(), GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.place(&session, &topic).await })
+            .await
+    }
+
+    pub async fn set_topic_directory(
+        &self,
+        topic: TopicId,
+        directory: Option<TopicDirectory>,
+    ) -> Result<Topic, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.set_topic_directory(&topic, directory).await })
             .await
     }
 

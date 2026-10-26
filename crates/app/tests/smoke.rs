@@ -36,7 +36,7 @@ fn endpoint() -> Endpoint {
 #[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
-    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
     session.send("Reply with exactly the word: ready".into());
@@ -66,7 +66,7 @@ async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::
 #[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
-    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let terminal = hub.open_terminal(
         &summary,
         term::GridSize {
@@ -112,7 +112,7 @@ async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::e
 #[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
-    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
     session.send("Count from 1 to 60, one number per line, then write the word first.".into());
@@ -181,7 +181,7 @@ async fn an_agent_on_another_node_starts_and_answers_there() -> Result<(), Box<d
                     .is_some_and(|node| !node.eq_ignore_ascii_case(&roster.node))
         })
         .ok_or("no claude-code agent on another node")?;
-    let summary = hub.start_with(remote.clone()).await?;
+    let summary = hub.start_with(remote.clone(), None).await?;
     assert_eq!(summary.node, remote.node);
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
@@ -215,7 +215,7 @@ async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::erro
     let feed = hub.watch_workspace();
     let mut changes = feed.changes();
     tokio::time::timeout(Duration::from_secs(10), changes.changed()).await??;
-    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     session.send("Reply with exactly the word: noticed".into());
     let seen = *changes.borrow_and_update();
@@ -257,6 +257,14 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
     assert_eq!(placements.get(&session), Some(&created.id));
     let found = hub.search_topics(name.to_lowercase()).await?;
     assert_eq!(found.first().map(|topic| &topic.id), Some(&created.id));
+    let shared = model::topics::TopicDirectory::Shared {
+        path: "/rivet-shared/desktop-smoke".into(),
+    };
+    hub.set_topic_directory(created.id.clone(), Some(shared.clone()))
+        .await?;
+    let (topics, _) = hub.topics().await?;
+    let reread = topics.iter().find(|topic| topic.id == created.id);
+    assert_eq!(reread.and_then(|topic| topic.directory.as_ref()), Some(&shared));
     Ok(())
 }
 
@@ -264,7 +272,7 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
 #[ignore = "needs a running rh gateway; run with --ignored --test-threads=1"]
 async fn a_command_tool_call_arrives_typed_with_its_output() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
-    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
     session.send("Use the Bash tool to run exactly: echo tool-check-42 . Then reply done.".into());

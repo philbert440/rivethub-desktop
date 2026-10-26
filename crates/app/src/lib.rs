@@ -16,6 +16,7 @@ use model::HarnessId;
 use model::agents::{Agent, Roster};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
+use model::topics::TopicDirectory;
 use parking_lot::RwLock;
 use tokio::runtime::Handle;
 
@@ -180,7 +181,28 @@ impl Hub {
         .await
     }
 
-    pub async fn start_with(&self, agent: Agent) -> Result<SessionSummary, GatewayError> {
+    /// The node this client's own gateway runs on, once the roster has named it.
+    pub fn local_node(&self) -> Option<String> {
+        self.inner.local_node.read().clone()
+    }
+
+    /// Where a session started on `node` (this node when `None`) works: the topic's directory when it reaches
+    /// that node, else the agent's or harness's own default.
+    fn working_directory(&self, directory: Option<&TopicDirectory>, node: Option<&str>) -> Option<String> {
+        let directory = directory?;
+        let local = self.inner.local_node.read();
+        let node = node.or(local.as_deref());
+        match node {
+            Some(node) => directory.on(node).map(str::to_owned),
+            None => matches!(directory, TopicDirectory::Shared { .. }).then(|| directory.path().to_owned()),
+        }
+    }
+
+    pub async fn start_with(
+        &self,
+        agent: Agent,
+        directory: Option<TopicDirectory>,
+    ) -> Result<SessionSummary, GatewayError> {
         if agent.harness.is_none() {
             return Err(GatewayError::Refused(format!(
                 "{} has no harness to start",
@@ -190,16 +212,22 @@ impl Hub {
         let hub = self.clone();
         self.on_runtime(async move {
             let gateway = hub.gateway_for(agent.node.as_deref()).await?;
-            let mut summary = gateway.start_agent(&agent.id).await?;
+            let cwd = hub.working_directory(directory.as_ref(), agent.node.as_deref());
+            let mut summary = gateway.start_agent(&agent.id, cwd.as_deref()).await?;
             summary.node.clone_from(&agent.node);
             Ok(summary)
         })
         .await
     }
 
-    pub async fn start_session(&self, harness: HarnessId) -> Result<SessionSummary, GatewayError> {
+    pub async fn start_session(
+        &self,
+        harness: HarnessId,
+        directory: Option<TopicDirectory>,
+    ) -> Result<SessionSummary, GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.start_session(&harness).await })
+        let cwd = self.working_directory(directory.as_ref(), None);
+        self.on_runtime(async move { gateway.start_session(&harness, cwd.as_deref()).await })
             .await
     }
 }

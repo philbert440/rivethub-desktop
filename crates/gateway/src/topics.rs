@@ -1,7 +1,8 @@
-use model::topics::{Suggestion, Topic};
+use model::topics::{Suggestion, Topic, TopicDirectory};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
-    PlacementReply, PlacementRequest, TopicCreateRequest, TopicList, TopicRecord, TopicSessionList,
+    PlacementReply, PlacementRequest, TopicCreateRequest, TopicDirectory as WireDirectory, TopicList,
+    TopicRecord, TopicSessionList, TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -12,6 +13,10 @@ fn topic(record: TopicRecord, last_active_ms: Option<i64>) -> Topic {
         slug: record.slug,
         name: record.name,
         parent: record.parent.map(TopicId::new),
+        directory: record.directory.map(|directory| match directory {
+            WireDirectory::Local { node, path } => TopicDirectory::Local { node, path },
+            WireDirectory::Shared { path } => TopicDirectory::Shared { path },
+        }),
         last_active_ms,
     }
 }
@@ -84,5 +89,22 @@ impl Gateway {
         };
         let _: PlacementReply = Self::read_json(self.http.put(url).json(&body).send().await)?.await?;
         Ok(())
+    }
+
+    pub async fn set_topic_directory(
+        &self,
+        id: &TopicId,
+        directory: Option<TopicDirectory>,
+    ) -> Result<Topic, GatewayError> {
+        let url = self.api_url(&["api", "topics", id.as_str()])?;
+        let body = TopicUpdate {
+            directory: Some(directory.map(|directory| match directory {
+                TopicDirectory::Local { node, path } => WireDirectory::Local { node, path },
+                TopicDirectory::Shared { path } => WireDirectory::Shared { path },
+            })),
+            ..TopicUpdate::default()
+        };
+        let updated: TopicRecord = Self::read_json(self.http.patch(url).json(&body).send().await)?.await?;
+        Ok(topic(updated, None))
     }
 }

@@ -62,7 +62,7 @@ impl Workspace {
     }
 
     pub(super) fn topic_view(&self, root: &TopicId, cx: &mut Context<Self>) -> AnyElement {
-        if self.topic(root).is_none() {
+        let Some(topic) = self.topic(root).cloned() else {
             return div()
                 .size_full()
                 .flex()
@@ -71,7 +71,7 @@ impl Workspace {
                 .text_color(Theme::ink_dim())
                 .child("This topic is gone. Ctrl ↑ goes back to Everything.")
                 .into_any_element();
-        }
+        };
         let now = now_ms();
         let sections = self.sections(root);
         let counts = self.counts(sections.iter().flat_map(|section| &section.sessions));
@@ -95,6 +95,7 @@ impl Workspace {
                 this.start_with(dragged.0.clone(), Some(dropped_agent.clone()), window, cx);
             }))
             .children(counts)
+            .child(self.directory_line(&topic, cx))
             .children(
                 sections
                     .into_iter()

@@ -12,7 +12,49 @@ pub struct Topic {
     pub slug: String,
     pub name: String,
     pub parent: Option<TopicId>,
+    pub directory: Option<TopicDirectory>,
     pub last_active_ms: Option<i64>,
+}
+
+/// Where a topic's sessions work: a folder on one node, or one on the shared drive every node mounts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TopicDirectory {
+    Local { node: String, path: String },
+    Shared { path: String },
+}
+
+impl TopicDirectory {
+    const SHARED_ROOT: &'static str = "/rivet-shared/";
+
+    /// A path typed on `node`: shared when it is under the shared drive, else local to that node.
+    #[must_use]
+    pub fn typed(path: &str, node: &str) -> Self {
+        let path = path.trim_end_matches('/').to_owned();
+        if path.starts_with(Self::SHARED_ROOT) {
+            Self::Shared { path }
+        } else {
+            Self::Local {
+                node: node.to_owned(),
+                path,
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Local { path, .. } | Self::Shared { path } => path,
+        }
+    }
+
+    /// The working directory for a session started on `node`, if this directory reaches it.
+    #[must_use]
+    pub fn on(&self, node: &str) -> Option<&str> {
+        match self {
+            Self::Local { node: home, path } => home.eq_ignore_ascii_case(node).then_some(path.as_str()),
+            Self::Shared { path } => Some(path),
+        }
+    }
 }
 
 pub type Placements = HashMap<SessionId, TopicId>;
@@ -225,6 +267,7 @@ mod tests {
             slug: slug.into(),
             name: slug.into(),
             parent: parent.map(TopicId::new),
+            directory: None,
             last_active_ms: None,
         }
     }
@@ -315,5 +358,15 @@ mod tests {
         };
         assert_eq!(names("desk"), ["desktop", "desktop-chat", "rh-desktop"]);
         assert_eq!(names("zzz"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_topic_directory_reaches_its_own_node_or_every_node_when_shared() {
+        let local = TopicDirectory::typed("/home/phil/work/rh/", "phildesk");
+        assert_eq!(local.path(), "/home/phil/work/rh");
+        assert_eq!(local.on("PhilDesk"), Some("/home/phil/work/rh"));
+        assert_eq!(local.on("ct115"), None);
+        let shared = TopicDirectory::typed("/rivet-shared/projects/rh", "phildesk");
+        assert_eq!(shared.on("ct115"), Some("/rivet-shared/projects/rh"));
     }
 }
