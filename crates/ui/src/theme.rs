@@ -3,6 +3,8 @@ use gpui::{Rgba, rgb};
 pub struct Theme;
 
 impl Theme {
+    pub const MONO: &str = "JetBrainsMono Nerd Font";
+
     pub fn window() -> Rgba {
         rgb(0x000f_1512)
     }
@@ -35,6 +37,9 @@ impl Theme {
     }
     pub fn selected() -> Rgba {
         rgb(0x001f_4535)
+    }
+    pub fn on_selected() -> Rgba {
+        rgb(0x00a6_f2cd)
     }
     pub fn on_accent() -> Rgba {
         rgb(0x0000_3825)

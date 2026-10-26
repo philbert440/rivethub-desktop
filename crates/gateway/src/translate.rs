@@ -16,6 +16,20 @@ pub fn session(id: &wire::session_id::SessionId) -> SessionId {
     SessionId::new(HarnessId::new(harness), NativeSessionId::new(native))
 }
 
+pub fn roster_command(id: &SessionId) -> Result<String, GatewayError> {
+    let harness: wire::harness::HarnessId = id
+        .harness()
+        .as_str()
+        .parse()
+        .map_err(|_| GatewayError::SessionId(id.to_string()))?;
+    let command = serde_json::to_value(wire::harness::RosterCommand::from(harness))
+        .map_err(|_| GatewayError::SessionId(id.to_string()))?;
+    command
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| GatewayError::SessionId(id.to_string()))
+}
+
 pub fn wire_session(id: &SessionId) -> Result<wire::session_id::SessionId, GatewayError> {
     id.to_string()
         .parse()

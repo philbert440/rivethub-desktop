@@ -19,6 +19,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 model.workspace = true
 app.workspace = true
+term.workspace = true
 gateway.workspace = true
 tokio.workspace = true
 

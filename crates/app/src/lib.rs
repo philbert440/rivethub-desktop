@@ -1,6 +1,8 @@
 mod session;
+mod terminal;
 
 pub use session::SessionHandle;
+pub use terminal::{TerminalHandle, TerminalState};
 
 use gateway::{Gateway, GatewayError};
 use model::{HarnessId, SessionId, session::SessionSummary};
@@ -19,6 +21,22 @@ impl Hub {
 
     pub fn open_session(&self, id: SessionId) -> SessionHandle {
         session::spawn(&self.runtime, self.gateway.clone(), id)
+    }
+
+    pub fn open_terminal(&self, id: SessionId, size: term::GridSize) -> TerminalHandle {
+        terminal::spawn(&self.runtime, self.gateway.clone(), id, size)
+    }
+
+    pub async fn has_terminal(&self, id: SessionId) -> Result<bool, GatewayError> {
+        let gateway = self.gateway.clone();
+        self.runtime
+            .spawn(async move { gateway.existing_terminal(&id).await.map(|pty| pty.is_some()) })
+            .await
+            .unwrap_or_else(|join| {
+                Err(GatewayError::Refused(format!(
+                    "checking the terminal stopped: {join}"
+                )))
+            })
     }
 
     pub async fn recent_sessions(&self, harness: HarnessId) -> Result<Vec<SessionSummary>, GatewayError> {

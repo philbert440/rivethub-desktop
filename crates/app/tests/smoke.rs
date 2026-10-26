@@ -44,3 +44,40 @@ async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::
     assert!(answered, "the session stream closed before the reply arrived");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a running rh gateway; run with --ignored"]
+async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::error::Error>> {
+    let hub = Hub::new(tokio::runtime::Handle::current(), Gateway::connect(&endpoint())?);
+    let summary = hub.start_session(HarnessId::new("claude-code")).await?;
+    let terminal = hub.open_terminal(
+        summary.id,
+        term::GridSize {
+            columns: 100,
+            rows: 30,
+        },
+    );
+    let mut revisions = terminal.revisions();
+    let drew = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if revisions.changed().await.is_err() {
+                return false;
+            }
+            let screen = terminal.screen();
+            let snapshot = screen.read().snapshot();
+            let text: usize = snapshot
+                .lines
+                .iter()
+                .flatten()
+                .map(|span| span.text.trim().len())
+                .sum();
+            if text > 40 {
+                return true;
+            }
+        }
+    })
+    .await?;
+    terminal.write(b"/exit\r".to_vec());
+    assert!(drew, "the terminal stream closed before the TUI drew anything");
+    Ok(())
+}

@@ -1,17 +1,38 @@
 use std::sync::Arc;
 
-use app::SessionHandle;
+use app::{Hub, SessionHandle};
 use gpui::{
-    AnyElement, App, Context, Entity, IntoElement, ListAlignment, ListState, ParentElement, Render, Styled,
-    Subscription, Task, Window, div, list, prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Context, Entity, Focusable, IntoElement, ListAlignment, ListState,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, list, prelude::*, px,
+    relative,
 };
-use model::session::{Role, SessionView, ToolState, Turn};
+use model::session::{Role, SessionSummary, SessionView, ToolState, Turn};
 use parking_lot::RwLock;
+use term::GridSize;
 
 use crate::input::{Submitted, TextInput};
+use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
 
+gpui::actions!(session, [ToggleTerminal]);
+
+const FIRST_TERMINAL: GridSize = GridSize {
+    columns: 120,
+    rows: 40,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Chat,
+    Terminal,
+}
+
 pub struct SessionPane {
+    hub: Hub,
+    summary: SessionSummary,
+    mode: Mode,
+    terminal: Option<Entity<TerminalView>>,
+    confirm_spawn: bool,
     handle: SessionHandle,
     turns: ListState,
     composer: Entity<TextInput>,
@@ -20,7 +41,8 @@ pub struct SessionPane {
 }
 
 impl SessionPane {
-    pub fn new(handle: SessionHandle, cx: &mut Context<Self>) -> Self {
+    pub fn new(hub: Hub, summary: SessionSummary, cx: &mut Context<Self>) -> Self {
+        let handle = hub.open_session(summary.id.clone());
         let composer = cx.new(|cx| TextInput::new("Message claude…", cx));
         let submitted = cx.subscribe(&composer, |this, _, Submitted(text), _| {
             this.handle.send(text.clone());
@@ -34,6 +56,11 @@ impl SessionPane {
             }
         });
         Self {
+            hub,
+            summary,
+            mode: Mode::Chat,
+            terminal: None,
+            confirm_spawn: false,
             handle,
             turns: ListState::new(0, ListAlignment::Bottom, px(600.)),
             composer,
@@ -44,6 +71,145 @@ impl SessionPane {
 
     pub fn composer(&self) -> &Entity<TextInput> {
         &self.composer
+    }
+
+    fn show(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = mode;
+        match (mode, &self.terminal) {
+            (Mode::Chat, _) => window.focus(&self.composer.focus_handle(cx), cx),
+            (Mode::Terminal, Some(terminal)) => window.focus(&terminal.focus_handle(cx), cx),
+            (Mode::Terminal, None) => self.check_terminal(window, cx),
+        }
+        cx.notify();
+    }
+
+    fn check_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        let id = self.summary.id.clone();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let running = hub.has_terminal(id).await.unwrap_or(false);
+            cx.update_window(window_handle, |_, window, cx| {
+                this.update(cx, |this, cx| {
+                    if running {
+                        this.attach_terminal(window, cx);
+                    } else {
+                        this.confirm_spawn = true;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn attach_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_spawn = false;
+        let terminal = self.terminal.get_or_insert_with(|| {
+            let handle = self.hub.open_terminal(self.summary.id.clone(), FIRST_TERMINAL);
+            cx.new(|cx| TerminalView::new(handle, cx))
+        });
+        window.focus(&terminal.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn spawn_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .when(self.confirm_spawn, |prompt| {
+                prompt
+                    .child(div().text_color(Theme::ink()).child("No terminal is running for this session."))
+                    .child(div().max_w(px(520.)).text_color(Theme::ink_dim()).child(
+                        "Opening one starts the harness for this session in a terminal. If the session is \
+                         running anywhere else, including this chat, both copies write to the same transcript.",
+                    ))
+                    .child(
+                        div()
+                            .id("open-terminal")
+                            .h(px(34.))
+                            .px_4()
+                            .rounded(px(17.))
+                            .bg(Theme::accent())
+                            .text_color(Theme::on_accent())
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.attach_terminal(window, cx)))
+                            .child("Open terminal"),
+                    )
+            })
+            .into_any_element()
+    }
+
+    fn toggle(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        let next = if self.mode == Mode::Chat {
+            Mode::Terminal
+        } else {
+            Mode::Chat
+        };
+        self.show(next, window, cx);
+    }
+
+    fn tab(&self, mode: Mode, label: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.mode == mode;
+        div()
+            .id(label)
+            .h(px(30.))
+            .px_4()
+            .rounded(px(15.))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .when(active, |tab| {
+                tab.bg(Theme::selected()).text_color(Theme::on_selected())
+            })
+            .when(!active, |tab| tab.text_color(Theme::ink_dim()))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show(mode, window, cx)))
+            .child(label)
+    }
+
+    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let title: SharedString = crate::text::one_line(self.summary.title.as_deref());
+        let meta = [self.summary.model.as_deref(), self.summary.cwd.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        div()
+            .w_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_6()
+            .pt_4()
+            .pb_2()
+            .child(div().text_color(Theme::ink()).truncate().child(title))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .truncate()
+                    .child(meta),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .p(px(3.))
+                    .rounded(px(18.))
+                    .bg(Theme::card())
+                    .child(self.tab(Mode::Chat, "Chat", cx))
+                    .child(self.tab(Mode::Terminal, "Terminal", cx)),
+            )
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -166,36 +332,49 @@ fn turn_element(turn: &Turn) -> impl IntoElement {
 }
 
 impl Render for SessionPane {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shared = self.handle.view();
         let view = shared.read();
         let error = view.error().map(str::to_owned);
-        div()
-            .size_full()
+        let footer = div()
+            .w(px(820.))
+            .pb_5()
+            .pt_2()
             .flex()
             .flex_col()
-            .items_center()
-            .child(
-                div().flex_1().w(px(820.)).pt_6().child(
-                    list(self.turns.clone(), {
-                        let shared = Arc::clone(&shared);
-                        move |index, _: &mut Window, _: &mut App| render_turn(&shared, index)
-                    })
-                    .size_full(),
-                ),
-            )
-            .child(
-                div()
-                    .w(px(820.))
-                    .pb_5()
-                    .pt_2()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .children(Self::needs_you(&view))
-                    .children(error.map(|message| div().text_color(Theme::warn()).child(message)))
-                    .children(Self::context_bar(&view))
-                    .child(
+            .gap_3()
+            .children(Self::needs_you(&view))
+            .children(error.map(|message| div().text_color(Theme::warn()).child(message)))
+            .children(Self::context_bar(&view));
+        let prompt = self.spawn_prompt(cx);
+        let body = match (self.mode, &self.terminal) {
+            (Mode::Terminal, None) => div().flex_1().w_full().child(prompt),
+            (Mode::Terminal, Some(terminal)) => div()
+                .flex_1()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .px_4()
+                .child(div().flex_1().w_full().child(terminal.clone()))
+                .child(footer),
+            _ => div()
+                .flex_1()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(
+                    div().flex_1().w(px(820.)).pt_2().child(
+                        list(self.turns.clone(), {
+                            let shared = Arc::clone(&shared);
+                            move |index, _: &mut Window, _: &mut App| render_turn(&shared, index)
+                        })
+                        .size_full(),
+                    ),
+                )
+                .child(
+                    footer.child(
                         div()
                             .px_5()
                             .py_3()
@@ -203,6 +382,15 @@ impl Render for SessionPane {
                             .bg(Theme::card())
                             .child(self.composer.clone()),
                     ),
-            )
+                ),
+        };
+        div()
+            .key_context("Session")
+            .on_action(cx.listener(Self::toggle))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(self.header(cx))
+            .child(body)
     }
 }

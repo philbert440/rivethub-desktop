@@ -1,10 +1,12 @@
 mod chat;
 mod error;
+mod terminal;
 mod tls;
 mod translate;
 
 pub use chat::SessionStream;
 pub use error::GatewayError;
+pub use terminal::{TermInput, TermOutput, TerminalStream};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,6 +90,49 @@ impl Gateway {
         let url = format!("{}/api/harness-sessions/{session}/stop", self.base_url);
         let reply = self.http.post(url).send().await.map_err(GatewayError::Http)?;
         Self::check(reply).await.map(drop)
+    }
+
+    pub async fn existing_terminal(&self, session: &SessionId) -> Result<Option<String>, GatewayError> {
+        let list: wire::gateway::term::PtyList =
+            self.get_json(&format!("{}/term/list", self.base_url)).await?;
+        let native = session.native().as_str();
+        Ok(list
+            .ptys
+            .into_iter()
+            .find(|pty| pty.session == native && pty.state == wire::gateway::term::PtyState::Running)
+            .map(|pty| pty.id))
+    }
+
+    pub async fn session_terminal(
+        &self,
+        session: &SessionId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<String, GatewayError> {
+        if let Some(pty) = self.existing_terminal(session).await? {
+            return Ok(pty);
+        }
+        let command = translate::roster_command(session)?;
+        let canonical = session.to_string();
+        let body = wire::gateway::term::TermSpawnRequest {
+            command: Some(command),
+            model: None,
+            effort: None,
+            session: Some(canonical.clone()),
+            resume: Some(canonical),
+            agent_id: None,
+            force: None,
+            cols: Some(columns),
+            rows: Some(rows),
+        };
+        let url = format!("{}/term", self.base_url);
+        let spawned: wire::gateway::term::TermSpawnResponse =
+            Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
+        Ok(spawned.id)
+    }
+
+    pub async fn attach_terminal(&self, pty: &str) -> Result<TerminalStream, GatewayError> {
+        terminal::attach(&self.base_url, Arc::clone(&self.tls), pty).await
     }
 
     pub async fn open_session(&self, session: &SessionId) -> Result<SessionStream, GatewayError> {
