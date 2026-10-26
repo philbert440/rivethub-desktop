@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=RivetHub
+Comment=Topics, sessions and terminals across the Rivet mesh
+Exec=rivethub-desktop
+Icon=rivethub-desktop
+Terminal=false
+Categories=Development;
+StartupWMClass=rivethub-desktop
