@@ -3,8 +3,7 @@ use std::sync::Arc;
 use app::{Hub, SessionHandle};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, Focusable, IntoElement, ListAlignment, ListState,
-    ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, list, prelude::*,
-    px, relative,
+    ParentElement, Pixels, Render, Styled, Subscription, Task, Window, div, list, prelude::*, px, relative,
 };
 use model::chat::exchanges;
 use model::session::{Decision, SessionSummary, SessionView};
@@ -21,6 +20,17 @@ const FIRST_TERMINAL: GridSize = GridSize {
     columns: 120,
     rows: 40,
 };
+
+#[derive(Debug, Clone)]
+pub enum PaneEvent {
+    Renamed(SessionSummary),
+}
+
+struct Renaming {
+    input: Entity<TextInput>,
+    problem: Option<String>,
+    _submitted: Subscription,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -40,6 +50,7 @@ pub struct SessionPane {
     folds: Arc<Folds>,
     hovered_turn: Option<usize>,
     composer: Entity<TextInput>,
+    renaming: Option<Renaming>,
     _revisions: Task<()>,
     _submitted: Subscription,
     _typed: Subscription,
@@ -73,10 +84,106 @@ impl SessionPane {
             folds: Arc::new(Folds::default()),
             hovered_turn: None,
             composer,
+            renaming: None,
             _revisions: watcher,
             _submitted: submitted,
             _typed: typed,
         }
+    }
+
+    fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.summary.title.clone().unwrap_or_default();
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("Session title", cx);
+            input.set_text(current.trim(), cx);
+            input
+        });
+        let submitted = cx.subscribe(&input, |this, _, Submitted(title), cx| {
+            this.commit_rename(title.clone(), cx);
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        self.renaming = Some(Renaming {
+            input,
+            problem: None,
+            _submitted: submitted,
+        });
+        cx.notify();
+    }
+
+    fn commit_rename(&mut self, title: String, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        cx.spawn(async move |this, cx| {
+            let renamed = hub.rename(&summary, title).await;
+            this.update(cx, |this, cx| {
+                match renamed {
+                    Ok(renamed) => {
+                        this.summary.title = renamed.title;
+                        this.renaming = None;
+                        cx.emit(PaneEvent::Renamed(this.summary.clone()));
+                    }
+                    Err(err) => {
+                        if let Some(renaming) = this.renaming.as_mut() {
+                            renaming.problem = Some(format!("rename failed: {err}"));
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn title(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(renaming) = &self.renaming else {
+            return div()
+                .id("session-title")
+                .flex_shrink(1.)
+                .min_w_0()
+                .truncate()
+                .text_color(Theme::ink())
+                .cursor_text()
+                .hover(|title| title.text_color(Theme::accent()))
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.begin_rename(window, cx)))
+                .child(crate::text::one_line(self.summary.title.as_deref()))
+                .into_any_element();
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .w(px(360.))
+                    .px_3()
+                    .py_1()
+                    .rounded(px(10.))
+                    .bg(Theme::card())
+                    .border_1()
+                    .border_color(Theme::accent())
+                    .child(renaming.input.clone()),
+            )
+            .child(
+                div()
+                    .id("cancel-rename")
+                    .cursor_pointer()
+                    .text_color(Theme::ink_dim())
+                    .hover(|cancel| cancel.text_color(Theme::ink()))
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.renaming = None;
+                        window.focus(&this.composer.focus_handle(cx), cx);
+                        cx.notify();
+                    }))
+                    .child("×"),
+            )
+            .children(
+                renaming
+                    .problem
+                    .clone()
+                    .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
+            )
+            .into_any_element()
     }
 
     pub fn composer(&self) -> &Entity<TextInput> {
@@ -193,7 +300,6 @@ impl SessionPane {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let title: SharedString = crate::text::one_line(self.summary.title.as_deref());
         let meta = [self.summary.model.as_deref(), self.summary.cwd.as_deref()]
             .into_iter()
             .flatten()
@@ -208,7 +314,7 @@ impl SessionPane {
             .px_6()
             .pt_4()
             .pb_2()
-            .child(div().text_color(Theme::ink()).truncate().child(title))
+            .child(self.title(cx))
             .child(
                 div()
                     .text_xs()
@@ -609,6 +715,8 @@ fn column_width(window: &Window) -> Pixels {
     let body = window.viewport_size().width - px(68.);
     (body * 0.64).clamp(px(680.), px(920.)).min(body - px(48.))
 }
+
+impl gpui::EventEmitter<PaneEvent> for SessionPane {}
 
 impl Render for SessionPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

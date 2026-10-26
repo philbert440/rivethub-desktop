@@ -40,6 +40,11 @@ pub struct Gateway {
 }
 
 #[derive(Serialize)]
+struct Retitle<'a> {
+    title: &'a str,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateSession<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,6 +168,14 @@ impl Gateway {
             .await
             .map_err(GatewayError::Http)?;
         Self::check(reply).await.map(drop)
+    }
+
+    pub async fn rename(&self, session: &SessionId, title: &str) -> Result<SessionSummary, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = format!("{}/api/harness-sessions/{segment}/title", self.base_url);
+        let renamed: wire::harness::HarnessSessionSummary =
+            Self::read_json(self.http.put(url).json(&Retitle { title }).send().await)?.await?;
+        Ok(translate::summary(renamed))
     }
 
     pub async fn stop(&self, session: &SessionId) -> Result<(), GatewayError> {

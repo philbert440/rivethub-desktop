@@ -13,7 +13,7 @@ use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
-use crate::session_pane::SessionPane;
+use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::now_ms;
 use crate::topic_picker::{PickerEvent, TopicPicker};
@@ -55,6 +55,7 @@ pub struct Workspace {
     folded: HashSet<SessionId>,
     problem: Option<String>,
     pane: Option<Entity<SessionPane>>,
+    pane_events: Option<Subscription>,
     panel: Entity<SidePanel>,
     panel_open: bool,
     placing: Option<Placing>,
@@ -110,6 +111,7 @@ impl Workspace {
             folded: HashSet::new(),
             problem: None,
             pane: None,
+            pane_events: None,
             panel,
             panel_open: true,
             placing: None,
@@ -235,6 +237,15 @@ impl Workspace {
         let session = summary.id.clone();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
+        self.pane_events = Some(cx.subscribe(&pane, |this, _, event: &PaneEvent, cx| match event {
+            PaneEvent::Renamed(renamed) => {
+                if let Some(known) = this.sessions.iter_mut().find(|known| known.id == renamed.id) {
+                    known.title.clone_from(&renamed.title);
+                }
+                this.sync_panel(cx);
+                cx.notify();
+            }
+        }));
         self.pane = Some(pane);
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };

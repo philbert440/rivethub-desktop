@@ -94,6 +94,23 @@ impl Hub {
         feed::spawn(self)
     }
 
+    pub async fn rename(
+        &self,
+        summary: &SessionSummary,
+        title: String,
+    ) -> Result<SessionSummary, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            let mut renamed = gateway.rename(&session, &title).await?;
+            renamed.node = node;
+            Ok(renamed)
+        })
+        .await
+    }
+
     pub fn open_session(&self, summary: &SessionSummary) -> SessionHandle {
         session::spawn(
             &self.inner.runtime,
