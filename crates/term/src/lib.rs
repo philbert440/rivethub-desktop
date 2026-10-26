@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, Term, TermMode, viewport_to_point};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
 use parking_lot::Mutex;
 
@@ -36,9 +38,30 @@ pub struct Span {
     pub text: String,
     pub fg: Rgb,
     pub bg: Rgb,
+    pub look: Look,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Look {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectBy {
+    Character,
+    Word,
+    Line,
+}
+
+/// A position on the visible grid; `right_half` says which half of the cell was hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hit {
+    pub row: usize,
+    pub column: usize,
+    pub right_half: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +133,38 @@ impl Screen {
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
+    pub fn select(&mut self, hit: Hit, by: SelectBy) {
+        let kind = match by {
+            SelectBy::Character => SelectionType::Simple,
+            SelectBy::Word => SelectionType::Semantic,
+            SelectBy::Line => SelectionType::Lines,
+        };
+        let (point, side) = self.locate(hit);
+        self.term.selection = Some(Selection::new(kind, point, side));
+    }
+
+    pub fn extend_selection(&mut self, hit: Hit) {
+        let (point, side) = self.locate(hit);
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, side);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|text| !text.is_empty())
+    }
+
+    fn locate(&self, hit: Hit) -> (Point, Side) {
+        let row = hit.row.min(usize::from(self.size.rows).saturating_sub(1));
+        let column = hit.column.min(usize::from(self.size.columns).saturating_sub(1));
+        let point = viewport_to_point(self.term.grid().display_offset(), Point::new(row, Column(column)));
+        (point, if hit.right_half { Side::Right } else { Side::Left })
+    }
+
     pub fn background(&self) -> Rgb {
         palette::background(self.term.colors())
     }
@@ -126,6 +181,7 @@ impl Screen {
         let content = self.term.renderable_content();
         let colors = content.colors;
         let offset = content.display_offset;
+        let selection = content.selection;
         let mut lines: Vec<Vec<Span>> = vec![Vec::new(); usize::from(self.size.rows)];
         for indexed in content.display_iter {
             let cell = indexed.cell;
@@ -145,15 +201,15 @@ impl Screen {
             if cell.flags.contains(Flags::DIM) {
                 fg = fg.dimmed();
             }
-            let italic = cell.flags.contains(Flags::ITALIC);
-            let underline = cell.flags.contains(Flags::UNDERLINE);
+            let look = Look {
+                bold,
+                italic: cell.flags.contains(Flags::ITALIC),
+                underline: cell.flags.contains(Flags::UNDERLINE),
+            };
+            let selected = selection.is_some_and(|range| range.contains(indexed.point));
             match line.last_mut() {
                 Some(span)
-                    if span.fg == fg
-                        && span.bg == bg
-                        && span.bold == bold
-                        && span.italic == italic
-                        && span.underline == underline =>
+                    if span.fg == fg && span.bg == bg && span.look == look && span.selected == selected =>
                 {
                     span.text.push(cell.c);
                 }
@@ -161,9 +217,8 @@ impl Screen {
                     text: cell.c.to_string(),
                     fg,
                     bg,
-                    bold,
-                    italic,
-                    underline,
+                    look,
+                    selected,
                 }),
             }
         }
@@ -185,7 +240,7 @@ impl Screen {
 
 #[cfg(test)]
 mod tests {
-    use super::{GridSize, Screen};
+    use super::{GridSize, Hit, Screen, SelectBy};
 
     #[test]
     fn colored_text_lands_in_one_span_per_style() {
@@ -197,6 +252,27 @@ mod tests {
         assert_eq!(first[1].text, "red");
         assert_ne!(first[0].fg, first[1].fg);
         assert_eq!(snapshot.cursor, Some((0, 9)));
+    }
+
+    #[test]
+    fn a_drag_selects_text_across_lines() {
+        let mut screen = Screen::new(GridSize { columns: 20, rows: 3 });
+        screen.feed(b"first line\r\nsecond line");
+        let at = |row, column| Hit {
+            row,
+            column,
+            right_half: false,
+        };
+        screen.select(at(0, 6), SelectBy::Character);
+        screen.extend_selection(at(1, 6));
+        assert_eq!(screen.selected_text().as_deref(), Some("line\nsecond"));
+        assert!(
+            screen.snapshot().lines[0]
+                .iter()
+                .any(|span| span.selected && span.text.starts_with("line"))
+        );
+        screen.select(at(1, 8), SelectBy::Word);
+        assert_eq!(screen.selected_text().as_deref(), Some("line"));
     }
 
     #[test]

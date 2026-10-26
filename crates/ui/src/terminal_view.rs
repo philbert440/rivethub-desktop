@@ -1,20 +1,51 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use app::{TerminalHandle, TerminalState};
 use gpui::{
-    App, Bounds, Context, Element, ElementId, FocusHandle, Focusable, FontStyle, FontWeight, GlobalElementId,
-    InspectorElementId, IntoElement, KeyDownEvent, LayoutId, Pixels, Render, ScrollWheelEvent, ShapedLine,
-    SharedString, Style, Task, TextAlign, TextRun, UnderlineStyle, Window, div, fill, font, point,
-    prelude::*, px, relative, rgb, size,
+    App, Bounds, ClipboardItem, Context, Element, ElementId, FocusHandle, Focusable, FontStyle, FontWeight,
+    GlobalElementId, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, ShapedLine, SharedString, Style,
+    Task, TextAlign, TextRun, UnderlineStyle, Window, div, fill, font, point, prelude::*, px, relative, rgb,
+    size,
 };
-use term::{GridSize, Modifiers, Snapshot, encode_key};
+use term::{GridSize, Hit, Modifiers, SelectBy, Snapshot, encode_key};
 
 use crate::theme::Theme;
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 18.;
 
+/// Where the grid was last painted, so pointer positions map to cells.
+#[derive(Clone, Copy)]
+struct Geometry {
+    origin: Point<Pixels>,
+    cell: Pixels,
+}
+
+impl Geometry {
+    fn hit(self, position: Point<Pixels>) -> Hit {
+        let x = f32::from(position.x - self.origin.x).max(0.) / f32::from(self.cell).max(1.);
+        let y = f32::from(position.y - self.origin.y).max(0.) / LINE_HEIGHT;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "non-negative and bounded by the grid"
+        )]
+        let (row, column) = (y as usize, x as usize);
+        Hit {
+            row,
+            column,
+            right_half: x.fract() >= 0.5,
+        }
+    }
+}
+
 pub struct TerminalView {
     handle: TerminalHandle,
     focus: FocusHandle,
+    geometry: Rc<Cell<Option<Geometry>>>,
+    selecting: bool,
     _revisions: Task<()>,
 }
 
@@ -31,6 +62,8 @@ impl TerminalView {
         Self {
             handle,
             focus: cx.focus_handle(),
+            geometry: Rc::default(),
+            selecting: false,
             _revisions: watcher,
         }
     }
@@ -46,10 +79,101 @@ impl TerminalView {
             alt: keystroke.modifiers.alt,
             shift: keystroke.modifiers.shift,
         };
+        if mods.ctrl && mods.shift && !mods.alt {
+            if keystroke.key.eq_ignore_ascii_case("c") {
+                self.copy(cx);
+                cx.stop_propagation();
+                return;
+            }
+            if keystroke.key.eq_ignore_ascii_case("v") {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.paste(&text, cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
+        }
         let app_cursor = self.handle.screen().read().app_cursor();
         if let Some(bytes) = encode_key(&keystroke.key, keystroke.key_char.as_deref(), mods, app_cursor) {
+            self.handle.screen().write().clear_selection();
             self.handle.write(bytes);
             cx.stop_propagation();
+        }
+    }
+
+    fn copy(&self, cx: &mut Context<Self>) {
+        if let Some(text) = self.handle.screen().read().selected_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn paste(&self, text: &str, cx: &mut Context<Self>) {
+        let screen = self.handle.screen();
+        let mut screen = screen.write();
+        screen.clear_selection();
+        let text = text.replace("\r\n", "\r").replace('\n', "\r");
+        let bytes = if screen.bracketed_paste() {
+            format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")).into_bytes()
+        } else {
+            text.into_bytes()
+        };
+        drop(screen);
+        self.handle.write(bytes);
+        cx.notify();
+    }
+
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        let Some(geometry) = self.geometry.get() else {
+            return;
+        };
+        let hit = geometry.hit(event.position);
+        let screen = self.handle.screen();
+        let mut screen = screen.write();
+        if event.modifiers.shift && event.click_count == 1 && screen.selected_text().is_some() {
+            screen.extend_selection(hit);
+        } else {
+            let by = match event.click_count {
+                1 => SelectBy::Character,
+                2 => SelectBy::Word,
+                _ => SelectBy::Line,
+            };
+            screen.select(hit, by);
+        }
+        self.selecting = true;
+        cx.notify();
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        if let Some(geometry) = self.geometry.get() {
+            self.handle
+                .screen()
+                .write()
+                .extend_selection(geometry.hit(event.position));
+            cx.notify();
+        }
+    }
+
+    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.selecting) {
+            return;
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(text) = self.handle.screen().read().selected_text() {
+            cx.write_to_primary(ClipboardItem::new_string(text));
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        let _ = cx;
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn middle_click(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
+            self.paste(&text, cx);
         }
     }
 
@@ -86,6 +210,15 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_scroll_wheel(cx.listener(Self::scroll))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+            .when(cfg!(any(target_os = "linux", target_os = "freebsd")), |this| {
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                let this = this.on_mouse_down(MouseButton::Middle, cx.listener(Self::middle_click));
+                this
+            })
             .size_full()
             .p_3()
             .rounded(px(16.))
@@ -96,6 +229,7 @@ impl Render for TerminalView {
             .child(TerminalElement {
                 handle: self.handle.clone(),
                 focused: self.focus.clone(),
+                geometry: self.geometry.clone(),
             })
     }
 }
@@ -103,6 +237,7 @@ impl Render for TerminalView {
 struct TerminalElement {
     handle: TerminalHandle,
     focused: FocusHandle,
+    geometry: Rc<Cell<Option<Geometry>>>,
 }
 
 struct Prepainted {
@@ -193,6 +328,10 @@ impl Element for TerminalElement {
             rows: fits(bounds.size.height, LINE_HEIGHT),
         };
         self.handle.resize(grid);
+        self.geometry.set(Some(Geometry {
+            origin: bounds.origin,
+            cell,
+        }));
         let snapshot = self.handle.screen().read().snapshot();
         let lines = snapshot
             .lines
@@ -203,10 +342,10 @@ impl Element for TerminalElement {
                     .iter()
                     .map(|span| TextRun {
                         len: span.text.len(),
-                        font: mono(span.bold, span.italic),
+                        font: mono(span.look.bold, span.look.italic),
                         color: rgb(span.fg.to_u32()).into(),
                         background_color: None,
-                        underline: span.underline.then(|| UnderlineStyle {
+                        underline: span.look.underline.then(|| UnderlineStyle {
                             thickness: px(1.),
                             color: None,
                             wavy: false,
@@ -244,11 +383,16 @@ impl Element for TerminalElement {
             let mut column = 0usize;
             for span in spans {
                 let width = span.text.chars().count();
-                if span.bg != background {
+                let fill_color = if span.selected {
+                    Some(Theme::selected())
+                } else {
+                    (span.bg != background).then(|| rgb(span.bg.to_u32()))
+                };
+                if let Some(color) = fill_color {
                     let origin = point(bounds.left() + cell * row_f32(column), top);
                     window.paint_quad(fill(
                         Bounds::new(origin, size(cell * row_f32(width), line_height)),
-                        rgb(span.bg.to_u32()),
+                        color,
                     ));
                 }
                 column += width;
