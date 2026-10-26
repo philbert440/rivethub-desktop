@@ -1,0 +1,21 @@
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum GatewayError {
+    #[error("reading the CA bundle at {path}: {source}")]
+    Ca { path: String, source: std::io::Error },
+    #[error("the CA bundle at {0} holds no certificates")]
+    EmptyCa(String),
+    #[error("tls: {0}")]
+    Tls(#[from] rustls::Error),
+    #[error("http: {0}")]
+    Http(reqwest::Error),
+    #[error("gateway answered {status}: {detail}")]
+    Status { status: u16, detail: String },
+    #[error("websocket: {0}")]
+    Socket(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("refused: {0}")]
+    Refused(String),
+    #[error("not a session id: {0}")]
+    SessionId(String),
+}
