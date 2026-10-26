@@ -1,6 +1,8 @@
 mod brand;
 mod input;
 mod session_pane;
+mod terminal_view;
+mod text;
 mod theme;
 mod workspace;
 
@@ -12,7 +14,8 @@ use gateway::{Endpoint, Gateway};
 use gpui::{
     App, AppContext, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
-use workspace::{Workspace, ZoomOut};
+use session_pane::ToggleTerminal;
+use workspace::{NewSession, Workspace, ZoomOut};
 
 fn endpoint() -> Endpoint {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
@@ -25,6 +28,8 @@ fn endpoint() -> Endpoint {
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-up", ZoomOut, Some("Workspace")),
+        KeyBinding::new("ctrl-t", NewSession, Some("Workspace")),
+        KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("backspace", input::Backspace, Some("TextInput")),
         KeyBinding::new("delete", input::Delete, Some("TextInput")),

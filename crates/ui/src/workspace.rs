@@ -4,12 +4,12 @@ use gpui::{
     Window, actions, div, img, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
-use model::{Altitude, HarnessId, SessionId};
+use model::{Altitude, HarnessId};
 
 use crate::session_pane::SessionPane;
 use crate::{brand, theme::Theme};
 
-actions!(workspace, [ZoomOut]);
+actions!(workspace, [ZoomOut, NewSession]);
 
 const CLAUDE: &str = "claude-code";
 const FORMING_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -27,14 +27,6 @@ fn forming(mut sessions: Vec<SessionSummary>, now_ms: i64) -> Vec<SessionSummary
         .retain(|session| session.parent.is_none() && now_ms - session.updated_at_ms <= FORMING_WINDOW_MS);
     sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
     sessions
-}
-
-fn one_line(title: Option<&str>) -> SharedString {
-    let title = title
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("Untitled");
-    title.split_whitespace().collect::<Vec<_>>().join(" ").into()
 }
 
 pub struct Workspace {
@@ -79,9 +71,10 @@ impl Workspace {
         .detach();
     }
 
-    fn open(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
-        let handle = self.hub.open_session(id.clone());
-        let pane = cx.new(|cx| SessionPane::new(handle, cx));
+    fn open(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        let id = summary.id.clone();
+        let hub = self.hub.clone();
+        let pane = cx.new(|cx| SessionPane::new(hub, summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
         self.pane = Some(pane);
         self.altitude = Altitude::Session {
@@ -91,14 +84,22 @@ impl Workspace {
         cx.notify();
     }
 
+    fn new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_session(window, cx);
+    }
+
     fn start(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_session(window, cx);
+    }
+
+    fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let started = hub.start_session(HarnessId::new(CLAUDE)).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| match started {
-                    Ok(summary) => this.open(summary.id, window, cx),
+                    Ok(summary) => this.open(summary, window, cx),
                     Err(err) => {
                         this.problem = Some(err.to_string());
                         cx.notify();
@@ -219,7 +220,7 @@ impl Workspace {
                     .flex_wrap()
                     .gap_3()
                     .children(self.forming.iter().enumerate().map(|(index, session)| {
-                        let id = session.id.clone();
+                        let summary = session.clone();
                         let dot = if session.status == SessionStatus::Active {
                             Theme::accent()
                         } else {
@@ -235,9 +236,9 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .on_click(
-                                cx.listener(move |this, _, window, cx| this.open(id.clone(), window, cx)),
-                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open(summary.clone(), window, cx);
+                            }))
                             .child(
                                 div()
                                     .flex()
@@ -248,7 +249,7 @@ impl Workspace {
                                         div()
                                             .text_color(Theme::ink())
                                             .truncate()
-                                            .child(one_line(session.title.as_deref())),
+                                            .child(crate::text::one_line(session.title.as_deref())),
                                     ),
                             )
                             .child(
@@ -279,6 +280,7 @@ impl Render for Workspace {
             .key_context("Workspace")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::zoom_out))
+            .on_action(cx.listener(Self::new_session))
             .size_full()
             .flex()
             .bg(Theme::window())
