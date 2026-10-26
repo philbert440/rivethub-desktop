@@ -6,7 +6,7 @@ use gpui::{
     WeakEntity, Window, div, prelude::*, pulsating_between, px,
 };
 use model::chat::{Exchange, ExchangeState, Step, group_summary, running_label, thought_summary};
-use model::markdown::{Block, parse};
+use model::markdown::{Block, Parsed, parse};
 
 use crate::markdown_view;
 use crate::session_pane::SessionPane;
@@ -15,13 +15,44 @@ use crate::theme::Theme;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExchangeView {
     pub exchange: Exchange,
-    answer: Vec<Block>,
+    answer: Parsed,
+    notes: Vec<Vec<Block>>,
+}
+
+fn note_blocks(exchange: &Exchange, previous: Option<&ExchangeView>) -> Vec<Vec<Block>> {
+    exchange
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let Step::Note(text) = step else {
+                return Vec::new();
+            };
+            previous
+                .filter(|previous| previous.exchange.steps.get(index) == Some(step))
+                .and_then(|previous| previous.notes.get(index).cloned())
+                .unwrap_or_else(|| parse(text))
+        })
+        .collect()
 }
 
 impl ExchangeView {
     pub fn new(exchange: Exchange) -> Self {
-        let answer = parse(&exchange.answer);
-        Self { exchange, answer }
+        Self {
+            answer: Parsed::new(&exchange.answer),
+            notes: note_blocks(&exchange, None),
+            exchange,
+        }
+    }
+
+    pub fn advance(previous: &Self, exchange: Exchange) -> Self {
+        Self {
+            answer: previous
+                .answer
+                .advance(&previous.exchange.answer, &exchange.answer),
+            notes: note_blocks(&exchange, Some(previous)),
+            exchange,
+        }
     }
 }
 
@@ -68,6 +99,7 @@ pub fn chevron(open: bool) -> &'static str {
 }
 
 fn step(
+    view: &ExchangeView,
     step_index: usize,
     item: &Step,
     working: bool,
@@ -113,14 +145,14 @@ fn step(
                 })
                 .into_any_element()
         }
-        Step::Note(text) => div()
+        Step::Note(_) => div()
             .pl(px(22.))
             .text_size(px(13.))
             .flex()
             .flex_col()
             .gap_2()
             .children(markdown_view::blocks(
-                &parse(text),
+                view.notes.get(step_index).map_or(&[][..], Vec::as_slice),
                 &format!("note-{ix}-{step_index}"),
                 Theme::ink_dim().into(),
                 window,
@@ -242,18 +274,15 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
         }
         if open {
             let count = exchange.steps.len();
-            column = column.child(
-                div().flex().flex_col().gap(px(6.)).children(
-                    exchange
-                        .steps
-                        .iter()
-                        .enumerate()
-                        .map(|(index, item)| step(index, item, working, index + 1 == count, cx, window)),
-                ),
-            );
+            column =
+                column.child(div().flex().flex_col().gap(px(6.)).children(
+                    exchange.steps.iter().enumerate().map(|(index, item)| {
+                        step(view, index, item, working, index + 1 == count, cx, window)
+                    }),
+                ));
         }
     }
-    if !view.answer.is_empty() {
+    if !view.answer.blocks.is_empty() {
         column = column.child(
             div()
                 .w_full()
@@ -263,7 +292,7 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 .text_color(Theme::ink())
                 .line_height(px(24.))
                 .children(markdown_view::blocks(
-                    &view.answer,
+                    &view.answer.blocks,
                     &format!("answer-{ix}"),
                     ink,
                     window,

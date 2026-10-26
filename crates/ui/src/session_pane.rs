@@ -367,7 +367,8 @@ impl SessionPane {
             .enumerate()
             .map(|(index, exchange)| match previous.get(index) {
                 Some(old) if old.exchange == exchange => old.clone(),
-                _ => ExchangeView::new(exchange),
+                Some(old) => ExchangeView::advance(old, exchange),
+                None => ExchangeView::new(exchange),
             })
             .collect();
         let count = views.len();
