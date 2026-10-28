@@ -16,6 +16,7 @@ const COMMAND_BUFFER: usize = 32;
 #[derive(Debug)]
 enum Command {
     Send(Prompt),
+    Answer(Prompt),
     Stop,
     Unqueue(usize),
     Decide { request_id: String, decision: Decision },
@@ -54,10 +55,7 @@ impl SessionHandle {
     /// Answers an open ask-user question. A harness whose ask tool blocks keeps its turn running
     /// until it is stopped, so the answer goes out as the next turn after that.
     pub fn answer(&self, prompt: Prompt) {
-        if self.view.read().busy() {
-            self.stop();
-        }
-        self.send(prompt);
+        let _ = self.commands.try_send(Command::Answer(prompt));
     }
 
     pub fn queued(&self) -> Vec<Prompt> {
@@ -183,6 +181,19 @@ impl Actor {
                     self.send(prompt).await;
                 }
                 Ok(())
+            }
+            Command::Answer(prompt) => {
+                if self.view.read().busy() {
+                    self.queue.write().push_front(prompt);
+                    self.changed();
+                    match self.gateway().await {
+                        Ok(gateway) => gateway.stop(&self.id).await,
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    self.send(prompt).await;
+                    Ok(())
+                }
             }
             Command::Unqueue(index) => {
                 self.queue.write().remove(index);
