@@ -64,8 +64,10 @@ impl Shell {
             return;
         }
         self.page = page;
-        if page == Page::Workspace {
-            window.focus(&self.workspace.focus_handle(cx), cx);
+        match page {
+            Page::Workspace => window.focus(&self.workspace.focus_handle(cx), cx),
+            Page::Memory => window.focus(&self.memory.focus_handle(cx), cx),
+            Page::Settings => {}
         }
         cx.notify();
     }

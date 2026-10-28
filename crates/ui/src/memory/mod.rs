@@ -4,8 +4,8 @@ mod topics;
 
 use app::{Hub, Library, Tidy};
 use gpui::{
-    Context, Entity, EventEmitter, IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
-    prelude::*, px,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
+    Subscription, Window, div, prelude::*, px,
 };
 use model::markdown::Block;
 use model::memory::{Found, Period};
@@ -78,6 +78,15 @@ pub struct MemoryPage {
 }
 
 impl EventEmitter<MemoryEvent> for MemoryPage {}
+
+impl Focusable for MemoryPage {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self.tab {
+            Tab::Topics => self.find.focus_handle(cx),
+            Tab::Ask | Tab::Tidy => self.query.focus_handle(cx),
+        }
+    }
+}
 
 impl MemoryPage {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {

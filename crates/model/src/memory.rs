@@ -46,6 +46,22 @@ pub struct Found {
     pub at_ms: i64,
 }
 
+impl Found {
+    /// A harness's private reasoning, which rh stores alongside what was said.
+    fn is_reasoning(&self) -> bool {
+        self.text.trim_start().starts_with("[thinking]")
+    }
+}
+
+/// What a person searching their sessions wants to see: what was said, each thing once.
+pub fn said(hits: Vec<Found>) -> Vec<Found> {
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter()
+        .filter(|hit| !hit.is_reasoning())
+        .filter(|hit| seen.insert((hit.session.clone(), hit.text.clone())))
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Accept,
