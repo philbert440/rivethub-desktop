@@ -6,7 +6,7 @@ use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
 use model::wiki::{Page, loose, readable, section, without_decisions};
 
-use super::{Focus, MemoryEvent, MemoryPage, Opened, Reading};
+use super::{MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
 use crate::menu::{Menu, MenuEvent, OpenMenu};
 use crate::text::{ago, now_ms};
@@ -123,25 +123,27 @@ impl MemoryPage {
     }
 
     fn open_menu(&mut self, topic: TopicId, event: &MouseDownEvent, cx: &mut Context<Self>) {
-        let name = self
+        let Some(name) = self
             .library
             .as_ref()
             .and_then(|library| library.topics.iter().find(|known| known.id == topic))
-            .map(|known| known.name.clone());
+            .map(|known| known.name.clone())
+        else {
+            return;
+        };
         let hub = self.hub.clone();
-        let menu = cx.new(|_| Menu::new(hub, Focus::Topic(topic), name));
+        let menu = cx.new(|_| Menu::new(hub, None, Some((topic, name))));
         let events = cx.subscribe(&menu, |this, menu, event: &MenuEvent, cx| {
             if this.menu.as_ref().is_none_or(|open| open.menu != menu) {
                 return;
             }
             this.menu = None;
             match event {
-                MenuEvent::ViewInMemory(focus) => this.focus(focus.clone(), cx),
                 MenuEvent::Deleted(topic) => {
                     this.topic_deleted(topic, cx);
                     cx.emit(MemoryEvent::TopicDeleted(topic.clone()));
                 }
-                MenuEvent::Closed => {}
+                MenuEvent::ViewInMemory(_) | MenuEvent::Closed => {}
             }
             cx.notify();
         });

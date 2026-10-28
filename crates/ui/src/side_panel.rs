@@ -28,6 +28,7 @@ pub enum PanelEvent {
     EditAgent(Agent),
     Renamed(SessionSummary),
     TopicMenu(TopicId, Point<Pixels>),
+    SessionMenu(SessionSummary, Point<Pixels>),
 }
 
 #[derive(Debug, Clone)]
@@ -651,6 +652,7 @@ impl SidePanel {
             return Self::rename_row(renaming, indent, cx);
         }
         let open = row.session.clone();
+        let menu = row.session.clone();
         let rename = row.session.clone();
         let fold = row.session.id.clone();
         let lead = if row.children > 0 {
@@ -690,6 +692,13 @@ impl SidePanel {
             .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                 cx.emit(PanelEvent::Open(open.clone()));
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                    cx.emit(PanelEvent::SessionMenu(menu.clone(), event.position));
+                    cx.stop_propagation();
+                }),
+            )
             .child(
                 div()
                     .flex_none()

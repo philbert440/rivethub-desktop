@@ -18,8 +18,8 @@ pub enum MenuEvent {
 /// The right-click menu on a topic or session: show it in Memory, or delete a topic after asking.
 pub struct Menu {
     hub: Hub,
-    focus: Focus,
-    topic: Option<String>,
+    view: Option<Focus>,
+    delete: Option<(TopicId, String)>,
     confirming: bool,
     busy: bool,
     problem: Option<String>,
@@ -41,12 +41,13 @@ impl OpenMenu {
 }
 
 impl Menu {
-    /// `topic` names the focused topic when it can be deleted from here.
-    pub fn new(hub: Hub, focus: Focus, topic: Option<String>) -> Self {
+    /// `view` is what View in Memory shows, left out inside Memory itself, where a click already opens it.
+    /// `delete` names a topic that can be deleted from here.
+    pub fn new(hub: Hub, view: Option<Focus>, delete: Option<(TopicId, String)>) -> Self {
         Self {
             hub,
-            focus,
-            topic,
+            view,
+            delete,
             confirming: false,
             busy: false,
             problem: None,
@@ -54,7 +55,7 @@ impl Menu {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
-        let Focus::Topic(topic) = self.focus.clone() else {
+        let Some((topic, _)) = self.delete.clone() else {
             return;
         };
         self.busy = true;
@@ -101,14 +102,17 @@ impl Menu {
     }
 
     fn items(&self, cx: &mut Context<Self>) -> AnyElement {
-        let focus = self.focus.clone();
         div()
             .flex()
             .flex_col()
-            .child(Self::item("view-in-memory", "View in Memory").on_click(
-                cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(MenuEvent::ViewInMemory(focus.clone()))),
-            ))
-            .when(self.topic.is_some(), |items| {
+            .when_some(self.view.clone(), |items, focus| {
+                items.child(
+                    Self::item("view-in-memory", "View in Memory").on_click(cx.listener(
+                        move |_, _: &ClickEvent, _, cx| cx.emit(MenuEvent::ViewInMemory(focus.clone())),
+                    )),
+                )
+            })
+            .when(self.delete.is_some(), |items| {
                 items.child(
                     Self::item("delete-topic", "Delete topic")
                         .text_color(Theme::warn())
@@ -169,8 +173,8 @@ impl Menu {
 
 impl Render for Menu {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let body = match (&self.topic, self.confirming) {
-            (Some(name), true) => self.confirm(name, cx),
+        let body = match (&self.delete, self.confirming) {
+            (Some((_, name)), true) => self.confirm(name, cx),
             _ => self.items(cx),
         };
         div()
