@@ -835,22 +835,20 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .child(self.header(cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .child(tile)
-                            .when(!in_session && self.panel_open, |row| {
-                                row.child(
-                                    div()
-                                        .mb_3()
-                                        .mr_3()
-                                        .rounded(px(20.))
-                                        .overflow_hidden()
-                                        .child(self.panel.clone()),
-                                )
-                            }),
-                    ),
+                    .child(div().flex_1().min_h_0().flex().child(tile).when(
+                        !in_session && self.panel_open,
+                        |row| {
+                            row.child(
+                                div()
+                                    .mb_3()
+                                    .mr_3()
+                                    .min_h_0()
+                                    .rounded(px(20.))
+                                    .overflow_hidden()
+                                    .child(self.panel.clone()),
+                            )
+                        },
+                    )),
             )
             .children(launcher)
     }
