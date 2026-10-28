@@ -128,7 +128,12 @@ impl Menu {
             .flex()
             .flex_col()
             .gap_3()
-            .child(format!("Delete topic “{name}”? Its sessions go back to Forming."))
+            .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name.to_owned()))
+            .child(
+                div()
+                    .text_color(Theme::ink_dim())
+                    .child("Delete this topic? Its sessions go back to Forming."),
+            )
             .children(
                 self.problem
                     .clone()
@@ -176,6 +181,7 @@ impl Render for Menu {
             .border_1()
             .border_color(Theme::line())
             .text_color(Theme::ink())
+            .occlude()
             .on_mouse_down_out(cx.listener(|_, _: &MouseDownEvent, _, cx| cx.emit(MenuEvent::Closed)))
             .child(body)
     }
