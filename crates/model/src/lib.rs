@@ -3,6 +3,7 @@ pub mod attention;
 pub mod chat;
 pub mod harness;
 pub mod health;
+pub mod history;
 pub mod ids;
 pub mod lineage;
 pub mod markdown;

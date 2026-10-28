@@ -10,7 +10,8 @@ use gpui::{
     ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions,
     anchored, deferred, div, prelude::*, px,
 };
-use model::notice::Notice;
+use model::history::Phase;
+use model::notice::{Notice, NoticeKind};
 use model::session::SessionSummary;
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
@@ -116,7 +117,13 @@ impl Workspace {
         let mut activity = feed.activity();
         let repaint = cx.spawn(async move |this, cx| {
             while activity.changed().await.is_ok() {
-                if this.update(cx, Self::take_notices).is_err() {
+                // Live waits and finishes don't reload the listing, so the History chips
+                // catch up here.
+                let synced = this.update(cx, |this, cx| {
+                    this.take_notices(cx);
+                    this.sync_panel(cx);
+                });
+                if synced.is_err() {
                     break;
                 }
             }
@@ -159,6 +166,20 @@ impl Workspace {
             cx.emit(Attention { notice, title });
         }
         cx.notify();
+    }
+
+    /// A terminal's bell asks for the person the way a blocked session does.
+    fn rang(&self, session: SessionId, cx: &mut Context<Self>) {
+        let title = self
+            .sessions
+            .iter()
+            .find(|known| known.id == session)
+            .and_then(|known| known.title.clone());
+        let notice = Notice {
+            kind: NoticeKind::NeedsYou,
+            session,
+        };
+        cx.emit(Attention { notice, title });
     }
 
     /// The session open in the pane, if the workspace is showing one.
@@ -264,6 +285,17 @@ impl Workspace {
     fn sync_panel(&self, cx: &mut Context<Self>) {
         let board = self.board();
         let history: Vec<SessionSummary> = board.history.iter().map(|session| (*session).clone()).collect();
+        let phases: HashMap<SessionId, Phase> = history
+            .iter()
+            .map(|session| {
+                let phase = Phase::of(
+                    self.feed.needs_you(session),
+                    self.feed.is_active(session),
+                    session.status.is_finished(),
+                );
+                (session.id.clone(), phase)
+            })
+            .collect();
         let past: Vec<PastTopic> = board
             .past
             .iter()
@@ -277,7 +309,7 @@ impl Workspace {
         let topics = self.topics.clone();
         let known = self.sessions.clone();
         self.panel.update(cx, |panel, cx| {
-            panel.set_sessions(history, known, cx);
+            panel.set_sessions(history, phases, known, cx);
             panel.set_topics(topics, past, cx);
         });
     }
@@ -296,9 +328,15 @@ impl Workspace {
         let session = summary.id.clone();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
-        self.pane_events = Some(cx.subscribe(&pane, |this, _, event: &PaneEvent, cx| match event {
-            PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
-        }));
+        self.pane_events = Some(
+            cx.subscribe(&pane, |this, pane, event: &PaneEvent, cx| match event {
+                PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
+                PaneEvent::Bell => {
+                    let session = pane.read(cx).session_id().clone();
+                    this.rang(session, cx);
+                }
+            }),
+        );
         self.pane = Some(pane);
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };
