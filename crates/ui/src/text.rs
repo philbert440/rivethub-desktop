@@ -43,6 +43,23 @@ pub fn now_ms() -> i64 {
         })
 }
 
+/// A moment as a local clock reads it: the time alone today, else with its date, and with its year
+/// when that isn't this year.
+pub fn clock(at_ms: i64) -> String {
+    use chrono::{Datelike, Local, TimeZone};
+    let Some(at) = Local.timestamp_millis_opt(at_ms).single() else {
+        return String::new();
+    };
+    let today = Local::now().date_naive();
+    if at.date_naive() == today {
+        at.format("%H:%M").to_string()
+    } else if at.year() == today.year() {
+        at.format("%b %-d, %H:%M").to_string()
+    } else {
+        at.format("%b %-d %Y, %H:%M").to_string()
+    }
+}
+
 pub fn ago(now_ms: i64, at_ms: i64) -> String {
     let minutes = (now_ms - at_ms).max(0) / 60_000;
     match minutes {

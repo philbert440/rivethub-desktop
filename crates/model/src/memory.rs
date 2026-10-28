@@ -37,7 +37,7 @@ pub enum Source {
     Summary,
 }
 
-/// One memory search hit. rh names the session for messages but not for summaries.
+/// One memory search hit, with the session it came from when rh knows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
     pub source: Source,

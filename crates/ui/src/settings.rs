@@ -132,7 +132,19 @@ impl SettingsPage {
                                     .child(mono(node.url.clone())),
                             ),
                     )
-                    .child(dim(status))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_end()
+                            .flex_none()
+                            .child(dim(status))
+                            .children(match (node.release(), node.online) {
+                                (Some(release), _) => Some(mono(release)),
+                                (None, true) => Some(mono("version not reported")),
+                                (None, false) => None,
+                            }),
+                    )
                     .into_any_element()
             })
             .collect()

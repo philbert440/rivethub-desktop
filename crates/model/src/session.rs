@@ -34,6 +34,9 @@ pub struct Turn {
     pub model: Option<String>,
     pub output_tokens: u64,
     pub files: Vec<SentFile>,
+    /// When the turn began and ended, in epoch milliseconds, where the harness recorded it.
+    pub started_at_ms: Option<i64>,
+    pub ended_at_ms: Option<i64>,
 }
 
 impl Turn {
@@ -47,6 +50,8 @@ impl Turn {
             model: None,
             output_tokens: 0,
             files: Vec::new(),
+            started_at_ms: None,
+            ended_at_ms: None,
         }
     }
 }
@@ -103,6 +108,7 @@ pub struct SessionSummary {
     pub title: Option<String>,
     pub status: SessionStatus,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub cwd: Option<String>,
     pub updated_at_ms: i64,
     pub parent: Option<SessionId>,
@@ -136,6 +142,20 @@ impl SessionSummary {
             query,
         )
     }
+}
+
+/// What a running session lets a turn change, as its node reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Switches {
+    pub model: bool,
+    pub effort: bool,
+}
+
+/// A session as its node describes it now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Described {
+    pub summary: SessionSummary,
+    pub switches: Switches,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,6 +363,8 @@ mod tests {
             model: None,
             output_tokens: 0,
             files: Vec::new(),
+            started_at_ms: None,
+            ended_at_ms: None,
         }
     }
 

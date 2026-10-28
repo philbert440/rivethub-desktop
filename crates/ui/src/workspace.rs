@@ -7,8 +7,8 @@ use app::Hub;
 use gateway::GatewayError;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions,
-    anchored, deferred, div, prelude::*, px,
+    ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions, div,
+    prelude::*, px,
 };
 use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
@@ -19,6 +19,7 @@ use model::{Altitude, HarnessId, SessionId, TopicId};
 use crate::agent_editor::{AgentEditor, AgentEditorEvent};
 use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
 use crate::memory::Focus;
+use crate::menu::{Menu, MenuEvent, OpenMenu};
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
@@ -44,6 +45,9 @@ enum Launch {
 
 /// Asks the shell to show Memory focused on a topic or session.
 pub struct ViewInMemory(pub Focus);
+
+/// Tells the shell a topic was deleted here, so other pages can let go of it.
+pub struct TopicDeleted(pub TopicId);
 
 struct Placing {
     session: SessionId,
@@ -72,7 +76,7 @@ pub struct Workspace {
     placing: Option<Placing>,
     launching: Option<(Entity<Launcher>, Subscription)>,
     editing_agent: Option<(Entity<AgentEditor>, Subscription)>,
-    menu: Option<(Focus, Point<Pixels>)>,
+    menu: Option<OpenMenu>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     _feed: [gpui::Task<()>; 2],
@@ -86,6 +90,7 @@ pub struct Attention {
 
 impl EventEmitter<ViewInMemory> for Workspace {}
 impl EventEmitter<Attention> for Workspace {}
+impl EventEmitter<TopicDeleted> for Workspace {}
 
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -101,6 +106,9 @@ impl Workspace {
                     PanelEvent::NewAgent => this.edit_agent(None, window, cx),
                     PanelEvent::EditAgent(agent) => this.edit_agent(Some(agent), window, cx),
                     PanelEvent::Renamed(renamed) => this.renamed(renamed, cx),
+                    PanelEvent::TopicMenu(topic, at) => {
+                        this.open_menu(Focus::Topic(topic.clone()), *at, window, cx);
+                    }
                 },
             );
         let feed = hub.watch_workspace();
@@ -389,16 +397,58 @@ impl Workspace {
         true
     }
 
-    /// Right-clicking opens a menu that can show this topic or session in Memory.
+    /// Right-clicking opens a menu that can show this topic or session in Memory, or delete the topic.
     fn on_right_click(
         focus: Focus,
         cx: &mut Context<Self>,
     ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
-        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-            this.menu = Some((focus.clone(), event.position));
+        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+            this.open_menu(focus.clone(), event.position, window, cx);
             cx.stop_propagation();
-            cx.notify();
         })
+    }
+
+    fn open_menu(&mut self, focus: Focus, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let topic = match &focus {
+            Focus::Topic(topic) => self.topic(topic).map(|known| known.name.clone()),
+            Focus::Search(_) => None,
+        };
+        let hub = self.hub.clone();
+        let menu = cx.new(|_| Menu::new(hub, focus, topic));
+        let events = cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, window, cx| {
+            if this.menu.as_ref().is_none_or(|open| &open.menu != menu) {
+                return;
+            }
+            this.menu = None;
+            match event {
+                MenuEvent::ViewInMemory(focus) => cx.emit(ViewInMemory(focus.clone())),
+                MenuEvent::Deleted(topic) => {
+                    this.topic_deleted(topic, window, cx);
+                    cx.emit(TopicDeleted(topic.clone()));
+                }
+                MenuEvent::Closed => {}
+            }
+            cx.notify();
+        });
+        self.menu = Some(OpenMenu {
+            menu,
+            at,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    /// A deleted topic's sessions are back in Forming; leave the topic if it was open.
+    pub fn topic_deleted(&mut self, topic: &TopicId, window: &mut Window, cx: &mut Context<Self>) {
+        match &mut self.altitude {
+            Altitude::Topic(open) if open == topic => {
+                self.leave_to(Altitude::Everything, window, cx);
+                return;
+            }
+            Altitude::Session { topic: home, .. } if home.as_ref() == Some(topic) => *home = None,
+            _ => {}
+        }
+        self.load(cx);
     }
 
     /// A session shows in Memory as a search for its title, so only titled sessions can.
@@ -451,40 +501,6 @@ impl Workspace {
                 )
                 .child(picker),
         )
-    }
-
-    fn menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let (focus, at) = self.menu.clone()?;
-        let item = div()
-            .id("view-in-memory")
-            .px_3()
-            .py_2()
-            .rounded(px(10.))
-            .cursor_pointer()
-            .hover(|item| item.bg(Theme::selected()).text_color(Theme::on_selected()))
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                this.menu = None;
-                cx.emit(ViewInMemory(focus.clone()));
-                cx.notify();
-            }))
-            .child("View in Memory");
-        Some(deferred(
-            anchored().position(at).child(
-                div()
-                    .min_w(px(200.))
-                    .p_1()
-                    .rounded(px(16.))
-                    .bg(Theme::card())
-                    .border_1()
-                    .border_color(Theme::line())
-                    .text_color(Theme::ink())
-                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.menu = None;
-                        cx.notify();
-                    }))
-                    .child(item),
-            ),
-        ))
     }
 
     fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
@@ -1062,6 +1078,6 @@ impl Render for Workspace {
                     .justify_center()
                     .child(editor.clone())
             }))
-            .children(self.menu(cx))
+            .children(self.menu.as_ref().map(OpenMenu::overlay))
     }
 }

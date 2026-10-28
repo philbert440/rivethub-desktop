@@ -9,7 +9,7 @@ use model::{Page, SessionId};
 use crate::memory::{MemoryEvent, MemoryPage};
 use crate::settings::SettingsPage;
 use crate::text::one_line;
-use crate::workspace::{Attention, ViewInMemory, Workspace};
+use crate::workspace::{Attention, TopicDeleted, ViewInMemory, Workspace};
 use crate::{brand, theme::Theme};
 
 const OPEN_WIDTH: f32 = 208.;
@@ -23,7 +23,7 @@ pub struct Shell {
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
-    _routes: [Subscription; 3],
+    _routes: [Subscription; 4],
 }
 
 impl Shell {
@@ -37,13 +37,22 @@ impl Shell {
                 .update(cx, |memory, cx| memory.focus(focus.clone(), cx));
             this.show(Page::Memory, window, cx);
         });
-        let to_session = cx.subscribe_in(
+        let deleted_in_workspace = cx.subscribe(&workspace, |this, _, TopicDeleted(topic), cx| {
+            this.memory
+                .update(cx, |memory, cx| memory.topic_deleted(topic, cx));
+        });
+        let from_memory = cx.subscribe_in(
             &memory,
             window,
-            |this, memory, event: &MemoryEvent, window, cx| {
-                let MemoryEvent::OpenSession(session) = event;
-                if !this.open_listed(session, window, cx) {
-                    memory.update(cx, MemoryPage::unlisted);
+            |this, memory, event: &MemoryEvent, window, cx| match event {
+                MemoryEvent::OpenSession(session) => {
+                    if !this.open_listed(session, window, cx) {
+                        memory.update(cx, MemoryPage::unlisted);
+                    }
+                }
+                MemoryEvent::TopicDeleted(topic) => {
+                    this.workspace
+                        .update(cx, |workspace, cx| workspace.topic_deleted(topic, window, cx));
                 }
             },
         );
@@ -61,7 +70,7 @@ impl Shell {
             workspace,
             memory,
             settings,
-            _routes: [to_memory, to_session, notices],
+            _routes: [to_memory, deleted_in_workspace, from_memory, notices],
         }
     }
 

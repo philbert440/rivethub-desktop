@@ -72,6 +72,27 @@ fn heading_level(line: &str) -> Option<usize> {
         .filter(|_| line[hashes..].starts_with(' '))
 }
 
+/// The page without the `## Decisions` section rh renders from the topic's decisions, for a view that
+/// shows those decisions itself where they can be changed.
+pub fn without_decisions(markdown: &str) -> String {
+    let mut fenced = false;
+    let mut skipping = false;
+    let mut out = String::with_capacity(markdown.len());
+    for line in markdown.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        let level = if fenced { None } else { heading_level(line) };
+        if let Some(level) = level.filter(|level| *level <= 2) {
+            skipping = level == 2 && line[2..].trim().eq_ignore_ascii_case("Decisions");
+        }
+        if !skipping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// The page as a reader sees it: no front matter, no title heading (the page shows its title),
 /// and no headings with nothing under them, which rh leaves on pages it has not filled yet.
 pub fn readable(markdown: &str) -> String {
@@ -129,7 +150,7 @@ pub fn readable(markdown: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{readable, section};
+    use super::{readable, section, without_decisions};
     use crate::markdown::parse;
 
     #[test]
@@ -139,6 +160,12 @@ mod tests {
             readable(page),
             "## tmux\n\nScopes differ.\n\n### Session\n\n`new-session -e`\n\n```sh\n# not a heading\n```"
         );
+    }
+
+    #[test]
+    fn the_decisions_section_goes_with_its_sub_topic_groups_and_nothing_else() {
+        let page = "# Mesh\n\n## Decisions\n\n- Use step-ca (phil, 2026-10-27)\n\n### Certificates\n\n- Renew weekly\n\n## Summary\n\nThe mesh.\n";
+        assert_eq!(without_decisions(page), "# Mesh\n\n## Summary\n\nThe mesh.\n");
     }
 
     #[test]

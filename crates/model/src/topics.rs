@@ -243,6 +243,7 @@ mod tests {
             title: None,
             status: SessionStatus::Idle,
             model: None,
+            effort: None,
             cwd: None,
             updated_at_ms: WINDOWS.now_ms - hours_ago * HOUR,
             parent: parent.map(id),

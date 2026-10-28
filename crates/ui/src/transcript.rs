@@ -12,6 +12,7 @@ use model::prompt::SentFile;
 
 use crate::markdown_view;
 use crate::session_pane::SessionPane;
+use crate::text::clock;
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,9 +247,12 @@ fn file_chip(label: String) -> AnyElement {
         .into_any_element()
 }
 
-fn sent(prompt: &str, files: &[SentFile], cx: &Context<'_>) -> impl IntoElement {
+/// The prompt as sent, with the time it went out shown while the pointer is over it.
+fn sent(prompt: &str, files: &[SentFile], at_ms: Option<i64>, cx: &Context<'_>) -> impl IntoElement {
     let prompt = prompt.trim();
+    let group = SharedString::from(format!("sent-{}", cx.index));
     div()
+        .group(group.clone())
         .w_full()
         .flex()
         .flex_col()
@@ -268,23 +272,37 @@ fn sent(prompt: &str, files: &[SentFile], cx: &Context<'_>) -> impl IntoElement 
         .when(!prompt.is_empty(), |sent| {
             sent.child(
                 div()
-                    .max_w(cx.column * 0.702)
-                    .px_4()
-                    .py(px(10.))
-                    .rounded(px(20.))
-                    .bg(Theme::raised())
-                    .text_color(Theme::ink())
-                    .child(prompt.to_owned()),
+                    .w_full()
+                    .flex()
+                    .justify_end()
+                    .items_end()
+                    .gap_2()
+                    .children(at_ms.map(|at| {
+                        div()
+                            .flex_none()
+                            .pb(px(10.))
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .invisible()
+                            .group_hover(group, gpui::Styled::visible)
+                            .child(clock(at))
+                    }))
+                    .child(
+                        div()
+                            .max_w(cx.column * 0.702)
+                            .px_4()
+                            .py(px(10.))
+                            .rounded(px(20.))
+                            .bg(Theme::raised())
+                            .text_color(Theme::ink())
+                            .child(prompt.to_owned()),
+                    ),
             )
         })
 }
 
 fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> impl IntoElement {
-    let verdict = if exchange.state == ExchangeState::Failed {
-        "Failed"
-    } else {
-        "Completed"
-    };
+    let verdict = exchange.verdict();
     let tools = exchange.tool_count();
     let detail = if tools == 1 {
         "1 tool call".to_owned()
@@ -310,14 +328,21 @@ fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> 
     .child(chevron(open))
 }
 
-/// The model and output tokens behind an exchange, shown when the pointer is over it.
+/// When the reply finished, and the model and output tokens behind it, shown when the pointer is
+/// over the exchange.
 fn meta(exchange: &Exchange) -> Option<String> {
     let tokens = match exchange.output_tokens {
         0 => None,
         count if count < 1000 => Some(format!("{count} tokens")),
         count => Some(format!("{}.{}k tokens", count / 1000, count % 1000 / 100)),
     };
-    let parts: Vec<String> = exchange.model.iter().cloned().chain(tokens).collect();
+    let parts: Vec<String> = exchange
+        .ended_at_ms
+        .map(clock)
+        .into_iter()
+        .chain(exchange.model.iter().cloned())
+        .chain(tokens)
+        .collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
@@ -370,7 +395,7 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
         .gap_3()
         .py_3();
     if let Some(prompt) = &exchange.prompt {
-        column = column.child(sent(prompt, &exchange.files, cx));
+        column = column.child(sent(prompt, &exchange.files, exchange.asked_at_ms, cx));
     }
     if exchange.has_process() {
         let fold = Fold::Exchange(ix);

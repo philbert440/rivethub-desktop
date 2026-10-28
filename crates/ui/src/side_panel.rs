@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use app::Hub;
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, EventEmitter, Focusable, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Render, SharedString, Styled, Subscription, Window, div, prelude::*, px,
-    rgb,
+    MouseDownEvent, ParentElement, Pixels, Point, Render, SharedString, Styled, Subscription, Window, div,
+    prelude::*, px, rgb,
 };
 use model::agents::{Agent, Roster};
 use model::history::{ChipCounts, HistoryFilter, Phase};
@@ -27,6 +27,7 @@ pub enum PanelEvent {
     NewAgent,
     EditAgent(Agent),
     Renamed(SessionSummary),
+    TopicMenu(TopicId, Point<Pixels>),
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +271,7 @@ impl SidePanel {
                 title: None,
                 status: model::session::SessionStatus::Idle,
                 model: None,
+                effort: None,
                 cwd: None,
                 updated_at_ms: found.latest_ms,
                 parent: None,
@@ -735,6 +737,7 @@ impl SidePanel {
             .pb_2()
             .children(past.iter().enumerate().map(|(index, past)| {
                 let open = past.id.clone();
+                let menu = past.id.clone();
                 div()
                     .id(("past", index))
                     .px_2()
@@ -748,6 +751,13 @@ impl SidePanel {
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.emit(PanelEvent::OpenTopic(open.clone()));
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                            cx.emit(PanelEvent::TopicMenu(menu.clone(), event.position));
+                            cx.stop_propagation();
+                        }),
+                    )
                     .child(
                         div()
                             .flex_1()

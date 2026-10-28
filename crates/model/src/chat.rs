@@ -80,10 +80,16 @@ pub struct Exchange {
     pub state: ExchangeState,
     pub model: Option<String>,
     pub output_tokens: u64,
+    /// When the person sent the prompt, in epoch milliseconds.
+    pub asked_at_ms: Option<i64>,
+    /// When the exchange began: the prompt, or for a reply that came without one its first turn.
+    pub started_at_ms: Option<i64>,
+    /// When the last reply turn ended.
+    pub ended_at_ms: Option<i64>,
 }
 
 impl Exchange {
-    fn new(prompt: Option<String>, files: Vec<SentFile>) -> Self {
+    fn new(prompt: Option<String>, files: Vec<SentFile>, asked_at_ms: Option<i64>) -> Self {
         Self {
             prompt,
             files,
@@ -92,6 +98,33 @@ impl Exchange {
             state: ExchangeState::Completed,
             model: None,
             output_tokens: 0,
+            asked_at_ms,
+            started_at_ms: asked_at_ms,
+            ended_at_ms: None,
+        }
+    }
+
+    /// How long a finished exchange took, from its start to the end of its last reply turn.
+    /// A running exchange, or one whose harness recorded no times, has none.
+    pub fn took_ms(&self) -> Option<i64> {
+        if self.state == ExchangeState::Working {
+            return None;
+        }
+        let took = self.ended_at_ms? - self.started_at_ms?;
+        (took >= 0).then_some(took)
+    }
+
+    /// The fold header's verdict: "Completed in 42s", "Stopped after 8s", "Failed after 3m 5s", or
+    /// without a time when the exchange has none.
+    pub fn verdict(&self) -> String {
+        let (word, joint) = match self.state {
+            ExchangeState::Failed => ("Failed", "after"),
+            ExchangeState::Stopped => ("Stopped", "after"),
+            ExchangeState::Working | ExchangeState::Completed => ("Completed", "in"),
+        };
+        match self.took_ms() {
+            Some(took) => format!("{word} {joint} {}", elapsed(took)),
+            None => word.to_owned(),
         }
     }
 
@@ -104,6 +137,8 @@ impl Exchange {
 
     fn absorb(&mut self, turn: &Turn) {
         self.take_answer_as_note();
+        self.started_at_ms = self.started_at_ms.or(turn.started_at_ms);
+        self.ended_at_ms = self.ended_at_ms.max(turn.ended_at_ms.or(turn.started_at_ms));
         if turn.model.is_some() {
             self.model.clone_from(&turn.model);
         }
@@ -155,10 +190,14 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
                     exchange.state = ExchangeState::Stopped;
                 }
             }
-            Role::User => out.push(Exchange::new(Some(turn.text.clone()), turn.files.clone())),
+            Role::User => out.push(Exchange::new(
+                Some(turn.text.clone()),
+                turn.files.clone(),
+                turn.started_at_ms,
+            )),
             Role::Assistant => {
                 if out.is_empty() {
-                    out.push(Exchange::new(None, Vec::new()));
+                    out.push(Exchange::new(None, Vec::new(), None));
                 }
                 if let Some(exchange) = out.last_mut() {
                     exchange.absorb(turn);
@@ -204,6 +243,16 @@ pub fn arrived(count: usize, last: Option<ExchangeState>, now: &[Exchange]) -> b
             && now
                 .last()
                 .is_some_and(|exchange| exchange.state != ExchangeState::Working))
+}
+
+/// A span of time as a reader says it: "42s", "3m 5s", "1h 2m". Anything under a second is "1s".
+pub fn elapsed(ms: i64) -> String {
+    let seconds = ((ms + 500) / 1000).max(1);
+    match seconds {
+        ..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m {}s", seconds / 60, seconds % 60),
+        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
+    }
 }
 
 fn is_interruption(text: &str) -> bool {
@@ -291,7 +340,7 @@ fn capitalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExchangeState, Step, arrived, exchanges, group_summary, thought_summary};
+    use super::{ExchangeState, Step, arrived, elapsed, exchanges, group_summary, thought_summary};
     use crate::session::{Role, ToolCall, ToolState, Turn};
     use crate::tools::ToolInput;
 
@@ -304,6 +353,8 @@ mod tests {
             model: None,
             output_tokens: 0,
             files: Vec::new(),
+            started_at_ms: None,
+            ended_at_ms: None,
             tools: tools
                 .iter()
                 .map(|(name, state)| ToolCall {
@@ -410,6 +461,38 @@ mod tests {
             group_summary(&tools),
             "Read 2 files, ran 2 commands and ran 1 search, etc."
         );
+    }
+
+    #[test]
+    fn an_exchange_runs_from_its_prompt_to_the_end_of_its_last_reply() {
+        let timed = |role, text, started: i64, ended: i64| {
+            let mut timed = turn(role, text, &[]);
+            timed.started_at_ms = Some(started);
+            timed.ended_at_ms = Some(ended);
+            timed
+        };
+        let turns = [
+            timed(Role::User, "go", 1_000, 1_000),
+            timed(Role::Assistant, "Looking.", 3_000, 20_000),
+            timed(Role::Assistant, "Done.", 21_000, 43_400),
+        ];
+        let done = exchanges(&turns, None);
+        assert_eq!(done[0].took_ms(), Some(42_400));
+        assert_eq!(done[0].verdict(), "Completed in 42s");
+        let running = exchanges(&turns[..1], Some(&turns[1]));
+        assert_eq!(running[0].took_ms(), None);
+        let untimed = exchanges(
+            &[turn(Role::User, "go", &[]), turn(Role::Assistant, "ok", &[])],
+            None,
+        );
+        assert_eq!(untimed[0].verdict(), "Completed");
+    }
+
+    #[test]
+    fn elapsed_time_reads_in_the_largest_two_units() {
+        assert_eq!(elapsed(120), "1s");
+        assert_eq!(elapsed(185_000), "3m 5s");
+        assert_eq!(elapsed(3_720_000), "1h 2m");
     }
 
     #[test]

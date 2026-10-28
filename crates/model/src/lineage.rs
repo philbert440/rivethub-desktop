@@ -109,6 +109,7 @@ mod tests {
             title: Some(native.into()),
             status: SessionStatus::Idle,
             model: None,
+            effort: None,
             cwd: None,
             updated_at_ms: 0,
             parent: parent.map(id),

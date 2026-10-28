@@ -1,4 +1,5 @@
 mod ask;
+mod decisions;
 mod tidy;
 mod topics;
 
@@ -7,6 +8,7 @@ use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     ScrollHandle, Styled, Subscription, Window, div, prelude::*, px,
 };
+use model::decisions::Group;
 use model::markdown::Block;
 use model::memory::{Found, Period};
 use model::wiki::{Listing, Page};
@@ -14,6 +16,7 @@ use model::{SessionId, TopicId};
 
 use crate::brand;
 use crate::input::{Submitted, TextInput};
+use crate::menu::OpenMenu;
 use crate::shell;
 use crate::theme::Theme;
 
@@ -54,6 +57,7 @@ pub enum Focus {
 
 pub enum MemoryEvent {
     OpenSession(SessionId),
+    TopicDeleted(TopicId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,8 +86,11 @@ pub struct MemoryPage {
     loose: Vec<Listing>,
     opened: Option<Opened>,
     reading: Option<Reading>,
+    decisions: Option<Vec<Group>>,
+    deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
+    menu: Option<OpenMenu>,
     _submitted: [Subscription; 2],
 }
 
@@ -123,8 +130,11 @@ impl MemoryPage {
             loose: Vec::new(),
             opened: None,
             reading: None,
+            decisions: None,
+            deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
+            menu: None,
             _submitted: [asked, found],
         };
         page.load_tidy(cx);
@@ -240,5 +250,6 @@ impl Render for MemoryPage {
             .flex_col()
             .child(shell::header().child(shell::title("Memory")).child(self.tabs(cx)))
             .child(shell::tile().flex().flex_col().child(content))
+            .children(self.menu.as_ref().map(OpenMenu::overlay))
     }
 }

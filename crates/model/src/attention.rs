@@ -28,6 +28,7 @@ mod tests {
             title: None,
             status: SessionStatus::Active,
             model: None,
+            effort: None,
             cwd: None,
             updated_at_ms,
             parent: None,

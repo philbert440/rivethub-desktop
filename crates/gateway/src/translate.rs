@@ -65,10 +65,8 @@ pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::R
 }
 
 pub fn hits(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::search::Hit> {
-    use wire::message::Role as HitRole;
     raw.results
         .into_iter()
-        .filter(|hit| !matches!(hit.role, Some(HitRole::Tool | HitRole::System)))
         .filter_map(|hit| {
             let id = hit.session_id?;
             let parsed: wire::session_id::SessionId = id.parse().ok()?;
@@ -89,7 +87,9 @@ pub fn attachment(raw: wire::gateway::uploads::UploadCreated) -> model::prompt::
     }
 }
 
-pub fn prompt(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::SessionPostRequest {
+pub fn prompt(
+    prompt: &model::prompt::Prompt,
+) -> Result<wire::gateway::sessions::SessionPostRequest, GatewayError> {
     let attachments = prompt
         .attachments
         .iter()
@@ -99,26 +99,34 @@ pub fn prompt(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::Sessio
             name: Some(attachment.name.clone()),
         })
         .collect::<Vec<_>>();
-    wire::gateway::sessions::SessionPostRequest {
+    let thinking = prompt
+        .switch
+        .effort
+        .as_deref()
+        .map(|effort| {
+            effort
+                .parse::<wire::stream::ThinkingLevel>()
+                .map_err(|_| GatewayError::Refused(format!("{effort} is not an effort rh knows")))
+        })
+        .transpose()?;
+    Ok(wire::gateway::sessions::SessionPostRequest {
         exclude_tools: None,
         text: prompt.text.clone(),
         user_id: None,
         agent: None,
-        thinking: None,
+        thinking,
         system_prompt: None,
         attachments: Some(attachments).filter(|list| !list.is_empty()),
         harness: None,
-        model: None,
+        model: prompt.switch.model.clone(),
         working_dir: None,
-    }
+    })
 }
 
 pub fn found(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::memory::Found> {
     use wire::gateway::memory::MemoryHitSource;
-    use wire::message::Role as HitRole;
     raw.results
         .into_iter()
-        .filter(|hit| !matches!(hit.role, Some(HitRole::Tool | HitRole::System)))
         .map(|hit| model::memory::Found {
             source: match hit.source {
                 MemoryHitSource::Message => model::memory::Source::Message,
@@ -154,6 +162,31 @@ pub fn page(raw: wire::gateway::wiki::WikiPageResponse) -> model::wiki::Page {
         tags: raw.tags,
         updated_ms: raw.updated_at.timestamp_millis(),
         markdown: raw.markdown,
+    }
+}
+
+pub fn switches(raw: Option<wire::gateway::sessions::SessionSwitches>) -> model::session::Switches {
+    raw.map_or_else(model::session::Switches::default, |raw| {
+        model::session::Switches {
+            model: raw.model,
+            effort: raw.effort,
+        }
+    })
+}
+
+pub fn decision(raw: wire::gateway::topics::TopicDecision) -> model::decisions::Decision {
+    use model::decisions::Status;
+    use wire::gateway::topics::DecisionStatus;
+    model::decisions::Decision {
+        id: raw.id,
+        topic: model::TopicId::new(raw.topic_id),
+        text: raw.text,
+        status: match raw.status {
+            DecisionStatus::Active => Status::Active,
+            DecisionStatus::Superseded => Status::Superseded,
+        },
+        by: raw.by,
+        updated_ms: raw.updated_at.timestamp_millis(),
     }
 }
 
@@ -248,6 +281,7 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
         title: raw.title,
         status: session_status(raw.status),
         model: raw.model,
+        effort: raw.effort,
         cwd: raw.cwd,
         updated_at_ms: raw.updated_at.timestamp_millis(),
         parent: raw.parent_session_id.as_ref().map(session),
@@ -268,6 +302,8 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
         thinking: raw.thinking.unwrap_or_default(),
         model: raw.model,
         output_tokens: raw.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
+        started_at_ms: raw.started_at_ms,
+        ended_at_ms: raw.ended_at_ms,
         files: raw
             .attachments
             .unwrap_or_default()
@@ -381,6 +417,16 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_effort_the_composer_offers_is_one_rh_takes() {
+        for effort in model::agents::EFFORTS {
+            assert!(
+                effort.parse::<wire::stream::ThinkingLevel>().is_ok(),
+                "rh has no {effort} effort"
+            );
+        }
+    }
 
     #[test]
     fn context_counts_cached_prompt_tokens_once() {

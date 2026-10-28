@@ -6234,6 +6234,7 @@ name = "ui"
 version = "0.1.0"
 dependencies = [
  "app",
+ "chrono",
  "gateway",
  "gpui",
  "gpui_platform",
@@ -7348,7 +7349,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=bf869f9#bf869f9af96955e36bd424c62806a268439592ef"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=1e92a224cb909995341261f46dac2054132baffd#1e92a224cb909995341261f46dac2054132baffd"
 dependencies = [
  "base64 0.22.1",
  "chrono",
