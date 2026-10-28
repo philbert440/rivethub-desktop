@@ -338,8 +338,8 @@ impl SessionPane {
             input.set_text(current.trim(), cx);
             input
         });
-        let submitted = cx.subscribe(&input, |this, _, Submitted(title), cx| {
-            this.commit_rename(title.clone(), cx);
+        let submitted = cx.subscribe_in(&input, window, |this, _, Submitted(title), window, cx| {
+            this.commit_rename(title.clone(), window, cx);
         });
         window.focus(&input.focus_handle(cx), cx);
         self.renaming = Some(Renaming {
@@ -350,25 +350,31 @@ impl SessionPane {
         cx.notify();
     }
 
-    fn commit_rename(&mut self, title: String, cx: &mut Context<Self>) {
+    /// A finished rename hands the keyboard back to the composer, as cancelling does.
+    fn commit_rename(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         let summary = self.summary.clone();
+        let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let renamed = hub.rename(&summary, title).await;
-            this.update(cx, |this, cx| {
-                match renamed {
-                    Ok(renamed) => {
-                        this.summary.title = renamed.title;
-                        this.renaming = None;
-                        cx.emit(PaneEvent::Renamed(Box::new(this.summary.clone())));
-                    }
-                    Err(err) => {
-                        if let Some(renaming) = this.renaming.as_mut() {
-                            renaming.problem = Some(format!("rename failed: {err}"));
+            cx.update_window(window_handle, |_, window, cx| {
+                this.update(cx, |this, cx| {
+                    match renamed {
+                        Ok(renamed) => {
+                            this.summary.title = renamed.title;
+                            this.renaming = None;
+                            window.focus(&this.composer.focus_handle(cx), cx);
+                            cx.emit(PaneEvent::Renamed(Box::new(this.summary.clone())));
+                        }
+                        Err(err) => {
+                            if let Some(renaming) = this.renaming.as_mut() {
+                                renaming.problem = Some(format!("rename failed: {err}"));
+                            }
                         }
                     }
-                }
-                cx.notify();
+                    cx.notify();
+                })
+                .ok();
             })
             .ok();
         })
@@ -456,6 +462,9 @@ impl SessionPane {
             let running = hub.has_terminal(&summary).await.unwrap_or(false);
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| {
+                    if this.mode != Mode::Terminal {
+                        return;
+                    }
                     if running {
                         this.attach_terminal(window, cx);
                     } else {

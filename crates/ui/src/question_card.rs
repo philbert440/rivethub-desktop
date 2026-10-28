@@ -167,7 +167,7 @@ impl QuestionCard {
 }
 
 impl Render for QuestionCard {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(asked) = self.asked.as_ref().filter(|asked| !asked.answered) else {
             return div();
         };
@@ -194,7 +194,16 @@ impl Render for QuestionCard {
             .flex_col()
             .gap_3()
             .child(div().text_xs().text_color(Theme::accent()).child(heading))
-            .children(questions)
+            .child(
+                div()
+                    .id("ask-questions")
+                    .max_h(window.viewport_size().height * 0.5)
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(questions),
+            )
             .when(!one_click, |card| {
                 card.child(
                     div().flex().justify_end().child(
