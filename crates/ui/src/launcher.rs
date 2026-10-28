@@ -262,7 +262,7 @@ impl Launcher {
                     this.choice = Some(pick.clone());
                     cx.notify();
                 }))
-                .child(offer.id.as_str().to_owned())
+                .child(offer.id.display_name().to_owned())
                 .into_any_element()
         });
         let here = self.node.as_deref().unwrap_or("this node");
