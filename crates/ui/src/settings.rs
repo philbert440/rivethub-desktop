@@ -3,7 +3,7 @@ use gpui::{
     AnyElement, Context, Div, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
     prelude::*, px,
 };
-use model::health::{MemoryHealth, Verdict};
+use model::health::{MemoryHealth, Status};
 use model::mesh::Node;
 use model::trust::{Certificate, Trust, Validity};
 
@@ -176,10 +176,9 @@ impl SettingsPage {
             Load::Ready(health) => health,
             other => return pending(other),
         };
-        let (tone, label) = match health.verdict(now_ms()) {
-            Verdict::Ok => (Theme::accent(), "Memory checks OK"),
-            Verdict::NeedsAttention => (Theme::warn(), "Memory needs attention"),
-            Verdict::Stale => (Theme::warn(), "Health observation is stale"),
+        let (tone, label) = match health.status {
+            Status::Ok => (Theme::accent(), "Memory checks OK"),
+            Status::Degraded | Status::Error => (Theme::warn(), "Memory needs attention"),
         };
         vec![
             row()

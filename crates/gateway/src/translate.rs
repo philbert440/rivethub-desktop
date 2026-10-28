@@ -106,7 +106,6 @@ pub fn memory_health(
             MemoryHealthStatus::Degraded => model::health::Status::Degraded,
             MemoryHealthStatus::Error => model::health::Status::Error,
         },
-        observed_at_ms: health.observed_at.map(|at| at.timestamp_millis()),
         semantic: health.embeddings.status == EmbedStatus::Ok,
         conversations: stats.conversations,
         messages: stats.messages,
