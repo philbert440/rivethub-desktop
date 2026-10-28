@@ -1,7 +1,7 @@
 use app::Hub;
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window, div, prelude::*, px, rgb,
+    AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, div, prelude::*, px, rgb,
 };
 use model::agents::{Agent, Roster};
 use model::search::SessionMatch;
@@ -12,11 +12,15 @@ use model::{SessionId, TopicId, lineage};
 use crate::input::{Submitted, TextInput};
 use crate::theme::Theme;
 
+const HISTORY_PAGE: usize = 100;
+
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
     Open(SessionSummary),
     OpenTopic(TopicId),
     Start(Agent),
+    NewAgent,
+    EditAgent(Agent),
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +67,7 @@ pub struct SidePanel {
     agents_open: bool,
     past_open: bool,
     history_open: bool,
+    history_shown: usize,
     collapsed: std::collections::HashSet<SessionId>,
     _submitted: Subscription,
 }
@@ -89,6 +94,7 @@ impl SidePanel {
             agents_open: true,
             past_open: true,
             history_open: true,
+            history_shown: HISTORY_PAGE,
             collapsed: std::collections::HashSet::new(),
             _submitted: submitted,
         };
@@ -117,7 +123,7 @@ impl SidePanel {
         cx.notify();
     }
 
-    fn load_agents(&self, cx: &mut Context<Self>) {
+    pub fn load_agents(&self, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let loaded = hub.agents().await;
@@ -235,6 +241,13 @@ impl SidePanel {
                             .text_color(Theme::ink_dim())
                             .child(agent.node.clone().unwrap_or_default()),
                     );
+                let edit = agent.clone();
+                let chip = chip.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                        cx.emit(PanelEvent::EditAgent(edit.clone()));
+                    }),
+                );
                 if launchable {
                     let start = agent.clone();
                     chip.cursor_grab()
@@ -249,65 +262,105 @@ impl SidePanel {
                     chip.opacity(0.55).into_any_element()
                 }
             }))
+            .child(
+                div()
+                    .id("add-agent")
+                    .h(px(30.))
+                    .px_3()
+                    .rounded(px(15.))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(Theme::line())
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .text_color(Theme::ink_dim())
+                    .hover(|chip| chip.text_color(Theme::ink()))
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::NewAgent)))
+                    .child("+ Add agent"),
+            )
             .into_any_element()
     }
 
     fn history(&self, cx: &mut Context<Self>) -> AnyElement {
         let rows = lineage::nest(&self.history, &self.collapsed);
+        let hidden = rows.len().saturating_sub(self.history_shown);
         div()
             .flex()
             .flex_col()
-            .children(rows.into_iter().take(60).enumerate().map(|(index, row)| {
-                let open = row.session.clone();
-                let fold = row.session.id.clone();
-                let indent = px(16. * f32::from(u8::try_from(row.depth.min(4)).unwrap_or(4)));
-                div()
-                    .id(("history", index))
-                    .pl(px(8.) + indent)
-                    .pr_2()
-                    .py(px(7.))
-                    .rounded(px(12.))
-                    .cursor_pointer()
-                    .hover(|line| line.bg(Theme::card()))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .on_drag(DraggedSession(row.session.clone()), |dragged, _, _, cx| {
-                        cx.new(|_| DragGhost(crate::text::one_line(dragged.0.title.as_deref())))
-                    })
-                    .on_click(
-                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Open(open.clone()))),
-                    )
-                    .when(row.depth > 0, |line| {
-                        line.child(div().text_color(Theme::ink_dim()).child("↳"))
-                    })
-                    .child(
+            .children(
+                rows.into_iter()
+                    .take(self.history_shown)
+                    .enumerate()
+                    .map(|(index, row)| {
+                        let open = row.session.clone();
+                        let fold = row.session.id.clone();
+                        let indent = px(16. * f32::from(u8::try_from(row.depth.min(4)).unwrap_or(4)));
                         div()
-                            .flex_1()
-                            .truncate()
-                            .text_color(Theme::ink())
-                            .child(crate::text::one_line(row.session.title.as_deref())),
-                    )
-                    .when(row.children > 0, |line| {
-                        line.child(
-                            div()
-                                .id(("fold", index))
-                                .text_color(Theme::ink_dim())
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    if !this.collapsed.remove(&fold) {
-                                        this.collapsed.insert(fold.clone());
-                                    }
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }))
-                                .child(if row.collapsed {
-                                    format!("▸ {}", row.children)
-                                } else {
-                                    "▾".to_owned()
-                                }),
-                        )
-                    })
-            }))
+                            .id(("history", index))
+                            .pl(px(8.) + indent)
+                            .pr_2()
+                            .py(px(7.))
+                            .rounded(px(12.))
+                            .cursor_pointer()
+                            .hover(|line| line.bg(Theme::card()))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .on_drag(DraggedSession(row.session.clone()), |dragged, _, _, cx| {
+                                cx.new(|_| DragGhost(crate::text::one_line(dragged.0.title.as_deref())))
+                            })
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.emit(PanelEvent::Open(open.clone()));
+                            }))
+                            .when(row.depth > 0, |line| {
+                                line.child(div().text_color(Theme::ink_dim()).child("↳"))
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .truncate()
+                                    .text_color(Theme::ink())
+                                    .child(crate::text::one_line(row.session.title.as_deref())),
+                            )
+                            .when(row.children > 0, |line| {
+                                line.child(
+                                    div()
+                                        .id(("fold", index))
+                                        .text_color(Theme::ink_dim())
+                                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                            if !this.collapsed.remove(&fold) {
+                                                this.collapsed.insert(fold.clone());
+                                            }
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }))
+                                        .child(if row.collapsed {
+                                            format!("▸ {}", row.children)
+                                        } else {
+                                            "▾".to_owned()
+                                        }),
+                                )
+                            })
+                    }),
+            )
+            .when(hidden > 0, |list| {
+                list.child(
+                    div()
+                        .id("history-more")
+                        .px_2()
+                        .py(px(7.))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(Theme::ink_dim())
+                        .hover(|more| more.text_color(Theme::ink()))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.history_shown += HISTORY_PAGE;
+                            cx.notify();
+                        }))
+                        .child(format!("Show {} more of {hidden}", hidden.min(HISTORY_PAGE))),
+                )
+            })
             .into_any_element()
     }
 

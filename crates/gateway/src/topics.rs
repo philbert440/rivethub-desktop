@@ -24,7 +24,7 @@ fn listed(list: TopicList) -> Vec<Topic> {
 }
 
 impl Gateway {
-    fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url, GatewayError> {
+    pub(crate) fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url, GatewayError> {
         let mut url = reqwest::Url::parse(&self.base_url)
             .map_err(|err| GatewayError::Refused(format!("gateway url: {err}")))?;
         url.path_segments_mut()
