@@ -18,6 +18,15 @@ pub fn session(id: &wire::session_id::SessionId) -> SessionId {
     SessionId::new(HarnessId::new(harness), NativeSessionId::new(native))
 }
 
+pub fn session_status(status: HarnessSessionStatus) -> SessionStatus {
+    match status {
+        HarnessSessionStatus::Active => SessionStatus::Active,
+        HarnessSessionStatus::Idle => SessionStatus::Idle,
+        HarnessSessionStatus::Ended => SessionStatus::Ended,
+        HarnessSessionStatus::Error => SessionStatus::Failed,
+    }
+}
+
 pub fn roster_command(id: &SessionId) -> Result<String, GatewayError> {
     let harness: wire::harness::HarnessId = id
         .harness()
@@ -237,12 +246,7 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     SessionSummary {
         id: session(&raw.session_id),
         title: raw.title,
-        status: match raw.status {
-            HarnessSessionStatus::Active => SessionStatus::Active,
-            HarnessSessionStatus::Idle => SessionStatus::Idle,
-            HarnessSessionStatus::Ended => SessionStatus::Ended,
-            HarnessSessionStatus::Error => SessionStatus::Failed,
-        },
+        status: session_status(raw.status),
         model: raw.model,
         cwd: raw.cwd,
         updated_at_ms: raw.updated_at.timestamp_millis(),

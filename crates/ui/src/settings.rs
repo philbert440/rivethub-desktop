@@ -171,6 +171,36 @@ impl SettingsPage {
         }
     }
 
+    fn notifications(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let prefs = self.hub.preferences();
+        vec![
+            toggle(
+                "notify-finished",
+                "An agent finished a reply",
+                "When you're in another window or another session.",
+                prefs.notify_finished,
+                cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.notify_finished = !prefs.notify_finished;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+            toggle(
+                "notify-needs-you",
+                "A session needs you",
+                "When an agent waits on an approval or an answer.",
+                prefs.notify_needs_you,
+                cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.notify_needs_you = !prefs.notify_needs_you;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+        ]
+    }
+
     fn memory(&self) -> Vec<AnyElement> {
         let health = match &self.memory {
             Load::Ready(health) => health,
@@ -238,6 +268,7 @@ impl Render for SettingsPage {
                             .flex_col()
                             .gap_8()
                             .child(section("Nodes", self.nodes()))
+                            .child(section("Notifications", self.notifications(cx)))
                             .child(section("This device", self.device()))
                             .child(section("Certificate authority", self.authority()))
                             .child(section("Memory", self.memory())),
@@ -283,6 +314,42 @@ fn field(label: &'static str, value: Div) -> AnyElement {
     row()
         .child(div().text_color(Theme::ink_dim()).child(label))
         .child(value)
+        .into_any_element()
+}
+
+/// A row that flips a setting when clicked anywhere, with a switch showing its state.
+fn toggle(
+    id: &'static str,
+    label: &'static str,
+    detail: &'static str,
+    on: bool,
+    flip: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    let track = div()
+        .w(px(36.))
+        .h(px(20.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .px(px(3.))
+        .rounded_full()
+        .bg(if on { Theme::accent() } else { Theme::line() })
+        .when(on, Styled::justify_end)
+        .child(div().size(px(14.)).rounded_full().bg(Theme::ink()));
+    row()
+        .id(id)
+        .cursor_pointer()
+        .hover(|row| row.bg(Theme::raised()))
+        .on_click(flip)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(label)
+                .child(dim(detail).text_xs()),
+        )
+        .child(track)
         .into_any_element()
 }
 
