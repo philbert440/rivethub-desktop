@@ -81,6 +81,7 @@ impl Workspace {
                     PanelEvent::Start(agent) => this.start_with(agent.clone(), None, window, cx),
                     PanelEvent::NewAgent => this.edit_agent(None, window, cx),
                     PanelEvent::EditAgent(agent) => this.edit_agent(Some(agent), window, cx),
+                    PanelEvent::Renamed(renamed) => this.renamed(renamed, cx),
                 },
             );
         let feed = hub.watch_workspace();
@@ -256,17 +257,26 @@ impl Workspace {
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
         self.pane_events = Some(cx.subscribe(&pane, |this, _, event: &PaneEvent, cx| match event {
-            PaneEvent::Renamed(renamed) => {
-                if let Some(known) = this.sessions.iter_mut().find(|known| known.id == renamed.id) {
-                    known.title.clone_from(&renamed.title);
-                }
-                this.sync_panel(cx);
-                cx.notify();
-            }
+            PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
         }));
         self.pane = Some(pane);
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };
+        cx.notify();
+    }
+
+    fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
+        if let Some(known) = self.sessions.iter_mut().find(|known| known.id == renamed.id) {
+            known.title.clone_from(&renamed.title);
+        }
+        if let Some(pane) = self
+            .pane
+            .clone()
+            .filter(|pane| pane.read(cx).session_id() == &renamed.id)
+        {
+            pane.update(cx, |pane, cx| pane.take_listing(renamed, cx));
+        }
+        self.sync_panel(cx);
         cx.notify();
     }
 

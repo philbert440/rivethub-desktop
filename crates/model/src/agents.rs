@@ -99,6 +99,19 @@ impl Agent {
     pub fn launchable(&self) -> bool {
         self.harness.is_some()
     }
+
+    /// Whether a typed filter finds this agent by its name, node, harness or model.
+    pub fn matches(&self, query: &str) -> bool {
+        crate::search::mentions(
+            [
+                self.name.as_str(),
+                self.node.as_deref().unwrap_or_default(),
+                self.harness.as_ref().map_or("", HarnessId::display_name),
+                self.model.as_deref().unwrap_or_default(),
+            ],
+            query,
+        )
+    }
 }
 
 pub fn parse_color(hex: &str) -> Option<u32> {
