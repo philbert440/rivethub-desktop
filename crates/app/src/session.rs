@@ -183,7 +183,7 @@ impl Actor {
                 Ok(())
             }
             Command::Answer(prompt) => {
-                if self.view.read().busy() {
+                if self.view.read().held_by_question() {
                     self.queue.write().push_front(prompt);
                     self.changed();
                     match self.gateway().await {

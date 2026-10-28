@@ -343,6 +343,15 @@ impl SessionView {
         self.live.is_some() || self.activity != Activity::Idle
     }
 
+    /// Whether a turn is still running on an open question: streaming now, or, on a stream opened
+    /// mid-turn, an ask tool the transcript still shows running.
+    pub fn held_by_question(&self) -> bool {
+        self.busy()
+            || self
+                .open_questions()
+                .is_some_and(|(tool, _)| tool.state == ToolState::Running)
+    }
+
     pub fn needs_you(&self) -> bool {
         !self.approvals.is_empty() || self.activity == Activity::Blocked
     }
