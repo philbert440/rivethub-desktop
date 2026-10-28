@@ -236,6 +236,18 @@ impl SessionView {
         }
     }
 
+    /// A fresh stream replays only the transcript, so a turn the old one left running and a
+    /// failure it reported no longer stand; a turn still running says so again as it streams.
+    pub fn reconnected(&mut self) {
+        self.activity = Activity::Idle;
+        self.error = None;
+    }
+
+    /// A turn went through, so an earlier failure no longer stands.
+    pub fn accepted(&mut self) {
+        self.error = None;
+    }
+
     fn live_turn(&mut self) -> &mut Turn {
         self.activity = Activity::Working;
         self.live.get_or_insert_with(Turn::assistant)
@@ -343,6 +355,20 @@ mod tests {
         assert_eq!(live.text, "Hello");
         assert_eq!(live.tools[0].state, ToolState::Failed);
         assert_eq!(view.activity(), Activity::Working);
+    }
+
+    #[test]
+    fn a_reconnect_drops_a_turn_and_a_failure_the_old_stream_left_open() {
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::AssistantText("Wor".into()));
+        view.apply(SessionEvent::Error("connection reset".into()));
+        view.reconnected();
+        view.apply(SessionEvent::Snapshot {
+            turns: Vec::new(),
+            context: None,
+        });
+        assert!(!view.busy());
+        assert_eq!(view.error(), None);
     }
 
     #[test]
