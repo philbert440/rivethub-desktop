@@ -108,7 +108,10 @@ impl Actor {
             Err(err) => Err(err),
         };
         match outcome {
-            Ok(()) => {}
+            Ok(()) => {
+                self.view.write().accepted();
+                self.changed();
+            }
             Err(err) if err.is_turn_in_flight() => {
                 self.queue.write().push_front(prompt);
                 self.changed();
@@ -132,6 +135,8 @@ impl Actor {
             match opened {
                 Ok(mut stream) => {
                     retry = FIRST_RETRY;
+                    self.view.write().reconnected();
+                    self.changed();
                     stream.resync();
                     loop {
                         tokio::select! {
