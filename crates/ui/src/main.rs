@@ -1,5 +1,6 @@
 mod brand;
 mod input;
+mod launcher;
 mod markdown_view;
 mod session_pane;
 mod side_panel;

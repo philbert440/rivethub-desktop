@@ -51,6 +51,8 @@ struct CreateSession<'a> {
     harness: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
 }
 
 impl Gateway {
@@ -115,10 +117,15 @@ impl Gateway {
         Ok(translate::hits(found))
     }
 
-    pub async fn start_session(&self, harness: &HarnessId) -> Result<SessionSummary, GatewayError> {
+    pub async fn start_session(
+        &self,
+        harness: &HarnessId,
+        model: Option<&str>,
+    ) -> Result<SessionSummary, GatewayError> {
         self.create_session(CreateSession {
             harness: Some(harness.as_str()),
             agent_id: None,
+            model,
         })
         .await
     }
@@ -127,6 +134,7 @@ impl Gateway {
         self.create_session(CreateSession {
             harness: None,
             agent_id: Some(agent_id),
+            model: None,
         })
         .await
     }

@@ -13,6 +13,7 @@ use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
+use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
@@ -21,7 +22,6 @@ use crate::{brand, theme::Theme};
 
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
-const CLAUDE: &str = "claude-code";
 const HOUR_MS: i64 = 60 * 60 * 1000;
 const FORMING_MS: i64 = 24 * HOUR_MS;
 const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
@@ -60,7 +60,7 @@ pub struct Workspace {
     panel: Entity<SidePanel>,
     panel_open: bool,
     placing: Option<Placing>,
-    launching: Option<(Entity<TopicPicker>, Subscription)>,
+    launching: Option<(Entity<Launcher>, Subscription)>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     _feed: [gpui::Task<()>; 2],
@@ -363,37 +363,49 @@ impl Workspace {
     }
 
     fn launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Altitude::Topic(topic) = &self.altitude {
-            let launch = Launch::In(topic.clone());
-            self.start_session(launch, window, cx);
-            return;
-        }
+        let preset = match &self.altitude {
+            Altitude::Topic(topic) => self
+                .topic(topic)
+                .map(|known| (known.id.clone(), known.name.clone())),
+            _ => None,
+        };
         let topics = self.topics.clone();
-        let picker = cx.new(|cx| TopicPicker::new(topics, Some("No topic yet · start in Forming"), cx));
-        let events = cx.subscribe_in(&picker, window, |this, _, event: &PickerEvent, window, cx| {
+        let hub = self.hub.clone();
+        let launcher = cx.new(|cx| Launcher::new(&hub, topics, preset, cx));
+        let events = cx.subscribe_in(&launcher, window, |this, _, event: &LauncherEvent, window, cx| {
             this.launching = None;
-            let launch = match event {
-                PickerEvent::Chose(topic) => Launch::In(topic.clone()),
-                PickerEvent::Create(name) => Launch::New(name.clone()),
-                PickerEvent::NoTopic => Launch::Forming,
-                PickerEvent::Dismissed => {
-                    window.focus(&this.focus, cx);
-                    cx.notify();
-                    return;
-                }
+            let LauncherEvent::Start { choice, target } = event else {
+                window.focus(&this.focus, cx);
+                cx.notify();
+                return;
             };
-            this.start_session(launch, window, cx);
+            let launch = match target {
+                Target::Forming => Launch::Forming,
+                Target::In(topic) => Launch::In(topic.clone()),
+                Target::New(name) => Launch::New(name.clone()),
+            };
+            match choice.clone() {
+                Choice::Agent(agent) => this.start_agent(agent, launch, window, cx),
+                Choice::Harness { harness, model } => this.start_session(launch, harness, model, window, cx),
+            }
         });
-        window.focus(&picker.focus_handle(cx), cx);
-        self.launching = Some((picker, events));
+        window.focus(&launcher.focus_handle(cx), cx);
+        self.launching = Some((launcher, events));
         cx.notify();
     }
 
-    fn start_session(&mut self, launch: Launch, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_session(
+        &mut self,
+        launch: Launch,
+        harness: HarnessId,
+        model: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let started = hub.start_session(HarnessId::new(CLAUDE)).await;
+            let started = hub.start_session(harness, model).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| this.started(started, launch, window, cx))
                     .ok();
@@ -410,8 +422,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_agent(agent, topic.map_or(Launch::Forming, Launch::In), window, cx);
+    }
+
+    fn start_agent(
+        &mut self,
+        agent: model::agents::Agent,
+        launch: Launch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let hub = self.hub.clone();
-        let launch = topic.map_or(Launch::Forming, Launch::In);
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let started = hub.start_with(agent).await;
@@ -768,13 +789,13 @@ impl Render for Workspace {
                     }))
             })
             .child(content);
-        let launcher = self.launching.as_ref().map(|(picker, _)| {
+        let launcher = self.launching.as_ref().map(|(launcher, _)| {
             div()
                 .absolute()
                 .top(px(52.))
                 .right(px(20.))
-                .w(px(360.))
-                .p_2()
+                .w(px(460.))
+                .p_3()
                 .rounded(px(18.))
                 .bg(Theme::raised())
                 .border_1()
@@ -788,9 +809,9 @@ impl Render for Workspace {
                         .pt_1()
                         .text_xs()
                         .text_color(Theme::ink_dim())
-                        .child("Start a session in…"),
+                        .child("Start a session"),
                 )
-                .child(picker.clone())
+                .child(launcher.clone())
         });
         div()
             .relative()
