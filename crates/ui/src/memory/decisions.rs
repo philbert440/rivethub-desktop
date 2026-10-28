@@ -139,27 +139,22 @@ impl MemoryPage {
         let typed = typed.and_then(text);
         let hub = self.hub.clone();
         let target = deciding.target.clone();
-        let write = match (target.clone(), typed) {
-            (Target::Add(topic), Some(typed)) => {
-                cx.spawn(async move |_, _| hub.add_decision(topic, typed).await.map(drop))
-            }
-            (Target::Edit { topic, decision }, Some(typed)) => {
-                cx.spawn(async move |_, _| hub.edit_decision(topic, decision, typed).await.map(drop))
-            }
-            (Target::Supersede { topic, decision }, typed) => {
-                cx.spawn(async move |_, _| hub.supersede_decision(topic, decision, typed).await)
-            }
-            (Target::Add(_) | Target::Edit { .. }, None) => {
-                deciding.problem = Some("A decision needs some text.".into());
-                cx.notify();
-                return;
-            }
-        };
         deciding.busy = true;
         deciding.problem = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let written = write.await;
+            let written = match (target.clone(), typed) {
+                (Target::Add(topic), Some(typed)) => hub.add_decision(topic, typed).await.map(drop),
+                (Target::Edit { topic, decision }, Some(typed)) => {
+                    hub.edit_decision(topic, decision, typed).await.map(drop)
+                }
+                (Target::Supersede { topic, decision }, typed) => {
+                    hub.supersede_decision(topic, decision, typed).await
+                }
+                (Target::Add(_) | Target::Edit { .. }, None) => {
+                    Err(GatewayError::Conflict("A decision needs some text.".into()))
+                }
+            };
             this.update(cx, |this, cx| {
                 if this.deciding.as_ref().map(|open| &open.target) != Some(&target) {
                     return;

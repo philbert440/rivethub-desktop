@@ -114,13 +114,13 @@ impl Exchange {
         (took >= 0).then_some(took)
     }
 
-    /// The fold header's verdict: "Completed in 42s", "Failed after 3m 5s", or without a time when
-    /// the exchange has none.
+    /// The fold header's verdict: "Completed in 42s", "Stopped after 8s", "Failed after 3m 5s", or
+    /// without a time when the exchange has none.
     pub fn verdict(&self) -> String {
-        let (word, joint) = if self.state == ExchangeState::Failed {
-            ("Failed", "after")
-        } else {
-            ("Completed", "in")
+        let (word, joint) = match self.state {
+            ExchangeState::Failed => ("Failed", "after"),
+            ExchangeState::Stopped => ("Stopped", "after"),
+            ExchangeState::Working | ExchangeState::Completed => ("Completed", "in"),
         };
         match self.took_ms() {
             Some(took) => format!("{word} {joint} {}", elapsed(took)),
