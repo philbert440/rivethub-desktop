@@ -9,6 +9,8 @@ pub mod markdown;
 pub mod memory;
 pub mod mesh;
 pub mod nav;
+pub mod notice;
+pub mod prefs;
 pub mod prompt;
 pub mod search;
 pub mod session;

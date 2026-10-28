@@ -3,11 +3,13 @@ use gpui::{
     Context, Div, Entity, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     Window, div, img, prelude::*, px,
 };
-use model::Page;
+use model::notice::NoticeKind;
+use model::{Page, SessionId};
 
 use crate::memory::{MemoryEvent, MemoryPage};
 use crate::settings::SettingsPage;
-use crate::workspace::{ViewInMemory, Workspace};
+use crate::text::one_line;
+use crate::workspace::{Attention, ViewInMemory, Workspace};
 use crate::{brand, theme::Theme};
 
 const OPEN_WIDTH: f32 = 208.;
@@ -15,19 +17,20 @@ const RAIL_WIDTH: f32 = 56.;
 
 /// The window's root: the left sidebar and whichever page it has selected.
 pub struct Shell {
+    hub: Hub,
     page: Page,
     sidebar_open: bool,
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
-    _routes: [Subscription; 2],
+    _routes: [Subscription; 3],
 }
 
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
         let settings = cx.new(|cx| SettingsPage::new(hub.clone(), cx));
-        let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
+        let workspace = cx.new(|cx| Workspace::new(hub.clone(), window, cx));
         window.focus(&workspace.focus_handle(cx), cx);
         let to_memory = cx.subscribe_in(&workspace, window, |this, _, ViewInMemory(focus), window, cx| {
             this.memory
@@ -39,25 +42,73 @@ impl Shell {
             window,
             |this, memory, event: &MemoryEvent, window, cx| {
                 let MemoryEvent::OpenSession(session) = event;
-                if this
-                    .workspace
-                    .update(cx, |workspace, cx| workspace.open_listed(session, window, cx))
-                {
-                    this.page = Page::Workspace;
-                    cx.notify();
-                } else {
+                if !this.open_listed(session, window, cx) {
                     memory.update(cx, MemoryPage::unlisted);
                 }
             },
         );
+        let notices = cx.subscribe_in(
+            &workspace,
+            window,
+            |this, _, attention: &Attention, window, cx| {
+                this.notify(attention, window, cx);
+            },
+        );
         Self {
+            hub,
             page: Page::Workspace,
             sidebar_open: true,
             workspace,
             memory,
             settings,
-            _routes: [to_memory, to_session],
+            _routes: [to_memory, to_session, notices],
         }
+    }
+
+    fn open_listed(&mut self, session: &SessionId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let opened = self
+            .workspace
+            .update(cx, |workspace, cx| workspace.open_listed(session, window, cx));
+        if opened {
+            self.page = Page::Workspace;
+            cx.notify();
+        }
+        opened
+    }
+
+    /// Raises a desktop notification unless the person turned its kind off or is already looking
+    /// at the session; clicking it brings the window forward on that session.
+    fn notify(&mut self, attention: &Attention, window: &mut Window, cx: &mut Context<Self>) {
+        let on_screen = if self.page == Page::Workspace {
+            self.workspace.read(cx).on_screen().cloned()
+        } else {
+            None
+        };
+        let notice = &attention.notice;
+        if !notice.worth_showing(
+            &self.hub.preferences(),
+            window.is_window_active(),
+            on_screen.as_ref(),
+        ) {
+            return;
+        }
+        let headline = match notice.kind {
+            NoticeKind::Finished => "Agent finished replying",
+            NoticeKind::NeedsYou => "A session needs you",
+        };
+        let body = one_line(attention.title.as_deref()).to_string();
+        let hub = self.hub.clone();
+        let session = notice.session.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            if hub.notify(headline.to_owned(), body).await {
+                this.update_in(cx, |this, window, cx| {
+                    window.activate_window();
+                    this.open_listed(&session, window, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     fn show(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {

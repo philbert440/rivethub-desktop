@@ -1,5 +1,7 @@
 mod feed;
 mod memory;
+mod notify;
+mod prefs;
 mod session;
 mod status;
 mod terminal;
@@ -18,10 +20,11 @@ use gateway::{Endpoint, Gateway, GatewayError, Identity};
 use model::HarnessId;
 use model::agents::{Agent, Roster};
 use model::harness::HarnessOffer;
+use model::prefs::Preferences;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 
 #[derive(Debug)]
@@ -33,6 +36,8 @@ struct Inner {
     local_node: RwLock<Option<String>>,
     remote: RwLock<HashMap<String, Gateway>>,
     offers: RwLock<HashMap<String, Vec<model::harness::HarnessOffer>>>,
+    prefs: RwLock<Preferences>,
+    saving: Mutex<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +56,8 @@ impl Hub {
                 local_node: RwLock::new(None),
                 remote: RwLock::new(HashMap::new()),
                 offers: RwLock::new(HashMap::new()),
+                prefs: RwLock::new(prefs::load()),
+                saving: Mutex::new(()),
             }),
         }
     }
@@ -234,15 +241,17 @@ impl Hub {
         self.on_runtime(async move {
             let local = hub.inner.local_node.read().clone();
             let mut nodes = vec![(None, hub.inner.local.clone())];
-            for node in hub.inner.local.mesh().await.unwrap_or_default() {
+            let mesh = hub.inner.local.mesh().await.ok();
+            for node in mesh.iter().flatten() {
                 let is_local = local.as_deref().is_some_and(|name| node.answers_to(name));
                 if node.online
                     && !is_local
                     && let Ok(gateway) = hub.gateway_for(Some(&node.name)).await
                 {
-                    nodes.push((Some(node.name), gateway));
+                    nodes.push((Some(node.name.clone()), gateway));
                 }
             }
+            let other_nodes = mesh.map(|_| nodes.iter().filter_map(|(node, _)| node.clone()).collect());
             let listed = futures::future::join_all(nodes.into_iter().map(|(node, gateway)| {
                 let hub = hub.clone();
                 async move {
@@ -254,7 +263,10 @@ impl Hub {
                 }
             }))
             .await;
-            let mut all = AllSessions::default();
+            let mut all = AllSessions {
+                other_nodes,
+                ..AllSessions::default()
+            };
             let mut seen = HashSet::new();
             for (node, sessions) in listed {
                 match sessions {
@@ -404,6 +416,8 @@ impl Hub {
 pub struct AllSessions {
     pub sessions: Vec<SessionSummary>,
     pub unreachable: Vec<String>,
+    /// The other online nodes, or `None` when the mesh couldn't be read.
+    pub other_nodes: Option<Vec<String>>,
 }
 
 async fn node_sessions(

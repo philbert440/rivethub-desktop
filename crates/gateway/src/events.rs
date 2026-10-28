@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use model::SessionId;
+use model::session::SessionStatus;
 use rustls::ClientConfig;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message};
@@ -15,8 +16,16 @@ const BUFFER: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceEvent {
     Changed,
-    Activity { native: String, working: bool },
-    Blocked { id: SessionId, blocked: bool },
+    Activity {
+        native: String,
+        working: bool,
+    },
+    /// A session's status, and whether it waits on the person when rh says.
+    Updated {
+        id: SessionId,
+        status: SessionStatus,
+        blocked: Option<bool>,
+    },
     Closed,
 }
 
@@ -42,10 +51,12 @@ fn registry(text: &str) -> Option<WorkspaceEvent> {
         HarnessEvent::SessionCreated { .. } => Some(WorkspaceEvent::Changed),
         HarnessEvent::SessionUpdated {
             session_id,
-            blocked: Some(blocked),
+            status,
+            blocked,
             ..
-        } => Some(WorkspaceEvent::Blocked {
+        } => Some(WorkspaceEvent::Updated {
             id: translate::session(&session_id),
+            status: translate::session_status(status),
             blocked,
         }),
         _ => None,
