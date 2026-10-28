@@ -21,8 +21,7 @@ impl Workspace {
         let board = self.board();
         if board.forming.is_empty() && board.recent.is_empty() {
             let line = self
-                .problem
-                .clone()
+                .problems()
                 .unwrap_or_else(|| "Start a session and it will find its topic.".into());
             return div()
                 .size_full()
@@ -46,8 +45,7 @@ impl Workspace {
             .flex_col()
             .gap_6()
             .children(
-                self.problem
-                    .clone()
+                self.problems()
                     .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
             )
             .when(!board.forming.is_empty(), |page| {

@@ -63,6 +63,8 @@ pub struct Workspace {
     folded: HashSet<SessionId>,
     forming_open: bool,
     problem: Option<String>,
+    /// Why the last thing the person asked for failed; reloads keep it, their next request clears it.
+    failed: Option<String>,
     pane: Option<Entity<SessionPane>>,
     pane_events: Option<Subscription>,
     panel: Entity<SidePanel>,
@@ -140,6 +142,7 @@ impl Workspace {
             folded: HashSet::new(),
             forming_open: false,
             problem: None,
+            failed: None,
             pane: None,
             pane_events: None,
             panel,
@@ -239,6 +242,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The listing's problems and the last failed request, for the page to show.
+    fn problems(&self) -> Option<String> {
+        let parts: Vec<&str> = self
+            .failed
+            .iter()
+            .chain(&self.problem)
+            .map(String::as_str)
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+
     fn load_suggestions(&self, cx: &mut Context<Self>) {
         let forming: Vec<SessionId> = self
             .board()
@@ -324,6 +338,14 @@ impl Workspace {
     }
 
     fn open(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        // Rebuilding the pane on show would drop its draft and terminal.
+        if self
+            .pane
+            .as_ref()
+            .is_some_and(|pane| pane.read(cx).session_id() == &summary.id)
+        {
+            return;
+        }
         let topic = self.home_of(&summary);
         let session = summary.id.clone();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
@@ -507,6 +529,7 @@ impl Workspace {
     }
 
     fn place(&mut self, session: SessionId, topic: TopicId, cx: &mut Context<Self>) {
+        self.failed = None;
         self.placements.insert(session.clone(), topic.clone());
         self.sync_panel(cx);
         cx.notify();
@@ -515,7 +538,7 @@ impl Workspace {
             let placed = hub.place(session, topic).await;
             this.update(cx, |this, cx| {
                 if let Err(err) = placed {
-                    this.problem = Some(format!("placing the session failed: {err}"));
+                    this.failed = Some(format!("placing the session failed: {err}"));
                 }
                 this.load(cx);
             })
@@ -525,6 +548,7 @@ impl Workspace {
     }
 
     fn unplace(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        self.failed = None;
         self.placements.remove(&session);
         self.sync_panel(cx);
         cx.notify();
@@ -533,7 +557,7 @@ impl Workspace {
             let unplaced = hub.unplace(session).await;
             this.update(cx, |this, cx| {
                 if let Err(err) = unplaced {
-                    this.problem = Some(format!("taking the session out of its topic failed: {err}"));
+                    this.failed = Some(format!("taking the session out of its topic failed: {err}"));
                 }
                 this.load(cx);
             })
@@ -543,12 +567,13 @@ impl Workspace {
     }
 
     fn place_in_new(&mut self, session: SessionId, name: String, cx: &mut Context<Self>) {
+        self.failed = None;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let created = hub.place_in_new(session, name).await;
             this.update(cx, |this, cx| {
                 if let Err(err) = created {
-                    this.problem = Some(format!("creating the topic failed: {err}"));
+                    this.failed = Some(format!("creating the topic failed: {err}"));
                 }
                 this.load(cx);
             })
@@ -633,6 +658,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.failed = None;
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -663,6 +689,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.failed = None;
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -694,7 +721,7 @@ impl Workspace {
                 self.open(summary, window, cx);
             }
             Err(err) => {
-                self.problem = Some(err.to_string());
+                self.failed = Some(err.to_string());
                 cx.notify();
             }
         }
@@ -908,7 +935,16 @@ impl Workspace {
         };
         shell::header()
             .child(self.crumbs(cx))
-            .child(div().flex_1())
+            // Everything shows problems on the page; elsewhere they'd have nowhere else to go.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(Theme::warn())
+                    .children(self.problems().filter(|_| self.altitude != Altitude::Everything)),
+            )
             .when(self.altitude != Altitude::Everything, |header| {
                 header.child(div().text_xs().text_color(Theme::ink_dim()).child(back))
             })
@@ -1019,6 +1055,7 @@ impl Render for Workspace {
                 div()
                     .absolute()
                     .inset_0()
+                    .occlude()
                     .bg(Theme::scrim())
                     .flex()
                     .items_center()

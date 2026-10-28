@@ -42,9 +42,15 @@ impl TopicPicker {
         }
     }
 
+    /// Enter picks the first topic shown; with nothing shown it creates the typed name, and a
+    /// blank one means no topic where that's offered, since rh refuses an empty topic name.
     fn submit(&self, text: &str, cx: &mut Context<Self>) {
         let event = match suggest(&self.topics, text, 1).first() {
             Some(topic) => PickerEvent::Chose(topic.id.clone()),
+            None if text.trim().is_empty() => match self.no_topic {
+                Some(_) => PickerEvent::NoTopic,
+                None => return,
+            },
             None => PickerEvent::Create(text.to_owned()),
         };
         cx.emit(event);
@@ -117,7 +123,7 @@ impl Render for TopicPicker {
             .when_some(self.no_topic.filter(|_| typed.is_empty()), |list, label| {
                 list.child(Self::row(("none", 0), label.to_owned(), cx, PickerEvent::NoTopic))
             })
-            .when(!typed.is_empty() && !exact, |list| {
+            .when(!typed.trim().is_empty() && !exact, |list| {
                 list.child(Self::row(
                     ("create", 0),
                     format!("Create topic “{typed}”"),
