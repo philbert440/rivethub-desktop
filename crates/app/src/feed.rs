@@ -15,8 +15,15 @@ use crate::Hub;
 const FIRST_RETRY: Duration = Duration::from_millis(500);
 const LAST_RETRY: Duration = Duration::from_secs(15);
 
-/// The node a stream comes from; `None` is this client's own node.
-type Source = Option<String>;
+/// A stream: the node it comes from (`None` is this client's own node) and which of its feeds.
+/// Each keeps its own live state, so one reconnecting doesn't wipe what another said.
+type Source = (Option<String>, Feed);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Feed {
+    Sessions,
+    Registry,
+}
 
 /// What one node's streams have said since they last connected.
 #[derive(Debug, Default)]
@@ -172,7 +179,7 @@ impl Remote {
             let keep = nodes.contains(node);
             if !keep {
                 task.abort();
-                self.signals.forget(&Some(node.clone()));
+                self.signals.forget(&(Some(node.clone()), Feed::Registry));
             }
             keep
         });
@@ -184,7 +191,7 @@ impl Remote {
             let name = node.clone();
             let task = self.hub.inner.runtime.spawn(follow(
                 Arc::clone(&self.signals),
-                Some(node.clone()),
+                (Some(node.clone()), Feed::Registry),
                 move || {
                     let hub = hub.clone();
                     let name = name.clone();
@@ -216,14 +223,14 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
     let broadcast = hub.inner.local.clone();
     hub.inner
         .runtime
-        .spawn(follow(Arc::clone(&signals), None, move || {
+        .spawn(follow(Arc::clone(&signals), (None, Feed::Sessions), move || {
             let gateway = broadcast.clone();
             async move { gateway.watch().await }
         }));
     let registry = hub.inner.local.clone();
     hub.inner
         .runtime
-        .spawn(follow(Arc::clone(&signals), None, move || {
+        .spawn(follow(Arc::clone(&signals), (None, Feed::Registry), move || {
             let gateway = registry.clone();
             async move { gateway.watch_registry().await }
         }));
