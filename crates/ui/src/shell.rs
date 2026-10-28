@@ -1,13 +1,13 @@
 use app::Hub;
 use gpui::{
-    Context, Div, Entity, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    img, prelude::*, px,
+    Context, Div, Entity, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Window, div, img, prelude::*, px,
 };
 use model::Page;
 
-use crate::memory::MemoryPage;
+use crate::memory::{MemoryEvent, MemoryPage};
 use crate::settings::SettingsPage;
-use crate::workspace::Workspace;
+use crate::workspace::{ViewInMemory, Workspace};
 use crate::{brand, theme::Theme};
 
 const OPEN_WIDTH: f32 = 208.;
@@ -20,18 +20,42 @@ pub struct Shell {
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
+    _routes: [Subscription; 2],
 }
 
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
         let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
         window.focus(&workspace.focus_handle(cx), cx);
+        let to_memory = cx.subscribe_in(&workspace, window, |this, _, ViewInMemory(focus), window, cx| {
+            this.memory
+                .update(cx, |memory, cx| memory.focus(focus.clone(), cx));
+            this.show(Page::Memory, window, cx);
+        });
+        let to_session = cx.subscribe_in(
+            &memory,
+            window,
+            |this, memory, event: &MemoryEvent, window, cx| {
+                let MemoryEvent::OpenSession(session) = event;
+                if this
+                    .workspace
+                    .update(cx, |workspace, cx| workspace.open_listed(session, window, cx))
+                {
+                    this.page = Page::Workspace;
+                    cx.notify();
+                } else {
+                    memory.update(cx, MemoryPage::unlisted);
+                }
+            },
+        );
         Self {
             page: Page::Workspace,
             sidebar_open: true,
             workspace,
-            memory: cx.new(|_| MemoryPage::default()),
+            memory,
             settings: cx.new(|_| SettingsPage),
+            _routes: [to_memory, to_session],
         }
     }
 
@@ -40,8 +64,10 @@ impl Shell {
             return;
         }
         self.page = page;
-        if page == Page::Workspace {
-            window.focus(&self.workspace.focus_handle(cx), cx);
+        match page {
+            Page::Workspace => window.focus(&self.workspace.focus_handle(cx), cx),
+            Page::Memory => window.focus(&self.memory.focus_handle(cx), cx),
+            Page::Settings => {}
         }
         cx.notify();
     }

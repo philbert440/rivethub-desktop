@@ -1,0 +1,81 @@
+use gateway::GatewayError;
+use model::memory::{Found, Period, TagProposal, TermProposal, Verdict};
+use model::topics::Topic;
+use model::wiki::{Listing, Page};
+
+use crate::Hub;
+
+/// The topics and the wiki pages their root topics own.
+#[derive(Debug, Default)]
+pub struct Library {
+    pub topics: Vec<Topic>,
+    pub pages: Vec<Page>,
+}
+
+/// What the tagger proposed and is waiting on a person for.
+#[derive(Debug, Default)]
+pub struct Tidy {
+    pub tags: Vec<TagProposal>,
+    pub terms: Vec<TermProposal>,
+}
+
+impl Hub {
+    pub async fn recall(&self, query: String, period: Period) -> Result<Vec<Found>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.recall(&query, period).await })
+            .await
+    }
+
+    pub async fn library(&self) -> Result<Library, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            let topics = gateway.topics().await?;
+            let pages = futures::future::try_join_all(
+                topics
+                    .iter()
+                    .filter(|topic| topic.parent.is_none())
+                    .map(|topic| gateway.topic_page(&topic.id)),
+            )
+            .await?;
+            Ok(Library {
+                topics,
+                pages: pages.into_iter().flatten().collect(),
+            })
+        })
+        .await
+    }
+
+    pub async fn wiki_pages(&self, query: String) -> Result<Vec<Listing>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.wiki_pages(&query).await })
+            .await
+    }
+
+    pub async fn wiki_page(&self, slug: String) -> Result<Page, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.wiki_page(&slug).await })
+            .await
+    }
+
+    pub async fn tidy(&self) -> Result<Tidy, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            let (tags, terms) =
+                futures::future::try_join(gateway.tag_proposals(), gateway.term_proposals()).await?;
+            Ok(Tidy { tags, terms })
+        })
+        .await
+    }
+
+    pub async fn decide_tag(&self, id: String, verdict: Verdict) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.decide_tag(&id, verdict).await })
+            .await
+    }
+
+    pub async fn decide_term(&self, term: TermProposal, verdict: Verdict) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.decide_term(&term.key, &term.value, verdict).await })
+            .await
+    }
+}

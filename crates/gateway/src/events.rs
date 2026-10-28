@@ -33,6 +33,7 @@ fn broadcast(text: &str) -> Option<WorkspaceEvent> {
             | AgentEventKind::TurnEnd { .. } => Some(WorkspaceEvent::Changed),
             _ => None,
         },
+        SessionBroadcast::HubState(_) => None,
     }
 }
 

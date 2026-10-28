@@ -115,6 +115,38 @@ pub fn suggest<'a>(topics: &'a [Topic], query: &str, limit: usize) -> Vec<&'a To
         .collect()
 }
 
+/// Every topic as an indented outline: root topics, most recently active first, each followed by
+/// its subtopics. A topic whose parent is unknown counts as a root.
+pub fn outline(topics: &[Topic]) -> Vec<(usize, &Topic)> {
+    let known: HashMap<&TopicId, &Topic> = topics.iter().map(|topic| (&topic.id, topic)).collect();
+    let mut children: HashMap<Option<&TopicId>, Vec<&Topic>> = HashMap::new();
+    for topic in topics {
+        let parent = topic.parent.as_ref().filter(|parent| known.contains_key(parent));
+        children.entry(parent).or_default().push(topic);
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_by(|a, b| {
+            b.last_active_ms
+                .cmp(&a.last_active_ms)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+    }
+    let mut rows = Vec::with_capacity(topics.len());
+    let mut stack: Vec<(usize, &Topic)> = children
+        .get(&None)
+        .map(|roots| roots.iter().rev().map(|topic| (0, *topic)).collect())
+        .unwrap_or_default();
+    while let Some((depth, topic)) = stack.pop() {
+        rows.push((depth, topic));
+        if depth < MAX_DEPTH
+            && let Some(below) = children.get(&Some(&topic.id))
+        {
+            stack.extend(below.iter().rev().map(|child| (depth + 1, *child)));
+        }
+    }
+    rows
+}
+
 pub fn board<'a>(
     topics: &'a [Topic],
     sessions: &'a [SessionSummary],
@@ -298,6 +330,28 @@ mod tests {
         let board = board(&[], &sessions, &placements, WINDOWS);
         assert_eq!(natives(&board.forming), ["fresh"]);
         assert_eq!(natives(&board.history), ["stale", "old-child"]);
+    }
+
+    #[test]
+    fn the_outline_puts_each_subtopic_under_its_root_and_the_busiest_root_first() {
+        let mut quiet = topic("mesh", None);
+        quiet.last_active_ms = Some(1);
+        let mut busy = topic("desktop", None);
+        busy.last_active_ms = Some(9);
+        let topics = [
+            topic("desktop-chat", Some("desktop")),
+            quiet,
+            topic("orphan", Some("gone")),
+            busy,
+        ];
+        let rows: Vec<(usize, &str)> = outline(&topics)
+            .into_iter()
+            .map(|(depth, topic)| (depth, topic.slug.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [(0, "desktop"), (1, "desktop-chat"), (0, "mesh"), (0, "orphan")]
+        );
     }
 
     #[test]
