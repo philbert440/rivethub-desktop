@@ -165,7 +165,7 @@ impl Workspace {
                 .sessions
                 .iter()
                 .find(|session| session.id == notice.session)
-                .and_then(|session| session.title.clone());
+                .map(SessionSummary::name);
             cx.emit(Attention { notice, title });
         }
         cx.notify();
@@ -177,7 +177,7 @@ impl Workspace {
             .sessions
             .iter()
             .find(|known| known.id == session)
-            .and_then(|known| known.title.clone());
+            .map(SessionSummary::name);
         let notice = Notice {
             kind: NoticeKind::NeedsYou,
             session,
