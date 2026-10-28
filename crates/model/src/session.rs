@@ -111,6 +111,19 @@ pub struct SessionSummary {
 }
 
 impl SessionSummary {
+    /// What to call the session where it isn't on screen: its title, or before it has one,
+    /// its harness and node, such as "Grok on ct112".
+    pub fn name(&self) -> String {
+        if let Some(title) = self.title.as_deref().filter(|title| !title.trim().is_empty()) {
+            return title.to_owned();
+        }
+        let harness = self.id.harness().display_name();
+        match &self.node {
+            Some(node) => format!("{harness} on {node}"),
+            None => format!("{harness} session"),
+        }
+    }
+
     /// Whether a typed filter finds this session by its title, folder, harness or model.
     pub fn matches(&self, query: &str) -> bool {
         crate::search::mentions(
