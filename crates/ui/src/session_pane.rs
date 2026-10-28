@@ -7,7 +7,7 @@ use gpui::{
     prelude::*, px, relative,
 };
 use model::chat::exchanges;
-use model::prompt::{Attachment, Prompt, image_media_type};
+use model::prompt::{Attachment, Prompt};
 use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
 
@@ -154,22 +154,14 @@ impl SessionPane {
                 Ok(Ok(None)) | Err(_) => return,
                 Ok(Err(err)) => {
                     this.update(cx, |this, cx| {
-                        this.problem(format!("couldn't open the file picker: {err}"), cx);
+                        this.attach_problem = Some(format!("couldn't open the file picker: {err}"));
+                        cx.notify();
                     })
                     .ok();
                     return;
                 }
             };
             for path in paths {
-                let name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let Some(media_type) = image_media_type(&name) else {
-                    this.update(cx, |this, cx| this.problem(format!("{name} isn't an image"), cx))
-                        .ok();
-                    continue;
-                };
                 if this
                     .update(cx, |this, cx| {
                         this.uploading += 1;
@@ -179,12 +171,12 @@ impl SessionPane {
                 {
                     return;
                 }
-                let uploaded = hub.upload(&summary, path, media_type).await;
+                let uploaded = hub.upload(&summary, path).await;
                 this.update(cx, |this, cx| {
                     this.uploading = this.uploading.saturating_sub(1);
                     match uploaded {
                         Ok(attachment) => this.attachments.push(attachment),
-                        Err(err) => this.attach_problem = Some(format!("{name}: {err}")),
+                        Err(err) => this.attach_problem = Some(err.to_string()),
                     }
                     cx.notify();
                 })
@@ -192,11 +184,6 @@ impl SessionPane {
             }
         })
         .detach();
-    }
-
-    fn problem(&mut self, problem: String, cx: &mut Context<Self>) {
-        self.attach_problem = Some(problem);
-        cx.notify();
     }
 
     pub fn session_id(&self) -> &model::SessionId {
