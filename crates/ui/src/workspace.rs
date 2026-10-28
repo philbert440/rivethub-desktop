@@ -6,14 +6,17 @@ use std::collections::{HashMap, HashSet};
 use app::Hub;
 use gateway::GatewayError;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Rgba, SharedString,
-    Styled, Subscription, Window, actions, div, prelude::*, px,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, MouseDownEvent, ParentElement,
+    Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions, anchored, deferred,
+    div, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
+use crate::agent_editor::{AgentEditor, AgentEditorEvent};
 use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
+use crate::memory::Focus;
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
@@ -36,6 +39,9 @@ enum Launch {
     In(TopicId),
     New(String),
 }
+
+/// Asks the shell to show Memory focused on a topic or session.
+pub struct ViewInMemory(pub Focus);
 
 struct Placing {
     session: SessionId,
@@ -61,10 +67,14 @@ pub struct Workspace {
     panel_open: bool,
     placing: Option<Placing>,
     launching: Option<(Entity<Launcher>, Subscription)>,
+    editing_agent: Option<(Entity<AgentEditor>, Subscription)>,
+    menu: Option<(Focus, Point<Pixels>)>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     _feed: [gpui::Task<()>; 2],
 }
+
+impl EventEmitter<ViewInMemory> for Workspace {}
 
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -77,6 +87,9 @@ impl Workspace {
                     PanelEvent::Open(summary) => this.open(summary.clone(), window, cx),
                     PanelEvent::OpenTopic(topic) => this.open_topic(topic.clone(), window, cx),
                     PanelEvent::Start(agent) => this.start_with(agent.clone(), None, window, cx),
+                    PanelEvent::NewAgent => this.edit_agent(None, window, cx),
+                    PanelEvent::EditAgent(agent) => this.edit_agent(Some(agent), window, cx),
+                    PanelEvent::Renamed(renamed) => this.renamed(renamed, cx),
                 },
             );
         let feed = hub.watch_workspace();
@@ -118,6 +131,8 @@ impl Workspace {
             panel_open: true,
             placing: None,
             launching: None,
+            editing_agent: None,
+            menu: None,
             feed,
             _panel_events: panel_events,
             _feed: [refresh, repaint],
@@ -251,18 +266,90 @@ impl Workspace {
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
         self.pane_events = Some(cx.subscribe(&pane, |this, _, event: &PaneEvent, cx| match event {
-            PaneEvent::Renamed(renamed) => {
-                if let Some(known) = this.sessions.iter_mut().find(|known| known.id == renamed.id) {
-                    known.title.clone_from(&renamed.title);
-                }
-                this.sync_panel(cx);
-                cx.notify();
-            }
+            PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
         }));
         self.pane = Some(pane);
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };
         cx.notify();
+    }
+
+    fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
+        if let Some(known) = self.sessions.iter_mut().find(|known| known.id == renamed.id) {
+            known.title.clone_from(&renamed.title);
+        }
+        if let Some(pane) = self
+            .pane
+            .clone()
+            .filter(|pane| pane.read(cx).session_id() == &renamed.id)
+        {
+            pane.update(cx, |pane, cx| pane.take_listing(renamed, cx));
+        }
+        self.sync_panel(cx);
+        cx.notify();
+    }
+
+    /// Opens a session by id when some reachable node lists it.
+    pub fn open_listed(&mut self, id: &SessionId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(summary) = self.sessions.iter().find(|session| &session.id == id).cloned() else {
+            return false;
+        };
+        self.open(summary, window, cx);
+        true
+    }
+
+    /// Right-clicking opens a menu that can show this topic or session in Memory.
+    fn on_right_click(
+        focus: Focus,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+            this.menu = Some((focus.clone(), event.position));
+            cx.stop_propagation();
+            cx.notify();
+        })
+    }
+
+    /// A session shows in Memory as a search for its title, so only titled sessions can.
+    fn session_focus(session: &SessionSummary) -> Option<Focus> {
+        session
+            .title
+            .as_deref()
+            .map(|title| Focus::Search(one_line(Some(title)).to_string()))
+    }
+
+    fn menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let (focus, at) = self.menu.clone()?;
+        let item = div()
+            .id("view-in-memory")
+            .px_3()
+            .py_2()
+            .rounded(px(10.))
+            .cursor_pointer()
+            .hover(|item| item.bg(Theme::selected()).text_color(Theme::on_selected()))
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                this.menu = None;
+                cx.emit(ViewInMemory(focus.clone()));
+                cx.notify();
+            }))
+            .child("View in Memory");
+        Some(deferred(
+            anchored().position(at).child(
+                div()
+                    .min_w(px(200.))
+                    .p_1()
+                    .rounded(px(16.))
+                    .bg(Theme::card())
+                    .border_1()
+                    .border_color(Theme::line())
+                    .text_color(Theme::ink())
+                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.menu = None;
+                        cx.notify();
+                    }))
+                    .child(item),
+            ),
+        ))
     }
 
     fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
@@ -360,6 +447,31 @@ impl Workspace {
         .detach();
     }
 
+    fn edit_agent(
+        &mut self,
+        agent: Option<&model::agents::Agent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let hub = self.hub.clone();
+        let editor = cx.new(|cx| AgentEditor::new(hub, agent, cx));
+        let events = cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, event: &AgentEditorEvent, window, cx| {
+                this.editing_agent = None;
+                if matches!(event, AgentEditorEvent::Saved | AgentEditorEvent::Deleted) {
+                    this.panel.update(cx, |panel, cx| panel.load_agents(cx));
+                }
+                window.focus(&this.focus, cx);
+                cx.notify();
+            },
+        );
+        window.focus(&editor.focus_handle(cx), cx);
+        self.editing_agent = Some((editor, events));
+        cx.notify();
+    }
+
     fn new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
         self.launch(window, cx);
     }
@@ -390,7 +502,7 @@ impl Workspace {
                 Target::In(topic) => Launch::In(topic.clone()),
                 Target::New(name) => Launch::New(name.clone()),
             };
-            match choice.clone() {
+            match (**choice).clone() {
                 Choice::Agent(agent) => this.start_agent(agent, launch, window, cx),
                 Choice::Harness { harness, model } => this.start_session(launch, harness, model, window, cx),
             }
@@ -814,5 +926,16 @@ impl Render for Workspace {
                     }),
             )
             .children(launcher)
+            .children(self.editing_agent.as_ref().map(|(editor, _)| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(Theme::scrim())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(editor.clone())
+            }))
+            .children(self.menu(cx))
     }
 }

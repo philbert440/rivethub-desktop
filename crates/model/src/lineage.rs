@@ -67,11 +67,35 @@ pub fn nest<S: std::hash::BuildHasher>(
     rows
 }
 
+/// The sessions `wanted` picks, plus every listed ancestor of one, so a kept subagent
+/// still sits under its parent. Order is unchanged.
+pub fn keep(sessions: &[SessionSummary], wanted: impl Fn(&SessionSummary) -> bool) -> Vec<SessionSummary> {
+    let parents: HashMap<&SessionId, &SessionId> = sessions
+        .iter()
+        .filter_map(|session| Some((&session.id, session.parent.as_ref()?)))
+        .collect();
+    let mut kept: HashSet<&SessionId> = HashSet::new();
+    for session in sessions.iter().filter(|session| wanted(session)) {
+        let mut next = Some(&session.id);
+        while let Some(id) = next {
+            if !kept.insert(id) {
+                break;
+            }
+            next = parents.get(id).copied();
+        }
+    }
+    sessions
+        .iter()
+        .filter(|session| kept.contains(&session.id))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::nest;
+    use super::{keep, nest};
     use crate::session::{SessionStatus, SessionSummary};
     use crate::{HarnessId, NativeSessionId, SessionId};
 
@@ -133,5 +157,20 @@ mod tests {
         let sessions = [session("x", Some("y")), session("y", Some("x"))];
         let rows = nest(&sessions, &HashSet::new());
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn hiding_finished_keeps_a_finished_parent_of_a_live_subagent() {
+        let mut done = session("a", None);
+        done.status = SessionStatus::Ended;
+        let mut failed = session("b", None);
+        failed.status = SessionStatus::Failed;
+        let sessions = [done, failed, session("a1", Some("a"))];
+        let kept = keep(&sessions, |session| !session.status.is_finished());
+        let titles: Vec<&str> = kept
+            .iter()
+            .map(|session| session.title.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(titles, ["a", "a1"]);
     }
 }

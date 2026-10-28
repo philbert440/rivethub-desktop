@@ -4,6 +4,7 @@ use std::time::Duration;
 use app::Hub;
 use gateway::{Endpoint, Gateway};
 use model::HarnessId;
+use model::prompt::Prompt;
 use model::session::Role;
 
 fn hub() -> Result<Hub, gateway::GatewayError> {
@@ -39,7 +40,7 @@ async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::
     let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
-    session.send("Reply with exactly the word: ready".into());
+    session.send(Prompt::new("Reply with exactly the word: ready"));
     let answered = tokio::time::timeout(Duration::from_secs(180), async {
         loop {
             if revisions.changed().await.is_err() {
@@ -115,14 +116,20 @@ async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std:
     let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
-    session.send("Count from 1 to 60, one number per line, then write the word first.".into());
+    session.send(Prompt::new(
+        "Count from 1 to 60, one number per line, then write the word first.",
+    ));
     tokio::time::timeout(Duration::from_secs(30), async {
         while revisions.changed().await.is_ok() && !session.view().read().busy() {}
     })
     .await?;
-    session.send("Reply with exactly the word: second".into());
+    session.send(Prompt::new("Reply with exactly the word: second"));
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let waited = session.queued() == vec!["Reply with exactly the word: second".to_owned()];
+    let waited = session
+        .queued()
+        .iter()
+        .map(|prompt| prompt.text.as_str())
+        .eq(["Reply with exactly the word: second"]);
     let answered = tokio::time::timeout(Duration::from_secs(180), async {
         loop {
             if revisions.changed().await.is_err() {
@@ -185,7 +192,7 @@ async fn an_agent_on_another_node_starts_and_answers_there() -> Result<(), Box<d
     assert_eq!(summary.node, remote.node);
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
-    session.send("Reply with exactly the word: remote".into());
+    session.send(Prompt::new("Reply with exactly the word: remote"));
     let answered = tokio::time::timeout(Duration::from_secs(180), async {
         loop {
             if revisions.changed().await.is_err() {
@@ -217,7 +224,7 @@ async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::erro
     tokio::time::timeout(Duration::from_secs(10), changes.changed()).await??;
     let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
-    session.send("Reply with exactly the word: noticed".into());
+    session.send(Prompt::new("Reply with exactly the word: noticed"));
     let seen = *changes.borrow_and_update();
     let ticked = tokio::time::timeout(Duration::from_secs(120), async {
         while changes.changed().await.is_ok() {
@@ -270,7 +277,9 @@ async fn a_command_tool_call_arrives_typed_with_its_output() -> Result<(), Box<d
     let summary = hub.start_session(HarnessId::new("claude-code"), None).await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
-    session.send("Use the Bash tool to run exactly: echo tool-check-42 . Then reply done.".into());
+    session.send(Prompt::new(
+        "Use the Bash tool to run exactly: echo tool-check-42 . Then reply done.",
+    ));
     let seen = tokio::time::timeout(Duration::from_secs(240), async {
         loop {
             if revisions.changed().await.is_err() {

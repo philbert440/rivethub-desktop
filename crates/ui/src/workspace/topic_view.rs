@@ -1,12 +1,15 @@
 use std::cmp::Reverse;
 
-use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
+use gpui::{
+    AnyElement, ClickEvent, Context, IntoElement, MouseButton, ParentElement, Styled, div, prelude::*, px,
+};
 use model::session::SessionSummary;
 use model::topics::{Atlas, Topic};
 use model::{SessionId, TopicId, lineage};
 
 use super::Workspace;
 use crate::brand;
+use crate::memory::Focus;
 use crate::side_panel::{DraggedAgent, DraggedSession};
 use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
@@ -86,6 +89,10 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_5()
+            .on_mouse_down(
+                MouseButton::Right,
+                Self::on_right_click(Focus::Topic(root.clone()), cx),
+            )
             .drag_over::<DraggedSession>(|style, _, _, _| style.bg(Theme::selected()))
             .drag_over::<DraggedAgent>(|style, _, _, _| style.bg(Theme::selected()))
             .on_drop(cx.listener(move |this, dragged: &DraggedSession, _, cx| {
@@ -218,6 +225,9 @@ impl Workspace {
             .gap_3()
             .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
                 cx.new(|_| crate::side_panel::DragGhost(one_line(dragged.0.title.as_deref())))
+            })
+            .when_some(Self::session_focus(session), |row, focus| {
+                row.on_mouse_down(MouseButton::Right, Self::on_right_click(focus, cx))
             })
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.open(open.clone(), window, cx);

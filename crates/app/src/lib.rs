@@ -1,10 +1,12 @@
 mod feed;
+mod memory;
 mod session;
 mod status;
 mod terminal;
 mod topics;
 
 pub use feed::WorkspaceFeed;
+pub use memory::{Library, Tidy};
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
 
@@ -15,6 +17,8 @@ use std::sync::Arc;
 use gateway::{Endpoint, Gateway, GatewayError, Identity};
 use model::HarnessId;
 use model::agents::{Agent, Roster};
+use model::harness::HarnessOffer;
+use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
 use parking_lot::RwLock;
@@ -126,6 +130,40 @@ impl Hub {
             let mut renamed = gateway.rename(&session, &title).await?;
             renamed.node = node;
             Ok(renamed)
+        })
+        .await
+    }
+
+    /// What the session's harness offers on the node it runs on.
+    pub async fn offer(&self, summary: &SessionSummary) -> Result<Option<HarnessOffer>, GatewayError> {
+        let hub = self.clone();
+        let harness = summary.id.harness().clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            let offers = hub.offers(node.as_deref(), &gateway).await?;
+            Ok(offers.into_iter().find(|offer| offer.id == harness))
+        })
+        .await
+    }
+
+    pub async fn upload(&self, summary: &SessionSummary, path: PathBuf) -> Result<Attachment, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok_or_else(|| GatewayError::Refused(format!("{} is not a file", path.display())))?;
+            let media_type = image_media_type(&name)
+                .ok_or_else(|| GatewayError::Refused(format!("{name} isn't an image")))?;
+            let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
+                .await
+                .map_err(|join| GatewayError::Refused(format!("reading {name} stopped: {join}")))?
+                .map_err(|err| GatewayError::Refused(format!("reading {name}: {err}")))?;
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            gateway.upload(&session, &name, media_type, bytes).await
         })
         .await
     }
@@ -253,6 +291,54 @@ impl Hub {
     ) -> Result<SessionSummary, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.start_session(&harness, model.as_deref()).await })
+            .await
+    }
+
+    /// rh only writes an agent on the node that hosts it, so this goes through that node's gateway.
+    pub async fn save_agent(
+        &self,
+        id: Option<String>,
+        draft: model::agents::AgentDraft,
+    ) -> Result<model::agents::Agent, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(draft.node.as_deref()).await?;
+            match id {
+                Some(id) => gateway.update_agent(&id, &draft).await,
+                None => gateway.create_agent(&draft).await,
+            }
+        })
+        .await
+    }
+
+    pub async fn delete_agent(&self, id: String, node: Option<String>) -> Result<(), GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move { hub.gateway_for(node.as_deref()).await?.delete_agent(&id).await })
+            .await
+    }
+
+    /// This node first, then every other online mesh node.
+    pub async fn nodes(&self) -> Result<Vec<String>, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let local = hub.inner.local.agents().await?.node;
+            let mut names = vec![local.clone()];
+            for node in hub.inner.local.mesh().await.unwrap_or_default() {
+                if node.online && !node.answers_to(&local) {
+                    names.push(node.name);
+                }
+            }
+            Ok(names)
+        })
+        .await
+    }
+
+    pub async fn harnesses_on(
+        &self,
+        node: String,
+    ) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move { hub.gateway_for(Some(&node)).await?.harnesses().await })
             .await
     }
 

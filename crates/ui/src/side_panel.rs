@@ -1,7 +1,10 @@
+use std::collections::HashSet;
+
 use app::Hub;
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window, div, prelude::*, px, rgb,
+    AnyElement, ClickEvent, Context, Entity, EventEmitter, Focusable, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement, Render, SharedString, Styled, Subscription, Window, div, prelude::*, px,
+    rgb,
 };
 use model::agents::{Agent, Roster};
 use model::search::SessionMatch;
@@ -12,11 +15,17 @@ use model::{SessionId, TopicId, lineage};
 use crate::input::{Submitted, TextInput};
 use crate::theme::Theme;
 
+const HISTORY_PAGE: usize = 100;
+const HISTORY_ROW: &str = "history-row";
+
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
     Open(SessionSummary),
     OpenTopic(TopicId),
     Start(Agent),
+    NewAgent,
+    EditAgent(Agent),
+    Renamed(SessionSummary),
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +58,30 @@ impl Render for DragGhost {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Section {
+    Agents,
+    PastTopics,
+    History,
+}
+
+impl Section {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Agents => "Agents",
+            Self::PastTopics => "Past topics",
+            Self::History => "History",
+        }
+    }
+}
+
+struct Renaming {
+    session: SessionSummary,
+    input: Entity<TextInput>,
+    problem: Option<String>,
+    _submitted: Subscription,
+}
+
 pub struct SidePanel {
     hub: Hub,
     query: Entity<TextInput>,
@@ -60,21 +93,23 @@ pub struct SidePanel {
     known: Vec<SessionSummary>,
     topics: Vec<Topic>,
     past: Vec<PastTopic>,
-    agents_open: bool,
-    past_open: bool,
-    history_open: bool,
-    collapsed: std::collections::HashSet<SessionId>,
-    _submitted: Subscription,
+    folded_sections: HashSet<Section>,
+    history_shown: usize,
+    hide_finished: bool,
+    collapsed: HashSet<SessionId>,
+    renaming: Option<Renaming>,
+    _query: [Subscription; 2],
 }
 
 impl EventEmitter<PanelEvent> for SidePanel {}
 
 impl SidePanel {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| TextInput::new("Search sessions", cx));
+        let query = cx.new(|cx| TextInput::new("Filter, or Enter to search transcripts", cx));
         let submitted = cx.subscribe(&query, |this, _, Submitted(text), cx| {
             this.search(text.clone(), cx);
         });
+        let typed = cx.observe(&query, |_, _, cx| cx.notify());
         let panel = Self {
             hub,
             query,
@@ -86,11 +121,12 @@ impl SidePanel {
             known: Vec::new(),
             topics: Vec::new(),
             past: Vec::new(),
-            agents_open: true,
-            past_open: true,
-            history_open: true,
-            collapsed: std::collections::HashSet::new(),
-            _submitted: submitted,
+            folded_sections: HashSet::new(),
+            history_shown: HISTORY_PAGE,
+            hide_finished: false,
+            collapsed: HashSet::new(),
+            renaming: None,
+            _query: [submitted, typed],
         };
         panel.load_agents(cx);
         panel
@@ -117,13 +153,16 @@ impl SidePanel {
         cx.notify();
     }
 
-    fn load_agents(&self, cx: &mut Context<Self>) {
+    pub fn load_agents(&self, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let loaded = hub.agents().await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok(roster) => this.roster = roster,
+                    Ok(roster) => {
+                        this.roster = roster;
+                        this.problem = None;
+                    }
                     Err(err) => this.problem = Some(err.to_string()),
                 }
                 cx.notify();
@@ -160,6 +199,55 @@ impl SidePanel {
         cx.notify();
     }
 
+    fn filter(&self, cx: &Context<Self>) -> String {
+        self.query.read(cx).text().trim().to_owned()
+    }
+
+    fn begin_rename(&mut self, session: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("Session title", cx);
+            input.set_text(session.title.as_deref().unwrap_or_default().trim(), cx);
+            input
+        });
+        let submitted = cx.subscribe(&input, |this, _, Submitted(title), cx| {
+            this.commit_rename(title.clone(), cx);
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        self.renaming = Some(Renaming {
+            session,
+            input,
+            problem: None,
+            _submitted: submitted,
+        });
+        cx.notify();
+    }
+
+    fn commit_rename(&mut self, title: String, cx: &mut Context<Self>) {
+        let Some(session) = self.renaming.as_ref().map(|renaming| renaming.session.clone()) else {
+            return;
+        };
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let renamed = hub.rename(&session, title).await;
+            this.update(cx, |this, cx| {
+                match renamed {
+                    Ok(renamed) => {
+                        this.renaming = None;
+                        cx.emit(PanelEvent::Renamed(renamed));
+                    }
+                    Err(err) => {
+                        if let Some(renaming) = this.renaming.as_mut() {
+                            renaming.problem = Some(format!("rename failed: {err}"));
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn summary_for(&self, found: &SessionMatch) -> SessionSummary {
         self.known
             .iter()
@@ -179,15 +267,15 @@ impl SidePanel {
     }
 
     fn section(
-        id: &'static str,
-        label: &'static str,
+        &self,
+        section: Section,
         note: String,
-        open: bool,
-        toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        action: Option<AnyElement>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let open = self.is_open(section);
         div()
-            .id(id)
+            .id(section.label())
             .h(px(36.))
             .px_2()
             .flex()
@@ -195,7 +283,9 @@ impl SidePanel {
             .gap_2()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                toggle(this, cx);
+                if !this.folded_sections.remove(&section) {
+                    this.folded_sections.insert(section);
+                }
                 cx.notify();
             }))
             .child(
@@ -204,41 +294,104 @@ impl SidePanel {
                     .text_color(Theme::ink_dim())
                     .child(if open { "▾" } else { "▸" }),
             )
-            .child(div().text_size(px(13.)).text_color(Theme::ink()).child(label))
-            .child(div().text_xs().text_color(Theme::ink_dim()).child(note))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(Theme::ink())
+                    .child(section.label()),
+            )
+            .child(div().flex_1().text_xs().text_color(Theme::ink_dim()).child(note))
+            .children(action)
     }
 
-    fn agents(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn add_agent(cx: &mut Context<Self>) -> AnyElement {
         div()
-            .px_2()
-            .pb_3()
+            .id("add-agent")
+            .size(px(28.))
+            .rounded(px(14.))
             .flex()
-            .flex_wrap()
-            .gap(px(6.))
-            .children(self.roster.agents.iter().enumerate().map(|(index, agent)| {
-                let launchable = agent.launchable();
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|button| button.bg(Theme::card()))
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                cx.emit(PanelEvent::NewAgent);
+            }))
+            .child(crate::brand::icon("icons/plus.svg", 16., Theme::ink_dim()))
+            .into_any_element()
+    }
+
+    fn hide_finished_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.hide_finished;
+        div()
+            .id("hide-finished")
+            .h(px(24.))
+            .px_2()
+            .rounded(px(12.))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .text_xs()
+            .map(|chip| {
+                if on {
+                    chip.bg(Theme::selected()).text_color(Theme::on_selected())
+                } else {
+                    chip.text_color(Theme::ink_dim())
+                        .hover(|chip| chip.bg(Theme::card()).text_color(Theme::ink()))
+                }
+            })
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.hide_finished = !this.hide_finished;
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child("Hide finished")
+            .into_any_element()
+    }
+
+    fn agents(agents: &[&Agent], cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .pb_2()
+            .flex()
+            .flex_col()
+            .children(agents.iter().enumerate().map(|(index, agent)| {
                 let dot = agent.color.map_or(Theme::ink_dim(), rgb);
-                let chip = div()
+                let edit = (*agent).clone();
+                let row = div()
                     .id(("agent", index))
-                    .h(px(30.))
-                    .px_3()
-                    .rounded(px(15.))
-                    .bg(Theme::card())
+                    .px_2()
+                    .py(px(7.))
+                    .rounded(px(12.))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .child(div().size(px(8.)).rounded(px(4.)).bg(dot))
-                    .child(div().text_color(Theme::ink()).child(agent.name.clone()))
+                    .gap_2()
+                    .hover(|row| row.bg(Theme::card()))
+                    .child(div().flex_none().size(px(8.)).rounded(px(4.)).bg(dot))
                     .child(
                         div()
+                            .flex_1()
+                            .truncate()
+                            .text_color(Theme::ink())
+                            .child(agent.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
                             .text_xs()
                             .text_color(Theme::ink_dim())
                             .child(agent.node.clone().unwrap_or_default()),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                            cx.emit(PanelEvent::EditAgent(edit.clone()));
+                        }),
                     );
-                if launchable {
-                    let start = agent.clone();
-                    chip.cursor_grab()
-                        .on_drag(DraggedAgent(agent.clone()), |dragged, _, _, cx| {
+                if agent.launchable() {
+                    let start = (*agent).clone();
+                    row.cursor_grab()
+                        .on_drag(DraggedAgent((*agent).clone()), |dragged, _, _, cx| {
                             cx.new(|_| DragGhost(format!("Start a session with {}", dragged.0.name).into()))
                         })
                         .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
@@ -246,78 +399,253 @@ impl SidePanel {
                         }))
                         .into_any_element()
                 } else {
-                    chip.opacity(0.55).into_any_element()
+                    row.opacity(0.55).into_any_element()
                 }
             }))
             .into_any_element()
     }
 
-    fn history(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = lineage::nest(&self.history, &self.collapsed);
+    fn is_open(&self, section: Section) -> bool {
+        !self.folded_sections.contains(&section)
+    }
+
+    /// Agents, past topics and history, narrowed by whatever is typed in the search box.
+    fn sections(&self, cx: &mut Context<Self>) -> AnyElement {
+        let filter = self.filter(cx);
+        let agents: Vec<&Agent> = self
+            .roster
+            .agents
+            .iter()
+            .filter(|agent| agent.matches(&filter))
+            .collect();
+        let past: Vec<&PastTopic> = self
+            .past
+            .iter()
+            .filter(|past| model::search::mentions([past.name.as_str()], &filter))
+            .collect();
+        let hide_finished = self.hide_finished;
+        let history = lineage::keep(&self.history, |session| {
+            !(hide_finished && session.status.is_finished()) && session.matches(&filter)
+        });
+        let history_note = format!("{} without a topic", history.len());
         div()
             .flex()
             .flex_col()
-            .children(rows.into_iter().take(60).enumerate().map(|(index, row)| {
-                let open = row.session.clone();
-                let fold = row.session.id.clone();
-                let indent = px(16. * f32::from(u8::try_from(row.depth.min(4)).unwrap_or(4)));
-                div()
-                    .id(("history", index))
-                    .pl(px(8.) + indent)
-                    .pr_2()
-                    .py(px(7.))
-                    .rounded(px(12.))
-                    .cursor_pointer()
-                    .hover(|line| line.bg(Theme::card()))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .on_drag(DraggedSession(row.session.clone()), |dragged, _, _, cx| {
-                        cx.new(|_| DragGhost(crate::text::one_line(dragged.0.title.as_deref())))
+            .child(self.section(
+                Section::Agents,
+                agents.len().to_string(),
+                Some(Self::add_agent(cx)),
+                cx,
+            ))
+            .when(self.is_open(Section::Agents), |section| {
+                section.child(Self::agents(&agents, cx))
+            })
+            .child(div().h(px(1.)).mx_2().bg(Theme::line()))
+            .when(!past.is_empty(), |section| {
+                section
+                    .child(self.section(Section::PastTopics, past.len().to_string(), None, cx))
+                    .when(self.is_open(Section::PastTopics), |section| {
+                        section.child(Self::past_topics(&past, cx))
                     })
-                    .on_click(
-                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Open(open.clone()))),
-                    )
-                    .when(row.depth > 0, |line| {
-                        line.child(div().text_color(Theme::ink_dim()).child("↳"))
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .text_color(Theme::ink())
-                            .child(crate::text::one_line(row.session.title.as_deref())),
-                    )
-                    .when(row.children > 0, |line| {
-                        line.child(
-                            div()
-                                .id(("fold", index))
-                                .text_color(Theme::ink_dim())
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    if !this.collapsed.remove(&fold) {
-                                        this.collapsed.insert(fold.clone());
-                                    }
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }))
-                                .child(if row.collapsed {
-                                    format!("▸ {}", row.children)
-                                } else {
-                                    "▾".to_owned()
-                                }),
-                        )
-                    })
-            }))
+                    .child(div().h(px(1.)).mx_2().bg(Theme::line()))
+            })
+            .child(self.section(
+                Section::History,
+                history_note,
+                Some(self.hide_finished_toggle(cx)),
+                cx,
+            ))
+            .when(self.is_open(Section::History), |section| {
+                section.child(self.history(&history, cx))
+            })
             .into_any_element()
     }
 
-    fn past_topics(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn harness_badge(session: &SessionSummary) -> impl IntoElement {
+        div()
+            .flex_none()
+            .px(px(6.))
+            .rounded(px(6.))
+            .bg(Theme::card())
+            .text_size(px(10.))
+            .text_color(Theme::ink_dim())
+            .child(session.id.harness().display_name().to_owned())
+    }
+
+    fn rename_row(renaming: &Renaming, indent: gpui::Pixels, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .pl(px(8.) + indent)
+            .pr_2()
+            .py(px(4.))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(10.))
+                            .bg(Theme::card())
+                            .border_1()
+                            .border_color(Theme::accent())
+                            .child(renaming.input.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("cancel-history-rename")
+                            .cursor_pointer()
+                            .text_color(Theme::ink_dim())
+                            .hover(|cancel| cancel.text_color(Theme::ink()))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.renaming = None;
+                                cx.notify();
+                            }))
+                            .child("×"),
+                    ),
+            )
+            .children(
+                renaming
+                    .problem
+                    .clone()
+                    .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
+            )
+            .into_any_element()
+    }
+
+    fn history(&self, history: &[SessionSummary], cx: &mut Context<Self>) -> AnyElement {
+        let rows = lineage::nest(history, &self.collapsed);
+        let hidden = rows.len().saturating_sub(self.history_shown);
+        div()
+            .flex()
+            .flex_col()
+            .children(
+                rows.into_iter()
+                    .take(self.history_shown)
+                    .enumerate()
+                    .map(|(index, row)| self.history_row(index, &row, cx)),
+            )
+            .when(hidden > 0, |list| {
+                list.child(
+                    div()
+                        .id("history-more")
+                        .px_2()
+                        .py(px(7.))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(Theme::ink_dim())
+                        .hover(|more| more.text_color(Theme::ink()))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.history_shown += HISTORY_PAGE;
+                            cx.notify();
+                        }))
+                        .child(format!("Show {} more of {hidden}", hidden.min(HISTORY_PAGE))),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn history_row(&self, index: usize, row: &lineage::Row, cx: &mut Context<Self>) -> AnyElement {
+        let indent = px(16. * f32::from(u8::try_from(row.depth.min(4)).unwrap_or(4)));
+        if let Some(renaming) = self
+            .renaming
+            .as_ref()
+            .filter(|renaming| renaming.session.id == row.session.id)
+        {
+            return Self::rename_row(renaming, indent, cx);
+        }
+        let open = row.session.clone();
+        let rename = row.session.clone();
+        let fold = row.session.id.clone();
+        let lead = if row.children > 0 {
+            div()
+                .id(("fold", index))
+                .cursor_pointer()
+                .hover(|fold| fold.text_color(Theme::ink()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if !this.collapsed.remove(&fold) {
+                        this.collapsed.insert(fold.clone());
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .child(if row.collapsed { "▸" } else { "▾" })
+                .into_any_element()
+        } else {
+            div()
+                .child(if row.depth > 0 { "↳" } else { "" })
+                .into_any_element()
+        };
+        div()
+            .id(("history", index))
+            .group(HISTORY_ROW)
+            .pl(px(8.) + indent)
+            .pr_2()
+            .py(px(7.))
+            .rounded(px(12.))
+            .cursor_pointer()
+            .hover(|line| line.bg(Theme::card()))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .on_drag(DraggedSession(row.session.clone()), |dragged, _, _, cx| {
+                cx.new(|_| DragGhost(crate::text::one_line(dragged.0.title.as_deref())))
+            })
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                cx.emit(PanelEvent::Open(open.clone()));
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(12.))
+                    .text_color(Theme::ink_dim())
+                    .child(lead),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .truncate()
+                    .text_color(Theme::ink())
+                    .child(crate::text::one_line(row.session.title.as_deref())),
+            )
+            .child(
+                div()
+                    .id(("rename", index))
+                    .flex_none()
+                    .invisible()
+                    .group_hover(HISTORY_ROW, gpui::StyleRefinement::visible)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.begin_rename(rename.clone(), window, cx);
+                    }))
+                    .child(crate::brand::icon("icons/rename.svg", 13., Theme::ink_dim())),
+            )
+            .child(Self::harness_badge(&row.session))
+            .when(row.children > 0, |line| {
+                line.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(Theme::ink_dim())
+                        .child(row.children.to_string()),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn past_topics(past: &[&PastTopic], cx: &mut Context<Self>) -> AnyElement {
         let now = crate::text::now_ms();
         div()
             .flex()
             .flex_col()
             .pb_2()
-            .children(self.past.iter().enumerate().map(|(index, past)| {
+            .children(past.iter().enumerate().map(|(index, past)| {
                 let open = past.id.clone();
                 div()
                     .id(("past", index))
@@ -475,46 +803,7 @@ impl Render for SidePanel {
                 .text_color(Theme::ink_dim())
                 .child("Searching…")
                 .into_any_element(),
-            _ => {
-                let agents_note = self.roster.agents.len().to_string();
-                let history_note = format!("{} without a topic", self.history.len());
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(Self::section(
-                        "agents-header",
-                        "Agents",
-                        agents_note,
-                        self.agents_open,
-                        |this, _| this.agents_open = !this.agents_open,
-                        cx,
-                    ))
-                    .when(self.agents_open, |section| section.child(self.agents(cx)))
-                    .child(div().h(px(1.)).mx_2().bg(Theme::line()))
-                    .when(!self.past.is_empty(), |section| {
-                        section
-                            .child(Self::section(
-                                "past-header",
-                                "Past topics",
-                                self.past.len().to_string(),
-                                self.past_open,
-                                |this, _| this.past_open = !this.past_open,
-                                cx,
-                            ))
-                            .when(self.past_open, |section| section.child(self.past_topics(cx)))
-                            .child(div().h(px(1.)).mx_2().bg(Theme::line()))
-                    })
-                    .child(Self::section(
-                        "history-header",
-                        "History",
-                        history_note,
-                        self.history_open,
-                        |this, _| this.history_open = !this.history_open,
-                        cx,
-                    ))
-                    .when(self.history_open, |section| section.child(self.history(cx)))
-                    .into_any_element()
-            }
+            _ => self.sections(cx),
         };
         div()
             .w(px(340.))

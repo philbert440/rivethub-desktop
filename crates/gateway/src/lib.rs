@@ -1,6 +1,7 @@
 mod chat;
 mod error;
 mod events;
+mod memory;
 mod terminal;
 mod tls;
 mod tool_input;
@@ -16,6 +17,7 @@ pub use tls::certificates;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use model::prompt::{Attachment, Prompt};
 use model::{HarnessId, SessionId, session::SessionSummary};
 use rustls::ClientConfig;
 use serde::Serialize;
@@ -157,9 +159,9 @@ impl Gateway {
         Ok(translate::summary(created))
     }
 
-    pub async fn send_turn(&self, session: &SessionId, text: &str) -> Result<(), GatewayError> {
+    pub async fn send_turn(&self, session: &SessionId, prompt: &Prompt) -> Result<(), GatewayError> {
         let url = format!("{}/api/harness-sessions/{session}/turn", self.base_url);
-        let body = serde_json::json!({ "text": text });
+        let body = translate::prompt(prompt);
         let accepted: wire::gateway::sessions::SessionPostAccepted =
             Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
         if accepted.accepted {
@@ -167,6 +169,24 @@ impl Gateway {
         } else {
             Err(GatewayError::Refused("turn not accepted".into()))
         }
+    }
+
+    pub async fn upload(
+        &self,
+        session: &SessionId,
+        name: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment, GatewayError> {
+        let session = translate::wire_session(session)?.to_string();
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/api/uploads", self.base_url),
+            &[("name", name), ("mediaType", media_type), ("session", &session)],
+        )
+        .map_err(|err| GatewayError::Refused(format!("upload url: {err}")))?;
+        let created: wire::gateway::uploads::UploadCreated =
+            Self::read_json(self.http.post(url).body(bytes).send().await)?.await?;
+        Ok(translate::attachment(created))
     }
 
     pub async fn decide(
@@ -231,6 +251,62 @@ impl Gateway {
         Ok(translate::summary(renamed))
     }
 
+    pub async fn create_agent(
+        &self,
+        draft: &model::agents::AgentDraft,
+    ) -> Result<model::agents::Agent, GatewayError> {
+        use wire::gateway::agents::{AgentPresetCreateRequest, AgentResponse, KnownHarness};
+        let body = AgentPresetCreateRequest {
+            name: draft.name.clone(),
+            color: Some(draft.color_hex()),
+            harness_id: draft
+                .harness
+                .as_ref()
+                .and_then(|harness| KnownHarness::try_from(harness.as_str().to_owned()).ok()),
+            model: draft.model.clone(),
+            effort: draft.effort.clone(),
+            system_prompt: draft.instructions.clone(),
+            node: draft.node.clone(),
+            directory: draft.directory.clone(),
+            ..AgentPresetCreateRequest::default()
+        };
+        let url = format!("{}/api/agents", self.base_url);
+        let created: AgentResponse = Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
+        Ok(translate::agent(created.agent))
+    }
+
+    pub async fn update_agent(
+        &self,
+        id: &str,
+        draft: &model::agents::AgentDraft,
+    ) -> Result<model::agents::Agent, GatewayError> {
+        use wire::gateway::agents::{AgentPresetUpdate, AgentResponse, KnownHarness};
+        let body = AgentPresetUpdate {
+            name: Some(draft.name.clone()),
+            color: Some(draft.color_hex()),
+            harness_id: Some(
+                draft
+                    .harness
+                    .as_ref()
+                    .and_then(|harness| KnownHarness::try_from(harness.as_str().to_owned()).ok()),
+            ),
+            model: Some(draft.model.clone().unwrap_or_default()),
+            effort: Some(draft.effort.clone().unwrap_or_default()),
+            system_prompt: Some(draft.instructions.clone().unwrap_or_default()),
+            directory: draft.directory.clone(),
+            ..AgentPresetUpdate::default()
+        };
+        let url = self.api_url(&["api", "agents", id])?;
+        let updated: AgentResponse = Self::read_json(self.http.patch(url).json(&body).send().await)?.await?;
+        Ok(translate::agent(updated.agent))
+    }
+
+    pub async fn delete_agent(&self, id: &str) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "agents", id])?;
+        let reply = self.http.delete(url).send().await.map_err(GatewayError::Http)?;
+        Self::check(reply).await.map(drop)
+    }
+
     pub async fn stop(&self, session: &SessionId) -> Result<(), GatewayError> {
         let url = format!("{}/api/harness-sessions/{session}/stop", self.base_url);
         let reply = self.http.post(url).send().await.map_err(GatewayError::Http)?;
@@ -269,6 +345,7 @@ impl Gateway {
             force: None,
             cols: Some(columns),
             rows: Some(rows),
+            topic_id: None,
         };
         let url = format!("{}/term", self.base_url);
         let spawned: wire::gateway::term::TermSpawnResponse =

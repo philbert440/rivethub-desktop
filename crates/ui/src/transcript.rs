@@ -181,8 +181,7 @@ fn step(
                     .text_color(Theme::ink_dim())
                     .hover(|row| row.text_color(Theme::ink()))
                     .child(div().w(px(16.)).child(chevron(open)))
-                    .child(label)
-                    .child(div().text_xs().child(format!("{}", tools.len()))),
+                    .child(label),
                 )
                 .when(open, |group| {
                     group.children(tools.iter().enumerate().map(|(tool, call)| {
@@ -258,12 +257,29 @@ fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> 
     .child(chevron(open))
 }
 
+/// The model and output tokens behind an exchange, shown when the pointer is over it.
+fn meta(exchange: &Exchange) -> Option<String> {
+    let tokens = match exchange.output_tokens {
+        0 => None,
+        count if count < 1000 => Some(format!("{count} tokens")),
+        count => Some(format!("{}.{}k tokens", count / 1000, count % 1000 / 100)),
+    };
+    let parts: Vec<String> = exchange.model.iter().cloned().chain(tokens).collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
 pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyElement {
     let exchange = &view.exchange;
     let ix = cx.index;
     let working = exchange.state == ExchangeState::Working;
     let ink: Hsla = Theme::ink().into();
-    let mut column = div().w(cx.column).flex().flex_col().gap_3().py_3();
+    let mut column = div()
+        .group("exchange")
+        .w(cx.column)
+        .flex()
+        .flex_col()
+        .gap_3()
+        .py_3();
     if let Some(prompt) = &exchange.prompt {
         column = column.child(bubble(prompt, cx.column));
     }
@@ -298,6 +314,17 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                     ink,
                     window,
                 )),
+        );
+    }
+    if let Some(meta) = meta(exchange).filter(|_| !working) {
+        column = column.child(
+            div()
+                .h(px(20.))
+                .text_xs()
+                .text_color(Theme::ink_dim())
+                .invisible()
+                .group_hover("exchange", gpui::Styled::visible)
+                .child(meta),
         );
     }
     if working {

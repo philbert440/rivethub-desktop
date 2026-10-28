@@ -24,6 +24,15 @@ pub struct SessionMatch {
 
 const CONTEXT: usize = 48;
 
+/// Every word of the query turns up in at least one of the fields, ignoring case.
+pub fn mentions<'a>(fields: impl IntoIterator<Item = &'a str>, query: &str) -> bool {
+    let fields: Vec<String> = fields.into_iter().map(str::to_lowercase).collect();
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|word| fields.iter().any(|field| field.contains(word)))
+}
+
 fn find(haystack: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return None;
@@ -100,7 +109,7 @@ pub fn group(hits: Vec<Hit>, query: &str) -> Vec<SessionMatch> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hit, group, snippet};
+    use super::{Hit, group, mentions, snippet};
     use crate::{HarnessId, NativeSessionId, SessionId};
 
     fn session(native: &str) -> SessionId {
@@ -130,5 +139,12 @@ mod tests {
         assert_eq!(grouped[0].count, 2);
         assert_eq!(grouped[0].latest_ms, 5);
         assert_eq!(grouped[1].count, 1);
+    }
+
+    #[test]
+    fn every_word_must_turn_up_in_some_field() {
+        assert!(mentions(["Cert renewal", "ct115"], "renew CT115"));
+        assert!(!mentions(["Cert renewal", "ct115"], "renew phildesk"));
+        assert!(mentions(["anything"], "  "));
     }
 }

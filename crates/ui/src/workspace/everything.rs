@@ -1,9 +1,13 @@
-use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, img, prelude::*, px};
+use gpui::{
+    AnyElement, ClickEvent, Context, IntoElement, MouseButton, ParentElement, Styled, div, img, prelude::*,
+    px,
+};
 use model::session::SessionSummary;
 use model::topics::Card;
 
 use super::Workspace;
 use crate::brand;
+use crate::memory::Focus;
 use crate::side_panel::{DraggedAgent, DraggedSession};
 use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
@@ -156,6 +160,10 @@ impl Workspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedAgent, window, cx| {
                 this.start_with(dragged.0.clone(), Some(dropped_agent.clone()), window, cx);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                Self::on_right_click(Focus::Topic(card.topic.id.clone()), cx),
+            )
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.open_topic(topic.clone(), window, cx);
             }))
@@ -270,6 +278,9 @@ impl Workspace {
             .gap_2()
             .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
                 cx.new(|_| crate::side_panel::DragGhost(one_line(dragged.0.title.as_deref())))
+            })
+            .when_some(Self::session_focus(session), |tile, focus| {
+                tile.on_mouse_down(MouseButton::Right, Self::on_right_click(focus, cx))
             })
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.open(summary.clone(), window, cx);
