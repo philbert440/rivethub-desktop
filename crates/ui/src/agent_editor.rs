@@ -218,26 +218,27 @@ impl AgentEditor {
     }
 
     fn colors(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_none()
-            .gap(px(6.))
-            .children(Theme::AGENT_COLORS.iter().enumerate().map(|(index, color)| {
-                let color = *color;
-                let selected = self.draft.color == color;
-                div()
-                    .id(("agent-color", index))
-                    .size(px(26.))
-                    .rounded(px(13.))
-                    .cursor_pointer()
-                    .bg(rgb(color))
-                    .border_2()
-                    .border_color(if selected { Theme::ink() } else { Theme::surface() })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.draft.color = color;
-                        cx.notify();
-                    }))
-            }))
+        let own = Some(self.draft.color).filter(|color| !Theme::AGENT_COLORS.contains(color));
+        div().flex().flex_none().gap(px(6.)).children(
+            own.into_iter()
+                .chain(Theme::AGENT_COLORS.iter().copied())
+                .enumerate()
+                .map(|(index, color)| {
+                    let selected = self.draft.color == color;
+                    div()
+                        .id(("agent-color", index))
+                        .size(px(26.))
+                        .rounded(px(13.))
+                        .cursor_pointer()
+                        .bg(rgb(color))
+                        .border_2()
+                        .border_color(if selected { Theme::ink() } else { Theme::surface() })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.draft.color = color;
+                            cx.notify();
+                        }))
+                }),
+        )
     }
 
     fn nodes_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -297,6 +298,13 @@ impl AgentEditor {
                     .flex()
                     .flex_wrap()
                     .gap(px(6.))
+                    .children(
+                        self.draft
+                            .model
+                            .clone()
+                            .filter(|model| !offer.models.iter().any(|choice| choice.id == *model))
+                            .map(|model| Self::chip(("agent-model-own", 0), model.into(), true)),
+                    )
                     .children(offer.models.iter().enumerate().map(|(index, choice)| {
                         let selected = self.draft.model.as_deref() == Some(choice.id.as_str())
                             || (self.draft.model.is_none() && choice.default);
