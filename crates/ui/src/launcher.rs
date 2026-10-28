@@ -201,7 +201,7 @@ impl Launcher {
     }
 
     /// Shows `node`'s harnesses, reading them again if that failed; picking a node means starting a
-    /// harness there, so its default is chosen.
+    /// harness there, so the remembered one is chosen when it was on this node, else its default.
     fn show_node(&mut self, node: Option<String>, cx: &mut Context<Self>) {
         if self.node == node && !matches!(self.offers, Offers::Failed(_)) {
             return;
