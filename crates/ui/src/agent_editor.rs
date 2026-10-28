@@ -4,21 +4,11 @@ use gpui::{
     SharedString, Styled, Window, div, prelude::*, px, rgb,
 };
 use model::HarnessId;
-use model::agents::{Agent, AgentDraft};
+use model::agents::{Agent, AgentDraft, EFFORTS};
 use model::harness::HarnessOffer;
 
 use crate::input::TextInput;
 use crate::theme::Theme;
-
-const COLORS: [u32; 6] = [
-    0x006c_dbac,
-    0x008e_cbff,
-    0x00f5_c56b,
-    0x00ff_b4ab,
-    0x00c9_b2ff,
-    0x00a7_b2ab,
-];
-const EFFORTS: [&str; 5] = ["off", "low", "medium", "high", "xhigh"];
 
 #[derive(Debug, Clone)]
 pub enum AgentEditorEvent {
@@ -78,8 +68,16 @@ impl AgentEditor {
             busy: false,
         };
         cx.spawn(async move |this, cx| {
-            let nodes = hub.nodes().await.unwrap_or_default();
+            let nodes = hub.nodes().await;
             this.update(cx, |this, cx| {
+                let nodes = match nodes {
+                    Ok(nodes) => nodes,
+                    Err(err) => {
+                        this.problem = Some(format!("couldn't list the mesh's nodes: {err}"));
+                        cx.notify();
+                        return;
+                    }
+                };
                 if this.draft.node.is_none() {
                     this.draft.node = nodes.first().cloned();
                 }
@@ -118,28 +116,19 @@ impl AgentEditor {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        let name = self.name.read(cx).text().to_owned();
-        if name.is_empty() {
-            self.problem = Some("Give the agent a name.".into());
+        let folder = self.folder.read(cx).text().trim();
+        let instructions = self.instructions.read(cx).text();
+        let draft = AgentDraft {
+            name: self.name.read(cx).text().trim().to_owned(),
+            directory: (!folder.is_empty()).then(|| folder.to_owned()),
+            instructions: (!instructions.is_empty()).then(|| instructions.to_owned()),
+            ..self.draft.clone()
+        };
+        if let Err(problem) = draft.check() {
+            self.problem = Some(problem.to_string());
             cx.notify();
             return;
         }
-        if self.draft.harness.is_none() {
-            self.problem = Some("Pick a harness.".into());
-            cx.notify();
-            return;
-        }
-        let folder = self.folder.read(cx).text().to_owned();
-        if !folder.is_empty() && !folder.starts_with('/') {
-            self.problem = Some("Use an absolute working folder, starting with /.".into());
-            cx.notify();
-            return;
-        }
-        let instructions = self.instructions.read(cx).text().to_owned();
-        let mut draft = self.draft.clone();
-        draft.name = name;
-        draft.directory = Some(folder).filter(|folder| !folder.is_empty());
-        draft.instructions = Some(instructions).filter(|text| !text.is_empty());
         self.busy = true;
         self.problem = None;
         cx.notify();
@@ -227,7 +216,7 @@ impl AgentEditor {
             .flex()
             .flex_none()
             .gap(px(6.))
-            .children(COLORS.iter().enumerate().map(|(index, color)| {
+            .children(Theme::AGENT_COLORS.iter().enumerate().map(|(index, color)| {
                 let color = *color;
                 let selected = self.draft.color == color;
                 div()
@@ -277,7 +266,7 @@ impl AgentEditor {
                 let pick: HarnessId = offer.id.clone();
                 Self::chip(
                     ("agent-harness", index),
-                    offer.id.as_str().to_owned().into(),
+                    offer.id.display_name().to_owned().into(),
                     selected,
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {

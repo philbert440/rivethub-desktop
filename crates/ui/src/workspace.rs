@@ -848,7 +848,7 @@ impl Render for Workspace {
                 div()
                     .absolute()
                     .inset_0()
-                    .bg(gpui::rgba(0x0509_07b3))
+                    .bg(Theme::scrim())
                     .flex()
                     .items_center()
                     .justify_center()
