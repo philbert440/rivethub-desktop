@@ -2,6 +2,7 @@ use std::path::Path;
 
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use x509_parser::prelude::{FromDer, X509Certificate, X509Name};
 
 use crate::{GatewayError, Identity};
 
@@ -37,4 +38,32 @@ pub fn client_config(ca_pem: &Path, identity: Option<&Identity>) -> Result<Clien
     let key = PrivateKeyDer::from_pem_slice(&read(&identity.key_pem)?)
         .map_err(|_| GatewayError::Key(identity.key_pem.display().to_string()))?;
     Ok(builder.with_client_auth_cert(chain, key)?)
+}
+
+/// The certificates in a PEM file, leaf first.
+pub fn certificates(path: &Path) -> Result<Vec<model::trust::Certificate>, GatewayError> {
+    let shown = path.display().to_string();
+    let bytes = std::fs::read(path).map_err(|source| GatewayError::Ca {
+        path: shown.clone(),
+        source,
+    })?;
+    CertificateDer::pem_slice_iter(&bytes)
+        .map(|der| {
+            let der = der.map_err(|_| GatewayError::Certificate(shown.clone()))?;
+            let (_, cert) =
+                X509Certificate::from_der(&der).map_err(|_| GatewayError::Certificate(shown.clone()))?;
+            Ok(model::trust::Certificate {
+                subject: common_name(cert.subject()),
+                issuer: common_name(cert.issuer()),
+                not_after_ms: cert.validity().not_after.timestamp().saturating_mul(1000),
+            })
+        })
+        .collect()
+}
+
+fn common_name(name: &X509Name<'_>) -> String {
+    name.iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map_or_else(|| name.to_string(), str::to_owned)
 }
