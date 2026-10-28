@@ -27,7 +27,7 @@ impl Gateway {
             }
         }
         let found: MemorySearchResponse = Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(translate::found(found))
+        Ok(model::memory::said(translate::found(found)))
     }
 
     pub async fn topic_page(&self, topic: &TopicId) -> Result<Option<Page>, GatewayError> {
