@@ -1,5 +1,13 @@
 use crate::{SessionId, TopicId};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Page {
+    #[default]
+    Workspace,
+    Memory,
+    Settings,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Altitude {
     #[default]

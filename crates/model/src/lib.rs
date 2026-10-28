@@ -13,4 +13,4 @@ pub mod tools;
 pub mod topics;
 
 pub use ids::{HarnessId, NativeSessionId, SessionId, TopicId};
-pub use nav::Altitude;
+pub use nav::{Altitude, Page};
