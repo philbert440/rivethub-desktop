@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use model::prefs::Preferences;
-use serde::{Deserialize, Serialize};
+use model::HarnessId;
+use model::prefs::{LastLaunch, Preferences};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Hub;
 
@@ -11,6 +12,30 @@ use crate::Hub;
 struct Stored {
     notify_finished: bool,
     notify_needs_you: bool,
+    jump_to_newest: bool,
+    #[serde(deserialize_with = "or_none")]
+    last_launch: Option<StoredLaunch>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum StoredLaunch {
+    Agent {
+        id: String,
+        name: String,
+    },
+    Harness {
+        node: Option<String>,
+        harness: String,
+        model: Option<String>,
+    },
+}
+
+/// A launch this build can't read, such as a kind from a newer one, is forgotten rather than
+/// costing every other preference.
+fn or_none<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<StoredLaunch>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 impl Default for Stored {
@@ -24,6 +49,18 @@ impl From<&Preferences> for Stored {
         Self {
             notify_finished: prefs.notify_finished,
             notify_needs_you: prefs.notify_needs_you,
+            jump_to_newest: prefs.jump_to_newest,
+            last_launch: prefs.last_launch.as_ref().map(|launch| match launch {
+                LastLaunch::Agent { id, name } => StoredLaunch::Agent {
+                    id: id.clone(),
+                    name: name.clone(),
+                },
+                LastLaunch::Harness { node, harness, model } => StoredLaunch::Harness {
+                    node: node.clone(),
+                    harness: harness.as_str().to_owned(),
+                    model: model.clone(),
+                },
+            }),
         }
     }
 }
@@ -33,6 +70,15 @@ impl From<Stored> for Preferences {
         Self {
             notify_finished: stored.notify_finished,
             notify_needs_you: stored.notify_needs_you,
+            jump_to_newest: stored.jump_to_newest,
+            last_launch: stored.last_launch.map(|launch| match launch {
+                StoredLaunch::Agent { id, name } => LastLaunch::Agent { id, name },
+                StoredLaunch::Harness { node, harness, model } => LastLaunch::Harness {
+                    node,
+                    harness: HarnessId::new(harness),
+                    model,
+                },
+            }),
         }
     }
 }
@@ -94,5 +140,41 @@ impl Hub {
                 tracing::warn!(%err, "saving the preferences failed");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use model::prefs::{LastLaunch, Preferences};
+
+    use super::Stored;
+
+    #[test]
+    fn an_older_file_or_an_unknown_launch_still_loads() {
+        let older: Stored = serde_json::from_str(r#"{"notifyFinished":false}"#).unwrap_or_default();
+        let older = Preferences::from(older);
+        assert!(!older.notify_finished);
+        assert!(older.jump_to_newest);
+        assert_eq!(older.last_launch, None);
+
+        let newer: Stored = serde_json::from_str(
+            r#"{"jumpToNewest":false,"lastLaunch":{"kind":"workflow","id":"w1"},"theme":"light"}"#,
+        )
+        .unwrap_or_default();
+        let newer = Preferences::from(newer);
+        assert!(!newer.jump_to_newest);
+        assert_eq!(newer.last_launch, None);
+
+        let saved = Preferences {
+            last_launch: Some(LastLaunch::Harness {
+                node: Some("ct115".into()),
+                harness: model::HarnessId::new("codex"),
+                model: None,
+            }),
+            ..Preferences::default()
+        };
+        let json = serde_json::to_string(&Stored::from(&saved)).unwrap_or_default();
+        let read: Stored = serde_json::from_str(&json).unwrap_or_default();
+        assert_eq!(Preferences::from(read), saved);
     }
 }

@@ -5,8 +5,10 @@ use gpui::{
 };
 use model::health::{MemoryHealth, Status};
 use model::mesh::Node;
+use model::prefs::LastLaunch;
 use model::trust::{Certificate, Trust, Validity};
 
+use crate::GatewayUrl;
 use crate::shell;
 use crate::text::now_ms;
 use crate::theme::Theme;
@@ -23,9 +25,11 @@ impl<T> Load<T> {
     }
 }
 
-/// The Settings page: the mesh's nodes, this device's certificate and how memory is doing.
+/// The Settings page: the mesh's nodes, the gateway, what you've chosen, this device's certificate
+/// and how memory is doing.
 pub struct SettingsPage {
     hub: Hub,
+    gateway: GatewayUrl,
     nodes: Load<Vec<Node>>,
     trust: Load<Trust>,
     memory: Load<MemoryHealth>,
@@ -35,6 +39,7 @@ impl SettingsPage {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
         let mut page = Self {
             hub,
+            gateway: crate::gateway_url(),
             nodes: Load::Waiting,
             trust: Load::Waiting,
             memory: Load::Waiting,
@@ -201,6 +206,84 @@ impl SettingsPage {
         ]
     }
 
+    fn sessions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let prefs = self.hub.preferences();
+        let (choice, detail) = prefs.last_launch.as_ref().map_or(
+            (
+                "Claude on this node".to_owned(),
+                "The built-in choice, until you start a session.",
+            ),
+            |last| (launch_label(last), "The last one you started."),
+        );
+        let reset = div()
+            .id("reset-new-session")
+            .h(px(28.))
+            .px_3()
+            .rounded(px(14.))
+            .border_1()
+            .border_color(Theme::line())
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .text_xs()
+            .text_color(Theme::ink_dim())
+            .hover(|button| button.bg(Theme::raised()))
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                let mut prefs = this.hub.preferences();
+                prefs.last_launch = None;
+                this.hub.set_preferences(prefs);
+                cx.notify();
+            }))
+            .child("Reset");
+        vec![
+            row()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child("New sessions start with")
+                        .child(dim(detail).text_xs()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .min_w_0()
+                        .child(dim(choice).truncate())
+                        .when(prefs.last_launch.is_some(), |line| line.child(reset)),
+                )
+                .into_any_element(),
+            toggle(
+                "jump-to-newest",
+                "Jump to newest",
+                "A send or a finished reply brings an open chat to its end, even when scrolled up.",
+                prefs.jump_to_newest,
+                cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.jump_to_newest = !prefs.jump_to_newest;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+        ]
+    }
+
+    fn gateway(&self) -> Vec<AnyElement> {
+        vec![
+            field("Address", mono(self.gateway.url.clone())),
+            field(
+                "Set by",
+                if self.gateway.from_env {
+                    mono("RIVETHUB_URL")
+                } else {
+                    dim("The default")
+                },
+            ),
+        ]
+    }
+
     fn memory(&self) -> Vec<AnyElement> {
         let health = match &self.memory {
             Load::Ready(health) => health,
@@ -268,6 +351,8 @@ impl Render for SettingsPage {
                             .flex_col()
                             .gap_8()
                             .child(section("Nodes", self.nodes()))
+                            .child(section("Gateway", self.gateway()))
+                            .child(section("Sessions", self.sessions(cx)))
                             .child(section("Notifications", self.notifications(cx)))
                             .child(section("This device", self.device()))
                             .child(section("Certificate authority", self.authority()))
@@ -351,6 +436,20 @@ fn toggle(
         )
         .child(track)
         .into_any_element()
+}
+
+/// "Grok · grok-4 on ct115" for a harness, "Scout (agent)" for an agent.
+fn launch_label(last: &LastLaunch) -> String {
+    match last {
+        LastLaunch::Agent { name, .. } => format!("{name} (agent)"),
+        LastLaunch::Harness { node, harness, model } => {
+            let node = node.as_deref().unwrap_or("this node");
+            match model {
+                Some(model) => format!("{} · {model} on {node}", harness.display_name()),
+                None => format!("{} on {node}", harness.display_name()),
+            }
+        }
+    }
 }
 
 fn pending<T>(load: &Load<T>) -> Vec<AnyElement> {

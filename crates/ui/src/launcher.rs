@@ -5,6 +5,7 @@ use gpui::{
 };
 use model::agents::Agent;
 use model::harness::HarnessOffer;
+use model::prefs::LastLaunch;
 use model::topics::Topic;
 use model::{HarnessId, TopicId};
 
@@ -54,6 +55,8 @@ pub struct Launcher {
     node: Option<String>,
     offers: Offers,
     choice: Option<Choice>,
+    /// What the last session was started with, preselected when it is still on offer.
+    last: Option<LastLaunch>,
     preset: Option<(TopicId, String)>,
     picker: Entity<TopicPicker>,
     _subscriptions: Vec<Subscription>,
@@ -81,6 +84,11 @@ impl Launcher {
             };
             this.start(target, cx);
         });
+        let last = hub.preferences().last_launch;
+        let away = match &last {
+            Some(LastLaunch::Harness { node: Some(node), .. }) => Some(node.clone()),
+            _ => None,
+        };
         let loading = hub.clone();
         cx.spawn(async move |this, cx| {
             let agents = loading
@@ -89,8 +97,20 @@ impl Launcher {
                 .map(|roster| roster.agents)
                 .unwrap_or_default();
             let nodes = loading.agent_hosts().await.unwrap_or_default();
-            let offers = loading.harnesses(None).await;
-            this.update(cx, |this, cx| this.loaded(agents, nodes, offers, cx))
+            // The remembered node opens when it's online and answers; otherwise this one does.
+            let away = match away.filter(|node| nodes.iter().skip(1).any(|name| name == node)) {
+                Some(node) => loading
+                    .harnesses(Some(node.clone()))
+                    .await
+                    .ok()
+                    .map(|offers| (node, offers)),
+                None => None,
+            };
+            let (node, offers) = match away {
+                Some((node, offers)) => (Some(node), Ok(offers)),
+                None => (None, loading.harnesses(None).await),
+            };
+            this.update(cx, |this, cx| this.loaded(agents, nodes, node, offers, cx))
                 .ok();
         })
         .detach();
@@ -102,6 +122,7 @@ impl Launcher {
             node: None,
             offers: Offers::Reading,
             choice: None,
+            last,
             preset,
             picker,
             _subscriptions: vec![choose_topic],
@@ -112,19 +133,33 @@ impl Launcher {
         &mut self,
         agents: Vec<Agent>,
         nodes: Vec<String>,
+        node: Option<String>,
         offers: Result<Vec<HarnessOffer>, gateway::GatewayError>,
         cx: &mut Context<Self>,
     ) {
         self.loaded = true;
         self.agents = agents.into_iter().filter(Agent::launchable).collect();
         self.nodes = nodes;
+        self.node = node;
         self.read(offers);
         if self.choice.is_none() {
             self.choice = self
-                .default_harness()
+                .remembered_agent()
+                .or_else(|| self.preferred_harness())
                 .or_else(|| self.agents.first().cloned().map(Choice::Agent));
         }
         cx.notify();
+    }
+
+    fn remembered_agent(&self) -> Option<Choice> {
+        let Some(LastLaunch::Agent { id, .. }) = &self.last else {
+            return None;
+        };
+        self.agents
+            .iter()
+            .find(|agent| agent.id == *id)
+            .cloned()
+            .map(Choice::Agent)
     }
 
     fn read(&mut self, offers: Result<Vec<HarnessOffer>, gateway::GatewayError>) {
@@ -141,17 +176,32 @@ impl Launcher {
         }
     }
 
+    /// The remembered harness when the node on show still offers it, otherwise the default one.
+    fn preferred_harness(&self) -> Option<Choice> {
+        let Some(LastLaunch::Harness { node, harness, model }) = &self.last else {
+            return self.default_harness();
+        };
+        if *node != self.node {
+            return self.default_harness();
+        }
+        self.offers()
+            .iter()
+            .find(|offer| offer.id == *harness)
+            .map(|offer| self.harness_choice(offer, model.as_deref()))
+            .or_else(|| self.default_harness())
+    }
+
     fn default_harness(&self) -> Option<Choice> {
         let offers = self.offers();
         offers
             .iter()
             .find(|offer| offer.id.as_str() == DEFAULT_HARNESS)
             .or_else(|| offers.first())
-            .map(|offer| self.harness_choice(offer))
+            .map(|offer| self.harness_choice(offer, None))
     }
 
     /// Shows `node`'s harnesses, reading them again if that failed; picking a node means starting a
-    /// harness there, so its default is chosen.
+    /// harness there, so the remembered one is chosen when it was on this node, else its default.
     fn show_node(&mut self, node: Option<String>, cx: &mut Context<Self>) {
         if self.node == node && !matches!(self.offers, Offers::Failed(_)) {
             return;
@@ -168,7 +218,7 @@ impl Launcher {
                 }
                 this.read(offers);
                 if this.choice.is_none() {
-                    this.choice = this.default_harness();
+                    this.choice = this.preferred_harness();
                 }
                 cx.notify();
             })
@@ -178,20 +228,35 @@ impl Launcher {
         cx.notify();
     }
 
-    fn harness_choice(&self, offer: &HarnessOffer) -> Choice {
+    /// `offer` on the node on show, with `model` when the harness still offers it and its default
+    /// model otherwise.
+    fn harness_choice(&self, offer: &HarnessOffer, model: Option<&str>) -> Choice {
+        let offered = model.and_then(|wanted| offer.models.iter().find(|choice| choice.id == wanted));
         Choice::Harness {
             node: self.node.clone(),
             harness: offer.id.clone(),
-            model: offer
-                .models
-                .iter()
-                .find(|model| model.default)
-                .map(|model| model.id.clone()),
+            model: offered
+                .or_else(|| offer.models.iter().find(|choice| choice.default))
+                .map(|choice| choice.id.clone()),
         }
     }
 
+    /// Starts the chosen session and remembers the choice for the next one.
     fn start(&self, target: Target, cx: &mut Context<Self>) {
         if let Some(choice) = self.choice.clone() {
+            let mut prefs = self.hub.preferences();
+            prefs.last_launch = Some(match &choice {
+                Choice::Agent(agent) => LastLaunch::Agent {
+                    id: agent.id.clone(),
+                    name: agent.name.clone(),
+                },
+                Choice::Harness { node, harness, model } => LastLaunch::Harness {
+                    node: node.clone(),
+                    harness: harness.clone(),
+                    model: model.clone(),
+                },
+            });
+            self.hub.set_preferences(prefs);
             cx.emit(LauncherEvent::Start {
                 choice: Box::new(choice),
                 target,
@@ -256,7 +321,7 @@ impl Launcher {
         let harnesses = self.offers().iter().enumerate().map(|(index, offer)| {
             let selected =
                 matches!(&self.choice, Some(Choice::Harness { harness, .. }) if *harness == offer.id);
-            let pick = self.harness_choice(offer);
+            let pick = self.harness_choice(offer, None);
             Self::chip(("launch-harness", index), selected)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.choice = Some(pick.clone());
