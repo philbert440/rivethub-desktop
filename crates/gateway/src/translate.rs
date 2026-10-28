@@ -264,6 +264,16 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
         thinking: raw.thinking.unwrap_or_default(),
         model: raw.model,
         output_tokens: raw.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
+        files: raw
+            .attachments
+            .unwrap_or_default()
+            .into_iter()
+            .map(|file| model::prompt::SentFile {
+                media_type: file.media_type,
+                name: file.name,
+                upload: file.upload_id,
+            })
+            .collect(),
         tools: raw
             .tools
             .unwrap_or_default()
