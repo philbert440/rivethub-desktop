@@ -217,7 +217,6 @@ fn status(label: &str) -> AnyElement {
         .into_any_element()
 }
 
-/// A sent image shows as a thumbnail while its upload lasts, and by name before it loads or after it's gone.
 /// A sent image shows as a thumbnail while its upload lasts.
 fn sent_file(file: &SentFile, cx: &Context<'_>) -> AnyElement {
     let label = file.label().to_owned();
