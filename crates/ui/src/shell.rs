@@ -26,6 +26,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
+        let settings = cx.new(|cx| SettingsPage::new(hub.clone(), cx));
         let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
         window.focus(&workspace.focus_handle(cx), cx);
         let to_memory = cx.subscribe_in(&workspace, window, |this, _, ViewInMemory(focus), window, cx| {
@@ -54,7 +55,7 @@ impl Shell {
             sidebar_open: true,
             workspace,
             memory,
-            settings: cx.new(|_| SettingsPage),
+            settings,
             _routes: [to_memory, to_session],
         }
     }

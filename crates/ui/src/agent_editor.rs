@@ -72,7 +72,7 @@ impl AgentEditor {
         cx.spawn(async move |this, cx| {
             let nodes = match hosted {
                 Some(node) => Ok(vec![node]),
-                None => hub.nodes().await,
+                None => hub.agent_hosts().await,
             };
             this.update(cx, |this, cx| {
                 let nodes = match nodes {

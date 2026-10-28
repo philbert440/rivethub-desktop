@@ -4,6 +4,7 @@ pub struct Node {
     pub name: String,
     pub url: String,
     pub online: bool,
+    pub sessions: Option<u64>,
 }
 
 impl Node {
