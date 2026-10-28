@@ -419,6 +419,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_effort_the_composer_offers_is_one_rh_takes() {
+        for effort in model::agents::EFFORTS {
+            assert!(
+                effort.parse::<wire::stream::ThinkingLevel>().is_ok(),
+                "rh has no {effort} effort"
+            );
+        }
+    }
+
+    #[test]
     fn context_counts_cached_prompt_tokens_once() {
         let turn: HarnessTranscriptTurn = serde_json::from_str(
             r#"{"role":"assistant","text":"hi","usage":{"promptTokens":15,"completionTokens":3,"cachedTokens":5}}"#,
