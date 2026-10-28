@@ -142,6 +142,49 @@ pub fn found(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::mem
         .collect()
 }
 
+pub fn session_memory(raw: wire::gateway::memory::MemorySummaryDagResponse) -> model::memory::SessionMemory {
+    use model::memory::{MessageTally, SessionMemory, Summary, SummaryKind, Vector};
+    use wire::gateway::memory::{SummaryKind as Kind, VectorState};
+    let vector = |state| match state {
+        VectorState::Embedded => Vector::Embedded,
+        VectorState::Pending => Vector::Pending,
+        VectorState::Failed => Vector::Failed,
+        VectorState::Skipped => Vector::Skipped,
+    };
+    let tally = raw.messages;
+    SessionMemory {
+        summaries: raw
+            .summaries
+            .into_iter()
+            .map(|node| Summary {
+                id: node.id,
+                parent: node.parent_id,
+                kind: match node.kind {
+                    Kind::Leaf => SummaryKind::Leaf,
+                    Kind::Branch => SummaryKind::Branch,
+                    Kind::Root => SummaryKind::Root,
+                },
+                text: node.content,
+                messages: node.message_count,
+                from_ms: node.earliest_at.map(|at| at.timestamp_millis()),
+                to_ms: node.latest_at.map(|at| at.timestamp_millis()),
+                vector: vector(node.vector),
+            })
+            .collect(),
+        messages: MessageTally {
+            total: tally.total,
+            user: tally.user,
+            assistant: tally.assistant,
+            system: tally.system,
+            tool: tally.tool,
+            embedded: tally.embedded,
+            pending: tally.pending,
+            failed: tally.failed,
+            skipped: tally.skipped,
+        },
+    }
+}
+
 pub fn browse_window(period: model::memory::Period) -> Option<wire::gateway::memory::BrowseWindow> {
     use model::memory::Period;
     use wire::gateway::memory::BrowseWindow;

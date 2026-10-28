@@ -1,9 +1,9 @@
-use model::TopicId;
-use model::memory::{Found, Period, TagProposal, TermProposal, Verdict};
+use model::memory::{Found, Period, SessionMemory, TagProposal, TermProposal, Verdict};
 use model::wiki::{Listing, Page};
+use model::{SessionId, TopicId};
 use wire::gateway::memory::{
-    MemorySearchResponse, MemoryTagsDecideRequest, PendingTagListResult, TagDecisionResult, TagEntryPair,
-    TagTaxonomyDecideRequest, TagTaxonomyListResult,
+    MemorySearchResponse, MemorySummaryDagResponse, MemoryTagsDecideRequest, PendingTagListResult,
+    TagDecisionResult, TagEntryPair, TagTaxonomyDecideRequest, TagTaxonomyListResult,
 };
 use wire::gateway::topics::TopicPage;
 use wire::gateway::wiki::{WikiPageResponse, WikiTopicList};
@@ -29,6 +29,13 @@ impl Gateway {
         }
         let found: MemorySearchResponse = Self::read_json(self.http.get(url).send().await)?.await?;
         Ok(model::memory::said(translate::found(found)))
+    }
+
+    pub async fn session_memory(&self, session: &SessionId) -> Result<SessionMemory, GatewayError> {
+        let id = translate::wire_session(session)?.to_string();
+        let url = self.api_url(&["api", "memory", "summaries", &id])?;
+        let dag: MemorySummaryDagResponse = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::session_memory(dag))
     }
 
     pub async fn topic_page(&self, topic: &TopicId) -> Result<Option<Page>, GatewayError> {

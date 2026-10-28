@@ -226,9 +226,10 @@ impl Workspace {
             .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
                 cx.new(|_| crate::side_panel::DragGhost(one_line(dragged.0.title.as_deref())))
             })
-            .when_some(Self::session_focus(session), |row, focus| {
-                row.on_mouse_down(MouseButton::Right, Self::on_right_click(focus, cx))
-            })
+            .on_mouse_down(
+                MouseButton::Right,
+                Self::on_right_click(Focus::Session(Box::new(session.clone())), cx),
+            )
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.open(open.clone(), window, cx);
             }))

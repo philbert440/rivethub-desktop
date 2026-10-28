@@ -110,9 +110,7 @@ impl Workspace {
                         this.open_menu(Focus::Topic(topic.clone()), *at, window, cx);
                     }
                     PanelEvent::SessionMenu(session, at) => {
-                        if let Some(focus) = Self::session_focus(session) {
-                            this.open_menu(focus, *at, window, cx);
-                        }
+                        this.open_menu(Focus::Session(Box::new(session.clone())), *at, window, cx);
                     }
                 },
             );
@@ -416,7 +414,7 @@ impl Workspace {
     fn open_menu(&mut self, focus: Focus, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let delete = match &focus {
             Focus::Topic(topic) => self.topic(topic).map(|known| (topic.clone(), known.name.clone())),
-            Focus::Search(_) => None,
+            Focus::Session(_) => None,
         };
         let hub = self.hub.clone();
         let menu = cx.new(|_| Menu::new(hub, Some(focus), delete));
@@ -454,14 +452,6 @@ impl Workspace {
             _ => {}
         }
         self.load(cx);
-    }
-
-    /// A session shows in Memory as a search for its title, so only titled sessions can.
-    fn session_focus(session: &SessionSummary) -> Option<Focus> {
-        session
-            .title
-            .as_deref()
-            .map(|title| Focus::Search(one_line(Some(title)).to_string()))
     }
 
     /// The New session picker over a backdrop; clicking anywhere outside the picker closes it.

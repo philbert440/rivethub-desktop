@@ -1,5 +1,6 @@
 use gateway::GatewayError;
-use model::memory::{Found, Period, TagProposal, TermProposal, Verdict};
+use model::SessionId;
+use model::memory::{Found, Period, SessionMemory, TagProposal, TermProposal, Verdict};
 use model::topics::Topic;
 use model::wiki::{Listing, Page};
 
@@ -23,6 +24,12 @@ impl Hub {
     pub async fn recall(&self, query: String, period: Period) -> Result<Vec<Found>, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.recall(&query, period).await })
+            .await
+    }
+
+    pub async fn session_memory(&self, session: SessionId) -> Result<SessionMemory, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.session_memory(&session).await })
             .await
     }
 

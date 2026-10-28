@@ -1,5 +1,6 @@
 mod ask;
 mod decisions;
+mod session;
 mod tidy;
 mod topics;
 
@@ -11,6 +12,7 @@ use gpui::{
 use model::decisions::Group;
 use model::markdown::Block;
 use model::memory::{Found, Period};
+use model::session::SessionSummary;
 use model::wiki::{Listing, Page};
 use model::{SessionId, TopicId};
 
@@ -52,7 +54,7 @@ impl Tab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Focus {
     Topic(TopicId),
-    Search(String),
+    Session(Box<SessionSummary>),
 }
 
 pub enum MemoryEvent {
@@ -90,6 +92,7 @@ pub struct MemoryPage {
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
+    viewing: Option<session::Viewing>,
     menu: Option<OpenMenu>,
     _submitted: [Subscription; 2],
 }
@@ -134,6 +137,7 @@ impl MemoryPage {
             deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
+            viewing: None,
             menu: None,
             _submitted: [asked, found],
         };
@@ -147,10 +151,7 @@ impl MemoryPage {
                 self.select(Tab::Topics, cx);
                 self.open_topic(topic, cx);
             }
-            Focus::Search(text) => {
-                self.tab = Tab::Ask;
-                self.search(text, cx);
-            }
+            Focus::Session(session) => self.open_session(*session, cx),
         }
     }
 
@@ -162,6 +163,7 @@ impl MemoryPage {
 
     fn select(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;
+        self.viewing = None;
         self.problem = None;
         match tab {
             Tab::Ask => {}
@@ -194,7 +196,7 @@ impl MemoryPage {
             .rounded(px(18.))
             .bg(Theme::panel())
             .children(Tab::ALL.map(|tab| {
-                let here = tab == self.tab;
+                let here = tab == self.tab && self.viewing.is_none();
                 let ink = if here {
                     Theme::on_selected()
                 } else {
@@ -240,6 +242,7 @@ impl MemoryPage {
 impl Render for MemoryPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.tab {
+            _ if self.viewing.is_some() => self.session_page(window, cx),
             Tab::Ask => self.ask(cx),
             Tab::Topics => self.topics(window, cx),
             Tab::Tidy => self.tidy(cx),
