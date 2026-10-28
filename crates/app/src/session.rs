@@ -186,10 +186,12 @@ impl Actor {
                 if self.view.read().held_by_question() {
                     self.queue.write().push_front(prompt);
                     self.changed();
-                    match self.gateway().await {
+                    let stopped = match self.gateway().await {
                         Ok(gateway) => gateway.stop(&self.id).await,
                         Err(err) => Err(err),
-                    }
+                    };
+                    self.drain().await;
+                    stopped
                 } else {
                     self.send(prompt).await;
                     Ok(())
