@@ -1,9 +1,11 @@
 mod agent_editor;
 mod brand;
 mod input;
+mod instance;
 mod launcher;
 mod markdown_view;
 mod memory;
+mod question_card;
 mod session_pane;
 mod settings;
 mod shell;
@@ -15,6 +17,7 @@ mod tool_view;
 mod topic_picker;
 mod transcript;
 mod turn_rail;
+mod window_state;
 mod workspace;
 
 use std::path::PathBuf;
@@ -22,7 +25,7 @@ use std::process::ExitCode;
 
 use app::Hub;
 use gateway::{Endpoint, Gateway, Identity};
-use gpui::{App, AppContext, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use gpui::{App, AppContext, KeyBinding, TitlebarOptions, WindowOptions};
 use session_pane::ToggleTerminal;
 use shell::Shell;
 use workspace::{NewSession, NextNeedingYou, ToggleSidePanel, ZoomOut};
@@ -82,11 +85,16 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
-fn log_file() -> Option<std::fs::File> {
+/// `$XDG_STATE_HOME/rivethub-desktop`, where the log and the window's last place live.
+fn state_dir() -> Option<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
-    let dir = state.join("rivethub-desktop");
+    Some(state.join("rivethub-desktop"))
+}
+
+fn log_file() -> Option<std::fs::File> {
+    let dir = state_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     std::fs::OpenOptions::new()
         .create(true)
@@ -121,6 +129,20 @@ fn init_logging() {
 
 fn main() -> ExitCode {
     init_logging();
+    let owner = match instance::claim() {
+        instance::Claim::First(owner) => Some(owner),
+        instance::Claim::Running => {
+            tracing::info!("RivetHub is already running, so its window was asked to come forward");
+            return ExitCode::SUCCESS;
+        }
+        instance::Claim::Alone => None,
+    };
+    let launches = owner.as_ref().and_then(|owner| {
+        owner
+            .launches()
+            .inspect_err(|err| tracing::warn!(%err, "listening for later launches failed"))
+            .ok()
+    });
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -149,9 +171,8 @@ fn main() -> ExitCode {
             if let Err(err) = cx.text_system().add_fonts(brand::fonts()) {
                 tracing::warn!(%err, "loading the bundled fonts failed");
             }
-            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_state::restore(cx)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("RivetHub".into()),
                     ..Default::default()
@@ -159,12 +180,30 @@ fn main() -> ExitCode {
                 app_id: Some("rivethub-desktop".into()),
                 ..Default::default()
             };
-            let opened = cx.open_window(options, |window, cx| cx.new(|cx| Shell::new(hub, window, cx)));
-            if opened.is_err() {
+            let opened = cx.open_window(options, |window, cx| {
+                window.on_window_should_close(cx, |window, _| {
+                    window_state::save(window.window_bounds());
+                    true
+                });
+                cx.new(|cx| Shell::new(hub, window, cx))
+            });
+            let Ok(shell) = opened else {
                 cx.quit();
+                return;
+            };
+            if let Some(mut launches) = launches {
+                cx.spawn(async move |cx| {
+                    while launches.recv().await.is_some() {
+                        if shell.update(cx, |_, window, _| window.activate_window()).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .detach();
             }
             cx.activate(true);
         });
     drop(runtime);
+    drop(owner);
     ExitCode::SUCCESS
 }

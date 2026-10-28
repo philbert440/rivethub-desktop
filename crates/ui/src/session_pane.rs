@@ -14,6 +14,7 @@ use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
 
 use crate::input::{PastedImage, Submitted, TextInput};
+use crate::question_card::QuestionCard;
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
@@ -51,6 +52,7 @@ pub struct SessionPane {
     terminal: Option<Entity<TerminalView>>,
     confirm_spawn: bool,
     handle: SessionHandle,
+    questions: Entity<QuestionCard>,
     turns: ListState,
     exchanges: Arc<Vec<ExchangeView>>,
     folds: Arc<Folds>,
@@ -69,6 +71,7 @@ pub struct SessionPane {
     _submitted: Subscription,
     _pasted: Subscription,
     _typed: Subscription,
+    _asking: Subscription,
 }
 
 impl SessionPane {
@@ -92,6 +95,8 @@ impl SessionPane {
             }
         });
         Self::read_offer(&hub, &summary, cx);
+        let questions = cx.new(|cx| QuestionCard::new(handle.clone(), cx));
+        let asking = cx.observe(&questions, |_, _, cx| cx.notify());
         Self {
             hub,
             summary,
@@ -99,6 +104,7 @@ impl SessionPane {
             terminal: None,
             confirm_spawn: false,
             handle,
+            questions,
             turns: ListState::new(0, ListAlignment::Bottom, px(600.)),
             exchanges: Arc::new(Vec::new()),
             folds: Arc::new(Folds::default()),
@@ -117,6 +123,7 @@ impl SessionPane {
             _submitted: submitted,
             _pasted: pasted,
             _typed: typed,
+            _asking: asking,
         }
     }
 
@@ -738,10 +745,13 @@ impl SessionPane {
             )
             .children(back)
             .child(
-                footer.children(self.queue_dock()).child(
-                    self.approval_card(&view)
-                        .unwrap_or_else(|| self.composer_card(&view, cx)),
-                ),
+                footer
+                    .children(self.questions.read(cx).waiting().then(|| self.questions.clone()))
+                    .children(self.queue_dock())
+                    .child(
+                        self.approval_card(&view)
+                            .unwrap_or_else(|| self.composer_card(&view, cx)),
+                    ),
             )
     }
 
