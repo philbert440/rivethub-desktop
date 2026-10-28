@@ -140,6 +140,19 @@ impl Hub {
         .await
     }
 
+    /// The session as its node describes it now, such as with the title its harness gave it.
+    pub async fn summary(&self, summary: &SessionSummary) -> Result<SessionSummary, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let mut latest = hub.gateway_for(node.as_deref()).await?.summary(&session).await?;
+            latest.node = node;
+            Ok(latest)
+        })
+        .await
+    }
+
     /// What the session's harness offers on the node it runs on.
     pub async fn offer(&self, summary: &SessionSummary) -> Result<Option<HarnessOffer>, GatewayError> {
         let hub = self.clone();

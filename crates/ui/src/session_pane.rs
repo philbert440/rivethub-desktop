@@ -8,7 +8,7 @@ use gpui::{
     ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
     Window, div, list, prelude::*, px, relative,
 };
-use model::chat::{arrived, exchanges};
+use model::chat::{ExchangeState, arrived, exchanges};
 use model::prompt::{Attachment, Prompt, image_media_type};
 use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
@@ -69,6 +69,7 @@ pub struct SessionPane {
     uploading: usize,
     attach_problem: Option<String>,
     renaming: Option<Renaming>,
+    awaiting_title: bool,
     _revisions: Task<()>,
     _submitted: Subscription,
     _pasted: Subscription,
@@ -121,6 +122,7 @@ impl SessionPane {
             uploading: 0,
             attach_problem: None,
             renaming: None,
+            awaiting_title: false,
             _revisions: watcher,
             _submitted: submitted,
             _pasted: pasted,
@@ -612,6 +614,13 @@ impl SessionPane {
             exchanges(view.turns(), view.live())
         };
         let previous = Arc::clone(&self.exchanges);
+        let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
+            && folded
+                .last()
+                .is_some_and(|exchange| exchange.state != ExchangeState::Working);
+        if turn_ended && self.summary.title.is_none() {
+            self.await_title(cx);
+        }
         let jump = self.hub.preferences().jump_to_newest
             && arrived(
                 previous.len(),
@@ -646,6 +655,37 @@ impl SessionPane {
         self.exchanges = Arc::new(views);
         self.fetch_previews(cx);
         cx.notify();
+    }
+
+    /// Harnesses title a session shortly after a turn ends, and nothing announces it, so an
+    /// untitled session asks its node a few times.
+    fn await_title(&mut self, cx: &mut Context<Self>) {
+        if self.awaiting_title {
+            return;
+        }
+        self.awaiting_title = true;
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        cx.spawn(async move |this, cx| {
+            for wait in [2, 5, 10, 20] {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(wait))
+                    .await;
+                let Ok(latest) = hub.summary(&summary).await else {
+                    continue;
+                };
+                if latest.title.is_some() {
+                    this.update(cx, |this, cx| {
+                        this.take_listing(&latest, cx);
+                        cx.emit(PaneEvent::Renamed(Box::new(this.summary.clone())));
+                    })
+                    .ok();
+                    break;
+                }
+            }
+            this.update(cx, |this, _| this.awaiting_title = false).ok();
+        })
+        .detach();
     }
 
     pub fn hover_turn(&mut self, turn: Option<usize>, cx: &mut Context<Self>) {

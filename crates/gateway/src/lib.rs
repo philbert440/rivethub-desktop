@@ -254,6 +254,14 @@ impl Gateway {
         }
     }
 
+    pub async fn summary(&self, session: &SessionId) -> Result<SessionSummary, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let described: wire::gateway::sessions::HarnessSessionResponse = self
+            .get_json(&format!("{}/api/harness-sessions/{segment}", self.base_url))
+            .await?;
+        Ok(translate::summary(described.summary))
+    }
+
     pub async fn rename(&self, session: &SessionId, title: &str) -> Result<SessionSummary, GatewayError> {
         let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
         let url = format!("{}/api/harness-sessions/{segment}/title", self.base_url);
