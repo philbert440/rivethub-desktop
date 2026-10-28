@@ -60,7 +60,8 @@ pub struct SessionPane {
 impl SessionPane {
     pub fn new(hub: Hub, summary: SessionSummary, cx: &mut Context<Self>) -> Self {
         let handle = hub.open_session(&summary);
-        let composer = cx.new(|cx| TextInput::new("Message claude…", cx));
+        let placeholder = format!("Message {}…", summary.id.harness().display_name());
+        let composer = cx.new(|cx| TextInput::new(placeholder, cx));
         let submitted = cx.subscribe(&composer, |this, _, Submitted(text), _| {
             this.handle.send(text.clone());
         });
@@ -90,6 +91,18 @@ impl SessionPane {
             _revisions: watcher,
             _submitted: submitted,
             _typed: typed,
+        }
+    }
+
+    pub fn session_id(&self) -> &model::SessionId {
+        &self.summary.id
+    }
+
+    /// The workspace's listing has a newer copy of this session, such as the title the harness gave it.
+    pub fn take_listing(&mut self, latest: &SessionSummary, cx: &mut Context<Self>) {
+        if self.renaming.is_none() && latest.title != self.summary.title {
+            self.summary.title.clone_from(&latest.title);
+            cx.notify();
         }
     }
 

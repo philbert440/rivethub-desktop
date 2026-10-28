@@ -157,6 +157,12 @@ impl Workspace {
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
+        if let Some(pane) = &self.pane {
+            let open = pane.read(cx).session_id().clone();
+            if let Some(latest) = self.sessions.iter().find(|session| session.id == open).cloned() {
+                pane.update(cx, |pane, cx| pane.take_listing(&latest, cx));
+            }
+        }
         self.subagents.clear();
         for parent in self.sessions.iter().filter_map(|session| session.parent.clone()) {
             *self.subagents.entry(parent).or_default() += 1;

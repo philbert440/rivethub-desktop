@@ -23,6 +23,23 @@ impl HarnessId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The name people know the harness by, such as "Grok" for `grok-build`.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        match self.0.as_str() {
+            "claude-code" => "Claude",
+            "grok-build" => "Grok",
+            "codex" => "Codex",
+            "kimi-code" => "Kimi",
+            "qwen-code" => "Qwen",
+            "hermes" => "Hermes",
+            "opencode" => "opencode",
+            "cursor" => "Cursor",
+            "pi" => "Pi",
+            other => other,
+        }
+    }
 }
 
 impl NativeSessionId {
