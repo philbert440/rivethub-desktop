@@ -85,4 +85,11 @@ impl Gateway {
         let _: PlacementReply = Self::read_json(self.http.put(url).json(&body).send().await)?.await?;
         Ok(())
     }
+
+    pub async fn unplace(&self, session: &SessionId) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "placement"])?;
+        let _: PlacementReply = Self::read_json(self.http.delete(url).send().await)?.await?;
+        Ok(())
+    }
 }

@@ -319,6 +319,24 @@ impl Workspace {
         .detach();
     }
 
+    fn unplace(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        self.placements.remove(&session);
+        self.sync_panel(cx);
+        cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let unplaced = hub.unplace(session).await;
+            this.update(cx, |this, cx| {
+                if let Err(err) = unplaced {
+                    this.problem = Some(format!("taking the session out of its topic failed: {err}"));
+                }
+                this.load(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn place_in_new(&mut self, session: SessionId, name: String, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
