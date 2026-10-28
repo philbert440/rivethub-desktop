@@ -317,8 +317,8 @@ impl Hub {
             .await
     }
 
-    /// This node first, then every other online mesh node.
-    pub async fn nodes(&self) -> Result<Vec<String>, GatewayError> {
+    /// The nodes an agent can be hosted on: this node first, then every other online mesh node.
+    pub async fn agent_hosts(&self) -> Result<Vec<String>, GatewayError> {
         let hub = self.clone();
         self.on_runtime(async move {
             let local = hub.inner.local.agents().await?.node;
