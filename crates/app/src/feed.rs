@@ -140,8 +140,8 @@ impl Signals {
                 if let Some(blocked) = blocked {
                     live.blocked.insert(id.clone(), blocked);
                 }
-                if was != Some(status) {
-                    // A status change can carry a new title, so the listing reloads.
+                if was == Some(SessionStatus::Active) && status != SessionStatus::Active {
+                    // A turn ended; harnesses title a session as its turns end.
                     self.changes.send_modify(|count| *count += 1);
                 }
                 if let Some(kind) = NoticeKind::raised_by(was, was_blocked, status, now_blocked) {
