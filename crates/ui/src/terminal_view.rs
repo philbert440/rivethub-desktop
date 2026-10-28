@@ -3,11 +3,11 @@ use std::rc::Rc;
 
 use app::{TerminalHandle, TerminalState};
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Element, ElementId, FocusHandle, Focusable, FontStyle, FontWeight,
-    GlobalElementId, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, ShapedLine, SharedString, Style,
-    Task, TextAlign, TextRun, UnderlineStyle, Window, div, fill, font, point, prelude::*, px, relative, rgb,
-    size,
+    App, Bounds, ClickEvent, ClipboardItem, Context, Element, ElementId, FocusHandle, Focusable, FontStyle,
+    FontWeight, GlobalElementId, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, ShapedLine,
+    SharedString, Style, Task, TextAlign, TextRun, UnderlineStyle, Window, anchored, deferred, div, fill,
+    font, point, prelude::*, px, relative, rgb, size,
 };
 use term::{GridSize, Hit, Modifiers, SelectBy, Snapshot, encode_key};
 
@@ -46,6 +46,7 @@ pub struct TerminalView {
     focus: FocusHandle,
     geometry: Rc<Cell<Option<Geometry>>>,
     selecting: bool,
+    menu: Option<Point<Pixels>>,
     _revisions: Task<()>,
 }
 
@@ -64,6 +65,7 @@ impl TerminalView {
             focus: cx.focus_handle(),
             geometry: Rc::default(),
             selecting: false,
+            menu: None,
             _revisions: watcher,
         }
     }
@@ -79,19 +81,14 @@ impl TerminalView {
             alt: keystroke.modifiers.alt,
             shift: keystroke.modifiers.shift,
         };
-        if mods.ctrl && mods.shift && !mods.alt {
-            if keystroke.key.eq_ignore_ascii_case("c") {
+        if keystroke.key == "insert" && !mods.alt && mods.ctrl != mods.shift {
+            if mods.ctrl {
                 self.copy(cx);
-                cx.stop_propagation();
-                return;
+            } else {
+                self.paste_clipboard(cx);
             }
-            if keystroke.key.eq_ignore_ascii_case("v") {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.paste(&text, cx);
-                }
-                cx.stop_propagation();
-                return;
-            }
+            cx.stop_propagation();
+            return;
         }
         let app_cursor = self.handle.screen().read().app_cursor();
         if let Some(bytes) = encode_key(&keystroke.key, keystroke.key_char.as_deref(), mods, app_cursor) {
@@ -104,6 +101,12 @@ impl TerminalView {
     fn copy(&self, cx: &mut Context<Self>) {
         if let Some(text) = self.handle.screen().read().selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn paste_clipboard(&self, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.paste(&text, cx);
         }
     }
 
@@ -157,24 +160,64 @@ impl TerminalView {
         }
     }
 
-    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.selecting) {
-            return;
-        }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        if let Some(text) = self.handle.screen().read().selected_text() {
-            cx.write_to_primary(ClipboardItem::new_string(text));
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        let _ = cx;
+    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.selecting = false;
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    fn middle_click(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_menu(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
-            self.paste(&text, cx);
-        }
+        self.menu = Some(event.position);
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        cx.notify();
+    }
+
+    fn context_menu(&self, at: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
+        let can_copy = self.handle.screen().read().selected_text().is_some();
+        let item = |id: &'static str, label: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py(px(6.))
+                .rounded(px(8.))
+                .text_color(if enabled { Theme::ink() } else { Theme::ink_dim() })
+                .when(enabled, |item| {
+                    item.cursor_pointer().hover(|item| item.bg(Theme::raised()))
+                })
+                .child(label)
+        };
+        deferred(
+            anchored().position(at).child(
+                div()
+                    .occlude()
+                    .min_w(px(160.))
+                    .p_1()
+                    .rounded(px(12.))
+                    .bg(Theme::card())
+                    .border_1()
+                    .border_color(Theme::line())
+                    .shadow_md()
+                    .text_sm()
+                    .flex()
+                    .flex_col()
+                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_menu(cx)))
+                    .child(item("terminal-copy", "Copy", can_copy).when(can_copy, |item| {
+                        item.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.copy(cx);
+                            this.close_menu(cx);
+                        }))
+                    }))
+                    .child(item("terminal-paste", "Paste", true).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.paste_clipboard(cx);
+                            this.close_menu(cx);
+                        },
+                    ))),
+            ),
+        )
     }
 
     fn scroll(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -214,11 +257,7 @@ impl Render for TerminalView {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
-            .when(cfg!(any(target_os = "linux", target_os = "freebsd")), |this| {
-                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                let this = this.on_mouse_down(MouseButton::Middle, cx.listener(Self::middle_click));
-                this
-            })
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::open_menu))
             .size_full()
             .p_3()
             .rounded(px(16.))
@@ -231,6 +270,7 @@ impl Render for TerminalView {
                 focused: self.focus.clone(),
                 geometry: self.geometry.clone(),
             })
+            .children(self.menu.map(|at| self.context_menu(at, cx)))
     }
 }
 

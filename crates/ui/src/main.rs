@@ -70,6 +70,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-a", input::SelectAll, Some("TextInput")),
         KeyBinding::new("ctrl-v", input::Paste, Some("TextInput")),
         KeyBinding::new("ctrl-c", input::Copy, Some("TextInput")),
+        KeyBinding::new("ctrl-insert", input::Copy, Some("TextInput")),
+        KeyBinding::new("shift-insert", input::Paste, Some("TextInput")),
         KeyBinding::new("ctrl-x", input::Cut, Some("TextInput")),
         KeyBinding::new("home", input::Home, Some("TextInput")),
         KeyBinding::new("end", input::End, Some("TextInput")),
