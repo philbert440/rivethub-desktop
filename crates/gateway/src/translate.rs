@@ -104,6 +104,92 @@ pub fn prompt(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::Sessio
     }
 }
 
+pub fn found(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::memory::Found> {
+    use wire::gateway::memory::MemoryHitSource;
+    use wire::message::Role as HitRole;
+    raw.results
+        .into_iter()
+        .filter(|hit| !matches!(hit.role, Some(HitRole::Tool | HitRole::System)))
+        .map(|hit| model::memory::Found {
+            source: match hit.source {
+                MemoryHitSource::Message => model::memory::Source::Message,
+                MemoryHitSource::Summary => model::memory::Source::Summary,
+            },
+            session: hit
+                .session_id
+                .and_then(|id| id.parse::<wire::session_id::SessionId>().ok())
+                .map(|id| session(&id)),
+            text: hit.content,
+            at_ms: hit.created_at.timestamp_millis(),
+        })
+        .collect()
+}
+
+pub fn browse_window(period: model::memory::Period) -> Option<wire::gateway::memory::BrowseWindow> {
+    use model::memory::Period;
+    use wire::gateway::memory::BrowseWindow;
+    match period {
+        Period::AnyTime => None,
+        Period::Today => Some(BrowseWindow::Today),
+        Period::Yesterday => Some(BrowseWindow::Yesterday),
+        Period::LastWeek => Some(BrowseWindow::Last7d),
+        Period::LastTwoWeeks => Some(BrowseWindow::Last14d),
+    }
+}
+
+pub fn page(raw: wire::gateway::wiki::WikiPageResponse) -> model::wiki::Page {
+    model::wiki::Page {
+        slug: raw.slug,
+        title: raw.title,
+        topic: raw.topic_id.map(model::TopicId::new),
+        tags: raw.tags,
+        updated_ms: raw.updated_at.timestamp_millis(),
+        markdown: raw.markdown,
+    }
+}
+
+pub fn listing(raw: wire::gateway::wiki::WikiTopic) -> model::wiki::Listing {
+    model::wiki::Listing {
+        slug: raw.slug,
+        title: raw.title,
+        updated_ms: raw.updated_at.timestamp_millis(),
+    }
+}
+
+pub fn tag_proposal(raw: wire::gateway::memory::PendingTagWire) -> model::memory::TagProposal {
+    use model::memory::TagChange;
+    use wire::gateway::memory::PendingTagAction;
+    model::memory::TagProposal {
+        tag: format!("{}:{}", raw.tag.key, raw.tag.value),
+        change: match raw.action {
+            Some(PendingTagAction::Remove) => TagChange::Remove,
+            Some(PendingTagAction::Add) | None => TagChange::Add,
+        },
+        conversation: raw
+            .title
+            .or(raw.session_key)
+            .unwrap_or_else(|| raw.tag.entity_id.clone()),
+        reason: raw.tag.reason,
+        id: raw.tag.id,
+    }
+}
+
+pub fn term_proposal(raw: wire::gateway::memory::TagTaxonomyEntry) -> model::memory::TermProposal {
+    model::memory::TermProposal {
+        key: raw.key,
+        value: raw.value,
+        display: raw.display,
+        reason: raw.reason,
+    }
+}
+
+pub fn verdict(verdict: model::memory::Verdict) -> wire::gateway::memory::TagState {
+    match verdict {
+        model::memory::Verdict::Accept => wire::gateway::memory::TagState::Accepted,
+        model::memory::Verdict::Reject => wire::gateway::memory::TagState::Rejected,
+    }
+}
+
 pub fn wire_session(id: &SessionId) -> Result<wire::session_id::SessionId, GatewayError> {
     id.to_string()
         .parse()

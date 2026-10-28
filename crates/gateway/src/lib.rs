@@ -1,6 +1,7 @@
 mod chat;
 mod error;
 mod events;
+mod memory;
 mod terminal;
 mod tls;
 mod tool_input;
@@ -333,6 +334,7 @@ impl Gateway {
             force: None,
             cols: Some(columns),
             rows: Some(rows),
+            topic_id: None,
         };
         let url = format!("{}/term", self.base_url);
         let spawned: wire::gateway::term::TermSpawnResponse =
