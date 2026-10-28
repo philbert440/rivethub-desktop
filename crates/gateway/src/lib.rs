@@ -262,7 +262,6 @@ impl Gateway {
             model: Some(draft.model.clone().unwrap_or_default()),
             effort: Some(draft.effort.clone().unwrap_or_default()),
             system_prompt: Some(draft.instructions.clone().unwrap_or_default()),
-            node: draft.node.clone(),
             directory: draft.directory.clone(),
             ..AgentPresetUpdate::default()
         };

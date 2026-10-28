@@ -67,8 +67,13 @@ impl AgentEditor {
             problem: None,
             busy: false,
         };
+        // rh never moves an agent to another node, so an existing one stays where it is.
+        let hosted = agent.and_then(|agent| agent.node.clone());
         cx.spawn(async move |this, cx| {
-            let nodes = hub.nodes().await;
+            let nodes = match hosted {
+                Some(node) => Ok(vec![node]),
+                None => hub.nodes().await,
+            };
             this.update(cx, |this, cx| {
                 let nodes = match nodes {
                     Ok(nodes) => nodes,
@@ -156,8 +161,9 @@ impl AgentEditor {
         self.busy = true;
         cx.notify();
         let hub = self.hub.clone();
+        let node = self.draft.node.clone();
         cx.spawn(async move |this, cx| {
-            let deleted = hub.delete_agent(id).await;
+            let deleted = hub.delete_agent(id, node).await;
             this.update(cx, |this, cx| {
                 this.busy = false;
                 match deleted {
@@ -450,7 +456,11 @@ impl Render for AgentEditor {
                         row.child(
                             Self::button("agent-delete", "Delete agent", false)
                                 .text_color(Theme::warn())
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.delete(cx))),
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    if !this.busy {
+                                        this.delete(cx);
+                                    }
+                                })),
                         )
                     })
                     .child(div().flex_1())

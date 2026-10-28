@@ -255,14 +255,15 @@ impl Hub {
             .await
     }
 
-    /// Agent presets live in the shared store, so this node's gateway writes them for every node.
+    /// rh only writes an agent on the node that hosts it, so this goes through that node's gateway.
     pub async fn save_agent(
         &self,
         id: Option<String>,
         draft: model::agents::AgentDraft,
     ) -> Result<model::agents::Agent, GatewayError> {
-        let gateway = self.inner.local.clone();
+        let hub = self.clone();
         self.on_runtime(async move {
+            let gateway = hub.gateway_for(draft.node.as_deref()).await?;
             match id {
                 Some(id) => gateway.update_agent(&id, &draft).await,
                 None => gateway.create_agent(&draft).await,
@@ -271,9 +272,9 @@ impl Hub {
         .await
     }
 
-    pub async fn delete_agent(&self, id: String) -> Result<(), GatewayError> {
-        let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.delete_agent(&id).await })
+    pub async fn delete_agent(&self, id: String, node: Option<String>) -> Result<(), GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move { hub.gateway_for(node.as_deref()).await?.delete_agent(&id).await })
             .await
     }
 

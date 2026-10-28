@@ -48,7 +48,7 @@ impl AgentDraft {
         format!("#{:06x}", self.color & 0x00ff_ffff)
     }
 
-    /// rh refuses an agent without a name or a harness, and resolves its folder as given.
+    /// rh refuses a blank name or a relative folder, and an agent without a harness can't be launched.
     pub fn check(&self) -> Result<(), DraftProblem> {
         if self.name.trim().is_empty() {
             return Err(DraftProblem::NoName);

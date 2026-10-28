@@ -159,7 +159,10 @@ impl SidePanel {
             let loaded = hub.agents().await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok(roster) => this.roster = roster,
+                    Ok(roster) => {
+                        this.roster = roster;
+                        this.problem = None;
+                    }
                     Err(err) => this.problem = Some(err.to_string()),
                 }
                 cx.notify();
