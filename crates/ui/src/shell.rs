@@ -119,33 +119,16 @@ impl Shell {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.sidebar_open;
-        let toggle = div()
+        let mark = div()
             .id("toggle-sidebar")
-            .size(px(36.))
-            .flex_none()
-            .rounded(px(18.))
             .flex()
             .items_center()
-            .justify_center()
+            .gap_2()
             .cursor_pointer()
-            .hover(|button| button.bg(Theme::card()))
             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                 this.sidebar_open = !this.sidebar_open;
                 cx.notify();
             }))
-            .child(brand::icon(
-                if open {
-                    "icons/sidebar-collapse.svg"
-                } else {
-                    "icons/sidebar-expand.svg"
-                },
-                18.,
-                Theme::ink_dim(),
-            ));
-        let mark = div()
-            .flex()
-            .items_center()
-            .gap_2()
             .child(img(brand::rh()).size(px(32.)))
             .when(open, |mark| {
                 mark.child(div().text_base().text_color(Theme::ink()).child("RivetHub"))
@@ -161,25 +144,12 @@ impl Shell {
             .bg(Theme::window())
             .map(|bar| if open { bar.px_3() } else { bar.items_center() })
             .child(if open {
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .pb_3()
-                    .child(mark)
-                    .child(toggle)
+                div().flex().items_center().justify_between().pb_3().child(mark)
             } else {
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .pb_3()
-                    .child(mark)
-                    .child(toggle)
+                div().flex().flex_col().items_center().gap_2().pb_3().child(mark)
             })
-            .child(self.nav_item(Page::Workspace, "icons/workspace.svg", "Workspace", cx))
-            .child(self.nav_item(Page::Memory, "icons/memory.svg", "Memory", cx))
+            .child(self.nav_item(Page::Workspace, "icons/message-square.svg", "Workspace", cx))
+            .child(self.nav_item(Page::Memory, "icons/library.svg", "Memory", cx))
             .child(div().flex_1())
             .child(self.nav_item(Page::Settings, "icons/settings.svg", "Settings", cx))
     }

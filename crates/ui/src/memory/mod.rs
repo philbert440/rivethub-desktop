@@ -12,6 +12,7 @@ use model::memory::{Found, Period};
 use model::wiki::{Listing, Page};
 use model::{SessionId, TopicId};
 
+use crate::brand;
 use crate::input::{Submitted, TextInput};
 use crate::shell;
 use crate::theme::Theme;
@@ -32,6 +33,14 @@ impl Tab {
             Self::Ask => "Ask",
             Self::Topics => "Topics",
             Self::Tidy => "To tidy",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Ask => "icons/search.svg",
+            Self::Topics => "icons/book-open.svg",
+            Self::Tidy => "icons/tags.svg",
         }
     }
 }
@@ -174,6 +183,11 @@ impl MemoryPage {
             .bg(Theme::panel())
             .children(Tab::ALL.map(|tab| {
                 let here = tab == self.tab;
+                let ink = if here {
+                    Theme::on_selected()
+                } else {
+                    Theme::ink_dim()
+                };
                 div()
                     .id(tab.label())
                     .h(px(30.))
@@ -194,6 +208,7 @@ impl MemoryPage {
                     .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                         this.select(tab, cx);
                     }))
+                    .child(brand::icon(tab.icon(), 14., ink))
                     .child(tab.label())
                     .when(tab == Tab::Tidy && waiting > 0, |chip| {
                         chip.child(
