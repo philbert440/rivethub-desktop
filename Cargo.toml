@@ -26,7 +26,7 @@ serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "bf869f9" }
+wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "11d0e72f230617b2c133e7d0dbc965a617398b14" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pki-types = "1"
