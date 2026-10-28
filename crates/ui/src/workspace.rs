@@ -548,7 +548,9 @@ impl Workspace {
             };
             match (**choice).clone() {
                 Choice::Agent(agent) => this.start_agent(agent, launch, window, cx),
-                Choice::Harness { harness, model } => this.start_session(launch, harness, model, window, cx),
+                Choice::Harness { node, harness, model } => {
+                    this.start_session(launch, node, harness, model, window, cx);
+                }
             }
         });
         window.focus(&launcher.focus_handle(cx), cx);
@@ -559,6 +561,7 @@ impl Workspace {
     fn start_session(
         &mut self,
         launch: Launch,
+        node: Option<String>,
         harness: HarnessId,
         model: Option<String>,
         window: &mut Window,
@@ -567,7 +570,7 @@ impl Workspace {
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let started = hub.start_session(harness, model).await;
+            let started = hub.start_session(node, harness, model).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| this.started(started, launch, window, cx))
                     .ok();

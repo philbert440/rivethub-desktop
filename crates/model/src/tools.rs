@@ -26,9 +26,47 @@ pub enum ToolInput {
     Delegate {
         description: String,
     },
+    Ask(Vec<Question>),
     Fields(Vec<(String, String)>),
     #[default]
     Unknown,
+}
+
+/// A question an agent puts to you with an ask-user tool such as `AskUserQuestion`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub question: Option<String>,
+    pub header: Option<String>,
+    pub multi_select: bool,
+    pub options: Vec<QuestionOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// The next turn that answers `questions` with the labels picked for each, in order. A lone question
+/// is answered with its labels; several are each prefixed with their header so the agent can match
+/// them up, and unanswered ones are left out.
+pub fn answer(questions: &[Question], picked: &[Vec<String>]) -> String {
+    if let [_] = questions {
+        return picked.first().map(|labels| labels.join(", ")).unwrap_or_default();
+    }
+    questions
+        .iter()
+        .zip(picked)
+        .filter(|(_, labels)| !labels.is_empty())
+        .map(|(question, labels)| {
+            let labels = labels.join(", ");
+            match question.header.as_deref().or(question.question.as_deref()) {
+                Some(prefix) => format!("{prefix}: {labels}"),
+                None => labels,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +108,10 @@ pub fn label(name: &str, input: &ToolInput, cwd: Option<&str>, home: Option<&str
         },
         ToolInput::Fetch { target } => target.clone(),
         ToolInput::Delegate { description } => first_line(description),
+        ToolInput::Ask(questions) => questions
+            .iter()
+            .find_map(|question| question.question.as_deref().or(question.header.as_deref()))
+            .map_or_else(|| name.to_owned(), first_line),
         ToolInput::Fields(fields) => fields
             .first()
             .map_or_else(|| name.to_owned(), |(_, value)| first_line(value)),
@@ -199,6 +241,31 @@ pub fn counts(lines: &[DiffLine]) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn asked(header: &str) -> Question {
+        Question {
+            question: Some(format!("Which {header}?")),
+            header: Some(header.into()),
+            multi_select: true,
+            options: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_answer_names_each_question_only_when_there_are_several() {
+        let picks = |labels: &[&str]| labels.iter().map(|label| (*label).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            answer(&[asked("Auth")], &[picks(&["JWT", "OAuth"])]),
+            "JWT, OAuth"
+        );
+        assert_eq!(
+            answer(
+                &[asked("Auth"), asked("Store"), asked("Cache")],
+                &[picks(&["JWT"]), picks(&[]), picks(&["Redis"])]
+            ),
+            "Auth: JWT\nCache: Redis"
+        );
+    }
 
     fn line(change: Change, text: &str) -> DiffLine {
         DiffLine::Line {

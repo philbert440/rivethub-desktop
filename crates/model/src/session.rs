@@ -1,5 +1,5 @@
 use crate::SessionId;
-use crate::tools::{ToolInput, ToolOutput};
+use crate::tools::{Question, ToolInput, ToolOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -263,6 +263,18 @@ impl SessionView {
         }
     }
 
+    /// The questions the newest turn asked with an ask-user tool, until a reply follows it.
+    pub fn open_questions(&self) -> Option<(&ToolCall, &[Question])> {
+        let newest = self.live.as_ref().or_else(|| self.turns.last())?;
+        if newest.role != Role::Assistant {
+            return None;
+        }
+        newest.tools.iter().rev().find_map(|tool| match &tool.input {
+            ToolInput::Ask(questions) if !questions.is_empty() => Some((tool, questions.as_slice())),
+            _ => None,
+        })
+    }
+
     pub fn approvals(&self) -> &[Approval] {
         &self.approvals
     }
@@ -360,6 +372,29 @@ mod tests {
             request_id: "r1".into(),
         });
         assert!(!view.needs_you());
+    }
+
+    #[test]
+    fn a_question_stays_open_until_a_reply_follows_it() {
+        let question = crate::tools::Question {
+            question: Some("Which?".into()),
+            header: None,
+            multi_select: false,
+            options: Vec::new(),
+        };
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::ToolStarted {
+            id: "ask".into(),
+            name: "AskUserQuestion".into(),
+            input: ToolInput::Ask(vec![question]),
+        });
+        view.apply(SessionEvent::AssistantText("Pick one.".into()));
+        view.apply(SessionEvent::TurnComplete);
+        assert!(view.open_questions().is_some());
+        let mut turns = view.turns().to_vec();
+        turns.push(said(Role::User, "Which"));
+        view.apply(SessionEvent::Snapshot { turns, context: None });
+        assert!(view.open_questions().is_none());
     }
 
     #[test]

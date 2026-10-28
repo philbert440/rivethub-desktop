@@ -56,18 +56,9 @@ impl Hub {
     }
 
     pub(crate) async fn gateway_for(&self, node: Option<&str>) -> Result<Gateway, GatewayError> {
-        let Some(node) = node else {
+        let Some(node) = node.filter(|node| !self.is_local(node)) else {
             return Ok(self.inner.local.clone());
         };
-        if self
-            .inner
-            .local_node
-            .read()
-            .as_deref()
-            .is_some_and(|local| local.eq_ignore_ascii_case(node))
-        {
-            return Ok(self.inner.local.clone());
-        }
         if let Some(gateway) = self.inner.remote.read().get(node) {
             return Ok(gateway.clone());
         }
@@ -83,6 +74,14 @@ impl Hub {
         })?;
         self.inner.remote.write().insert(node.to_owned(), gateway.clone());
         Ok(gateway)
+    }
+
+    fn is_local(&self, node: &str) -> bool {
+        self.inner
+            .local_node
+            .read()
+            .as_deref()
+            .is_some_and(|local| local.eq_ignore_ascii_case(node))
     }
 
     async fn on_runtime<T, F>(&self, work: F) -> Result<T, GatewayError>
@@ -284,14 +283,21 @@ impl Hub {
         .await
     }
 
+    /// Starts a harness on `node`, or on this client's own node when it is `None`.
     pub async fn start_session(
         &self,
+        node: Option<String>,
         harness: HarnessId,
         model: Option<String>,
     ) -> Result<SessionSummary, GatewayError> {
-        let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.start_session(&harness, model.as_deref()).await })
-            .await
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            let mut summary = gateway.start_session(&harness, model.as_deref()).await?;
+            summary.node = node;
+            Ok(summary)
+        })
+        .await
     }
 
     /// rh only writes an agent on the node that hosts it, so this goes through that node's gateway.
@@ -322,6 +328,7 @@ impl Hub {
         let hub = self.clone();
         self.on_runtime(async move {
             let local = hub.inner.local.agents().await?.node;
+            *hub.inner.local_node.write() = Some(local.clone());
             let mut names = vec![local.clone()];
             for node in hub.inner.local.mesh().await.unwrap_or_default() {
                 if node.online && !node.answers_to(&local) {
@@ -333,21 +340,15 @@ impl Hub {
         .await
     }
 
-    pub async fn harnesses_on(
+    /// The harnesses `node` offers, or this client's own node when it is `None`.
+    pub async fn harnesses(
         &self,
-        node: String,
+        node: Option<String>,
     ) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
         let hub = self.clone();
-        self.on_runtime(async move { hub.gateway_for(Some(&node)).await?.harnesses().await })
-            .await
-    }
-
-    /// The harnesses this client's own node offers.
-    pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
-        let hub = self.clone();
         self.on_runtime(async move {
-            let gateway = hub.inner.local.clone();
-            hub.offers(None, &gateway).await
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            hub.offers(node.as_deref(), &gateway).await
         })
         .await
     }
@@ -359,7 +360,10 @@ impl Hub {
         node: Option<&str>,
         gateway: &Gateway,
     ) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
-        let key = node.unwrap_or_default().to_owned();
+        let key = node
+            .filter(|node| !self.is_local(node))
+            .unwrap_or_default()
+            .to_owned();
         if let Some(offers) = self.inner.offers.read().get(&key) {
             return Ok(offers.clone());
         }
