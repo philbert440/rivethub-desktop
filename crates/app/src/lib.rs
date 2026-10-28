@@ -27,6 +27,7 @@ struct Inner {
     identity: Option<Identity>,
     local_node: RwLock<Option<String>>,
     remote: RwLock<HashMap<String, Gateway>>,
+    offers: RwLock<HashMap<String, Vec<model::harness::HarnessOffer>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ impl Hub {
                 identity,
                 local_node: RwLock::new(None),
                 remote: RwLock::new(HashMap::new()),
+                offers: RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -171,11 +173,16 @@ impl Hub {
                     nodes.push((Some(node.name), gateway));
                 }
             }
-            let listed = futures::future::join_all(
-                nodes
-                    .into_iter()
-                    .map(|(node, gateway)| async move { (node, node_sessions(&gateway).await) }),
-            )
+            let listed = futures::future::join_all(nodes.into_iter().map(|(node, gateway)| {
+                let hub = hub.clone();
+                async move {
+                    let sessions = match hub.offers(node.as_deref(), &gateway).await {
+                        Ok(offers) => node_sessions(&gateway, &offers).await,
+                        Err(err) => Err(err),
+                    };
+                    (node, sessions)
+                }
+            }))
             .await;
             let mut all = AllSessions::default();
             let mut seen = HashSet::new();
@@ -250,8 +257,28 @@ impl Hub {
 
     /// The harnesses this client's own node offers.
     pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
-        let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.harnesses().await }).await
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let gateway = hub.inner.local.clone();
+            hub.offers(None, &gateway).await
+        })
+        .await
+    }
+
+    /// A node's harness list, read once per run: asking rh again re-runs its model discovery,
+    /// which opens a real session in every ACP harness.
+    async fn offers(
+        &self,
+        node: Option<&str>,
+        gateway: &Gateway,
+    ) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
+        let key = node.unwrap_or_default().to_owned();
+        if let Some(offers) = self.inner.offers.read().get(&key) {
+            return Ok(offers.clone());
+        }
+        let offers = gateway.harnesses().await?;
+        self.inner.offers.write().insert(key, offers.clone());
+        Ok(offers)
     }
 }
 
@@ -261,8 +288,10 @@ pub struct AllSessions {
     pub unreachable: Vec<String>,
 }
 
-async fn node_sessions(gateway: &Gateway) -> Result<Vec<SessionSummary>, GatewayError> {
-    let offers = gateway.harnesses().await?;
+async fn node_sessions(
+    gateway: &Gateway,
+    offers: &[model::harness::HarnessOffer],
+) -> Result<Vec<SessionSummary>, GatewayError> {
     let lists = futures::future::join_all(
         offers
             .iter()
