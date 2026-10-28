@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use app::Hub;
 use gpui::{
@@ -7,6 +7,7 @@ use gpui::{
     rgb,
 };
 use model::agents::{Agent, Roster};
+use model::history::{ChipCounts, HistoryFilter, Phase};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
 use model::topics::Topic;
@@ -90,12 +91,13 @@ pub struct SidePanel {
     problem: Option<String>,
     roster: Roster,
     history: Vec<SessionSummary>,
+    phases: HashMap<SessionId, Phase>,
     known: Vec<SessionSummary>,
     topics: Vec<Topic>,
     past: Vec<PastTopic>,
     folded_sections: HashSet<Section>,
     history_shown: usize,
-    hide_finished: bool,
+    chips: HistoryFilter,
     collapsed: HashSet<SessionId>,
     renaming: Option<Renaming>,
     _query: [Subscription; 2],
@@ -118,12 +120,13 @@ impl SidePanel {
             problem: None,
             roster: Roster::default(),
             history: Vec::new(),
+            phases: HashMap::new(),
             known: Vec::new(),
             topics: Vec::new(),
             past: Vec::new(),
             folded_sections: HashSet::new(),
             history_shown: HISTORY_PAGE,
-            hide_finished: false,
+            chips: HistoryFilter::default(),
             collapsed: HashSet::new(),
             renaming: None,
             _query: [submitted, typed],
@@ -139,10 +142,12 @@ impl SidePanel {
     pub fn set_sessions(
         &mut self,
         history: Vec<SessionSummary>,
+        phases: HashMap<SessionId, Phase>,
         known: Vec<SessionSummary>,
         cx: &mut Context<Self>,
     ) {
         self.history = history;
+        self.phases = phases;
         self.known = known;
         cx.notify();
     }
@@ -322,31 +327,108 @@ impl SidePanel {
             .into_any_element()
     }
 
-    fn hide_finished_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
-        let on = self.hide_finished;
+    /// Where a History session stands, by the live feed the workspace hands over, else by its listing.
+    fn phase(&self, session: &SessionSummary) -> Phase {
+        self.phases.get(&session.id).copied().unwrap_or_else(|| {
+            Phase::of(
+                session.blocked,
+                session.status == model::session::SessionStatus::Active,
+                session.status.is_finished(),
+            )
+        })
+    }
+
+    fn chip(
+        id: impl Into<gpui::ElementId>,
+        label: &str,
+        count: usize,
+        on: bool,
+        toggle: impl Fn(&mut Self) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         div()
-            .id("hide-finished")
-            .h(px(24.))
+            .id(id)
+            .h(px(22.))
             .px_2()
-            .rounded(px(12.))
+            .rounded(px(11.))
             .flex()
             .items_center()
+            .gap_1()
             .cursor_pointer()
             .text_xs()
             .map(|chip| {
                 if on {
                     chip.bg(Theme::selected()).text_color(Theme::on_selected())
                 } else {
-                    chip.text_color(Theme::ink_dim())
-                        .hover(|chip| chip.bg(Theme::card()).text_color(Theme::ink()))
+                    chip.border_1()
+                        .border_color(Theme::line())
+                        .text_color(if count == 0 {
+                            Theme::ink_dim()
+                        } else {
+                            Theme::ink()
+                        })
+                        .hover(|chip| chip.bg(Theme::card()))
                 }
             })
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.hide_finished = !this.hide_finished;
-                cx.stop_propagation();
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                toggle(this);
                 cx.notify();
             }))
-            .child("Hide finished")
+            .child(label.to_owned())
+            .child(div().opacity(0.7).child(count.to_string()))
+    }
+
+    /// Status chips, then harness chips when the list holds more than one harness or one is picked.
+    fn history_chips(&self, counts: ChipCounts, cx: &mut Context<Self>) -> AnyElement {
+        let phases: Vec<AnyElement> = counts
+            .phases
+            .into_iter()
+            .enumerate()
+            .map(|(index, (phase, count))| {
+                Self::chip(
+                    ("phase-chip", index),
+                    phase.label(),
+                    count,
+                    self.chips.has_phase(phase),
+                    move |this| this.chips.toggle_phase(phase),
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
+        let picked = counts
+            .harnesses
+            .keys()
+            .any(|harness| self.chips.has_harness(harness));
+        let harnesses: Vec<AnyElement> = if picked || counts.harnesses.len() > 1 {
+            counts
+                .harnesses
+                .into_iter()
+                .map(|(harness, count)| {
+                    let on = self.chips.has_harness(&harness);
+                    let label = harness.display_name().to_owned();
+                    Self::chip(
+                        SharedString::from(format!("harness-chip-{}", harness.as_str())),
+                        &label,
+                        count,
+                        on,
+                        move |this| this.chips.toggle_harness(harness.clone()),
+                        cx,
+                    )
+                    .into_any_element()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        div()
+            .px_2()
+            .pb_2()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .children(phases)
+            .children(harnesses)
             .into_any_element()
     }
 
@@ -423,10 +505,12 @@ impl SidePanel {
             .iter()
             .filter(|past| model::search::mentions([past.name.as_str()], &filter))
             .collect();
-        let hide_finished = self.hide_finished;
         let history = lineage::keep(&self.history, |session| {
-            !(hide_finished && session.status.is_finished()) && session.matches(&filter)
+            self.chips.shows(session, self.phase(session), &filter)
         });
+        let counts = self
+            .chips
+            .counts(&self.history, |session| self.phase(session), &filter);
         let history_note = format!("{} without a topic", history.len());
         div()
             .flex()
@@ -449,14 +533,11 @@ impl SidePanel {
                     })
                     .child(div().h(px(1.)).mx_2().bg(Theme::line()))
             })
-            .child(self.section(
-                Section::History,
-                history_note,
-                Some(self.hide_finished_toggle(cx)),
-                cx,
-            ))
+            .child(self.section(Section::History, history_note, None, cx))
             .when(self.is_open(Section::History), |section| {
-                section.child(self.history(&history, cx))
+                section
+                    .child(self.history_chips(counts, cx))
+                    .child(self.history(&history, cx))
             })
             .into_any_element()
     }
