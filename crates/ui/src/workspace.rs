@@ -6,14 +6,16 @@ use std::collections::{HashMap, HashSet};
 use app::Hub;
 use gateway::GatewayError;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Rgba, SharedString,
-    Styled, Subscription, Window, actions, div, prelude::*, px,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, MouseDownEvent, ParentElement,
+    Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions, anchored, deferred,
+    div, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
+use crate::memory::Focus;
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
@@ -36,6 +38,9 @@ enum Launch {
     In(TopicId),
     New(String),
 }
+
+/// Asks the shell to show Memory focused on a topic or session.
+pub struct ViewInMemory(pub Focus);
 
 struct Placing {
     session: SessionId,
@@ -61,10 +66,13 @@ pub struct Workspace {
     panel_open: bool,
     placing: Option<Placing>,
     launching: Option<(Entity<Launcher>, Subscription)>,
+    menu: Option<(Focus, Point<Pixels>)>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     _feed: [gpui::Task<()>; 2],
 }
+
+impl EventEmitter<ViewInMemory> for Workspace {}
 
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -118,6 +126,7 @@ impl Workspace {
             panel_open: true,
             placing: None,
             launching: None,
+            menu: None,
             feed,
             _panel_events: panel_events,
             _feed: [refresh, repaint],
@@ -263,6 +272,69 @@ impl Workspace {
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };
         cx.notify();
+    }
+
+    /// Opens a session by id when some reachable node lists it.
+    pub fn open_listed(&mut self, id: &SessionId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(summary) = self.sessions.iter().find(|session| &session.id == id).cloned() else {
+            return false;
+        };
+        self.open(summary, window, cx);
+        true
+    }
+
+    /// Right-clicking opens a menu that can show this topic or session in Memory.
+    fn on_right_click(
+        focus: Focus,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+            this.menu = Some((focus.clone(), event.position));
+            cx.stop_propagation();
+            cx.notify();
+        })
+    }
+
+    /// A session shows in Memory as a search for its title, so only titled sessions can.
+    fn session_focus(session: &SessionSummary) -> Option<Focus> {
+        session
+            .title
+            .as_deref()
+            .map(|title| Focus::Search(one_line(Some(title)).to_string()))
+    }
+
+    fn menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let (focus, at) = self.menu.clone()?;
+        let item = div()
+            .id("view-in-memory")
+            .px_3()
+            .py_2()
+            .rounded(px(10.))
+            .cursor_pointer()
+            .hover(|item| item.bg(Theme::selected()).text_color(Theme::on_selected()))
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                this.menu = None;
+                cx.emit(ViewInMemory(focus.clone()));
+                cx.notify();
+            }))
+            .child("View in Memory");
+        Some(deferred(
+            anchored().position(at).child(
+                div()
+                    .min_w(px(200.))
+                    .p_1()
+                    .rounded(px(16.))
+                    .bg(Theme::card())
+                    .border_1()
+                    .border_color(Theme::line())
+                    .text_color(Theme::ink())
+                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.menu = None;
+                        cx.notify();
+                    }))
+                    .child(item),
+            ),
+        ))
     }
 
     fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
@@ -814,5 +886,6 @@ impl Render for Workspace {
                     }),
             )
             .children(launcher)
+            .children(self.menu(cx))
     }
 }
