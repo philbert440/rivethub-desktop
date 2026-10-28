@@ -555,6 +555,13 @@ impl Render for SidePanel {
                     .clone()
                     .map(|problem| div().px_2().text_xs().text_color(Theme::warn()).child(problem)),
             )
-            .child(div().flex_1().overflow_hidden().child(body))
+            .child(
+                div()
+                    .id("panel-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(body),
+            )
     }
 }
