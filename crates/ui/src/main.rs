@@ -2,7 +2,10 @@ mod brand;
 mod input;
 mod launcher;
 mod markdown_view;
+mod memory;
 mod session_pane;
+mod settings;
+mod shell;
 mod side_panel;
 mod terminal_view;
 mod text;
@@ -18,11 +21,10 @@ use std::process::ExitCode;
 
 use app::Hub;
 use gateway::{Endpoint, Gateway, Identity};
-use gpui::{
-    App, AppContext, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
-};
+use gpui::{App, AppContext, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use session_pane::ToggleTerminal;
-use workspace::{NewSession, NextNeedingYou, ToggleSidePanel, Workspace, ZoomOut};
+use shell::Shell;
+use workspace::{NewSession, NextNeedingYou, ToggleSidePanel, ZoomOut};
 
 fn endpoint() -> Endpoint {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
@@ -156,11 +158,7 @@ fn main() -> ExitCode {
                 app_id: Some("rivethub-desktop".into()),
                 ..Default::default()
             };
-            let opened = cx.open_window(options, |window, cx| {
-                let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
-                window.focus(&workspace.focus_handle(cx), cx);
-                workspace
-            });
+            let opened = cx.open_window(options, |window, cx| cx.new(|cx| Shell::new(hub, window, cx)));
             if opened.is_err() {
                 cx.quit();
             }

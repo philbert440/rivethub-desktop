@@ -7,7 +7,7 @@ use app::Hub;
 use gateway::GatewayError;
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Rgba, SharedString,
-    Styled, Subscription, Window, actions, div, img, prelude::*, px,
+    Styled, Subscription, Window, actions, div, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
@@ -18,7 +18,7 @@ use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
 use crate::topic_picker::{PickerEvent, TopicPicker};
-use crate::{brand, theme::Theme};
+use crate::{brand, shell, theme::Theme};
 
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
@@ -675,42 +675,13 @@ impl Workspace {
             .child(brand::icon(icon, 18., Theme::ink()))
     }
 
-    fn rail() -> impl IntoElement {
-        div()
-            .w(px(56.))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .items_center()
-            .pt_3()
-            .gap_4()
-            .bg(Theme::window())
-            .child(img(brand::rh()).size(px(32.)))
-            .child(
-                div()
-                    .size(px(44.))
-                    .rounded(px(22.))
-                    .bg(Theme::selected())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(brand::icon("icons/workspace.svg", 20., Theme::on_selected())),
-            )
-    }
-
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let in_session = matches!(self.altitude, Altitude::Session { .. });
         let back = match self.altitude.zoom_out() {
             Altitude::Topic(_) => "Ctrl ↑ Topic",
             _ => "Ctrl ↑ Everything",
         };
-        div()
-            .h(px(52.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_4()
-            .px_5()
+        shell::header()
             .child(self.crumbs(cx))
             .child(div().flex_1())
             .when(self.altitude != Altitude::Everything, |header| {
@@ -775,15 +746,8 @@ impl Render for Workspace {
             (Altitude::Topic(topic), _) => self.topic_view(&topic.clone(), cx),
             _ => self.everything(cx),
         };
-        let tile = div()
+        let tile = shell::tile()
             .id("everything-drop")
-            .flex_1()
-            .min_w_0()
-            .mr_3()
-            .mb_3()
-            .rounded(px(28.))
-            .bg(Theme::surface())
-            .overflow_hidden()
             .when(self.altitude == Altitude::Everything, |tile| {
                 tile.drag_over::<DraggedAgent>(|style, _, _, _| style.bg(Theme::selected()))
                     .drag_over::<DraggedSession>(|style, _, _, _| style.bg(Theme::selected()))
@@ -829,32 +793,25 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_needing_you))
             .size_full()
             .flex()
-            .bg(Theme::window())
-            .font_family(Theme::SANS)
-            .text_color(Theme::ink())
-            .text_sm()
-            .child(Self::rail())
+            .flex_col()
+            .child(self.header(cx))
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_h_0()
                     .flex()
-                    .flex_col()
-                    .child(self.header(cx))
-                    .child(div().flex_1().min_h_0().flex().child(tile).when(
-                        !in_session && self.panel_open,
-                        |row| {
-                            row.child(
-                                div()
-                                    .mb_3()
-                                    .mr_3()
-                                    .min_h_0()
-                                    .rounded(px(20.))
-                                    .overflow_hidden()
-                                    .child(self.panel.clone()),
-                            )
-                        },
-                    )),
+                    .child(tile)
+                    .when(!in_session && self.panel_open, |row| {
+                        row.child(
+                            div()
+                                .mb_3()
+                                .mr_3()
+                                .min_h_0()
+                                .rounded(px(20.))
+                                .overflow_hidden()
+                                .child(self.panel.clone()),
+                        )
+                    }),
             )
             .children(launcher)
     }
