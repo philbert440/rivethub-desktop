@@ -73,6 +73,12 @@ impl Gateway {
         Ok(list.sessions.into_iter().map(translate::summary).collect())
     }
 
+    pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
+        let url = format!("{}/api/harnesses", self.base_url);
+        let list: wire::harness::HarnessOfferingList = self.get_json(&url).await?;
+        Ok(list.harnesses.into_iter().map(translate::offer).collect())
+    }
+
     pub async fn mesh(&self) -> Result<Vec<model::mesh::Node>, GatewayError> {
         let overview: wire::gateway::devices::MeshOverview =
             self.get_json(&format!("{}/mesh.json", self.base_url)).await?;

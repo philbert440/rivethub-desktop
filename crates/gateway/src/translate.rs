@@ -76,6 +76,25 @@ pub fn wire_session(id: &SessionId) -> Result<wire::session_id::SessionId, Gatew
         .map_err(|_| GatewayError::SessionId(id.to_string()))
 }
 
+pub fn offer(raw: wire::harness::HarnessOffering) -> model::harness::HarnessOffer {
+    let capabilities = raw.capabilities;
+    model::harness::HarnessOffer {
+        id: HarnessId::new(raw.harness_id.to_string()),
+        chat: raw.chat,
+        lists_sessions: capabilities.observation.list_sessions,
+        models: capabilities
+            .models
+            .unwrap_or_default()
+            .into_iter()
+            .map(|choice| model::harness::ModelChoice {
+                id: choice.id,
+                label: choice.label,
+                default: choice.is_default.unwrap_or(false),
+            })
+            .collect(),
+    }
+}
+
 pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     SessionSummary {
         id: session(&raw.session_id),

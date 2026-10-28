@@ -27,7 +27,7 @@ const FORMING_MS: i64 = 24 * HOUR_MS;
 const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
 
 type Loaded = (
-    Result<Vec<SessionSummary>, GatewayError>,
+    Result<app::AllSessions, GatewayError>,
     Result<(Vec<Topic>, Placements), GatewayError>,
 );
 
@@ -129,10 +129,7 @@ impl Workspace {
     fn load(&self, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let loaded: Loaded = (
-                hub.recent_sessions(HarnessId::new(CLAUDE)).await,
-                hub.topics().await,
-            );
+            let loaded: Loaded = (hub.all_sessions().await, hub.topics().await);
             this.update(cx, |this, cx| this.loaded(loaded, cx)).ok();
         })
         .detach();
@@ -141,7 +138,12 @@ impl Workspace {
     fn loaded(&mut self, (sessions, topics): Loaded, cx: &mut Context<Self>) {
         let mut problems = Vec::new();
         match sessions {
-            Ok(sessions) => self.sessions = sessions,
+            Ok(all) => {
+                self.sessions = all.sessions;
+                if !all.unreachable.is_empty() {
+                    problems.push(format!("couldn't reach {}", all.unreachable.join(", ")));
+                }
+            }
             Err(err) => problems.push(err.to_string()),
         }
         match topics {

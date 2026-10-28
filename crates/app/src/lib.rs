@@ -7,7 +7,7 @@ pub use feed::WorkspaceFeed;
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -156,10 +156,51 @@ impl Hub {
         .await
     }
 
-    pub async fn recent_sessions(&self, harness: HarnessId) -> Result<Vec<SessionSummary>, GatewayError> {
-        let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.sessions(&harness).await })
-            .await
+    /// Every session every reachable node lists, across all of its harnesses, newest first.
+    pub async fn all_sessions(&self) -> Result<AllSessions, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let local = hub.inner.local_node.read().clone();
+            let mut nodes = vec![(None, hub.inner.local.clone())];
+            for node in hub.inner.local.mesh().await.unwrap_or_default() {
+                let is_local = local.as_deref().is_some_and(|name| node.answers_to(name));
+                if node.online
+                    && !is_local
+                    && let Ok(gateway) = hub.gateway_for(Some(&node.name)).await
+                {
+                    nodes.push((Some(node.name), gateway));
+                }
+            }
+            let listed = futures::future::join_all(
+                nodes
+                    .into_iter()
+                    .map(|(node, gateway)| async move { (node, node_sessions(&gateway).await) }),
+            )
+            .await;
+            let mut all = AllSessions::default();
+            let mut seen = HashSet::new();
+            for (node, sessions) in listed {
+                match sessions {
+                    Ok(sessions) => {
+                        for mut session in sessions {
+                            if seen.insert(session.id.clone()) {
+                                if session.node.is_none() {
+                                    session.node.clone_from(&node);
+                                }
+                                all.sessions.push(session);
+                            }
+                        }
+                    }
+                    Err(_) => all
+                        .unreachable
+                        .push(node.unwrap_or_else(|| "this node".to_owned())),
+                }
+            }
+            all.sessions
+                .sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
+            Ok(all)
+        })
+        .await
     }
 
     pub async fn agents(&self) -> Result<Roster, GatewayError> {
@@ -202,4 +243,26 @@ impl Hub {
         self.on_runtime(async move { gateway.start_session(&harness).await })
             .await
     }
+}
+
+#[derive(Debug, Default)]
+pub struct AllSessions {
+    pub sessions: Vec<SessionSummary>,
+    pub unreachable: Vec<String>,
+}
+
+async fn node_sessions(gateway: &Gateway) -> Result<Vec<SessionSummary>, GatewayError> {
+    let offers = gateway.harnesses().await?;
+    let lists = futures::future::join_all(
+        offers
+            .iter()
+            .filter(|offer| offer.lists_sessions)
+            .map(|offer| gateway.sessions(&offer.id)),
+    )
+    .await;
+    let mut sessions = Vec::new();
+    for list in lists {
+        sessions.extend(list?);
+    }
+    Ok(sessions)
 }
