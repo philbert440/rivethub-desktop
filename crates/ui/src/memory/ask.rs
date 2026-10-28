@@ -19,13 +19,18 @@ impl MemoryPage {
         self.problem = None;
         let (hub, period) = (self.hub.clone(), self.period);
         cx.spawn(async move |this, cx| {
-            let found = hub.recall(query, period).await;
-            this.update(cx, |this, cx| match found {
-                Ok(found) => {
-                    this.found = Some(found);
-                    cx.notify();
+            let found = hub.recall(query.clone(), period).await;
+            this.update(cx, |this, cx| {
+                if this.asked.as_ref() != Some(&query) || this.period != period {
+                    return;
                 }
-                Err(err) => this.failed(&err, cx),
+                match found {
+                    Ok(found) => {
+                        this.found = Some(found);
+                        cx.notify();
+                    }
+                    Err(err) => this.failed(&err, cx),
+                }
             })
             .ok();
         })
