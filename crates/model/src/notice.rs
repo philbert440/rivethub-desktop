@@ -13,18 +13,19 @@ pub enum NoticeKind {
 
 impl NoticeKind {
     /// What a session's live state moving from (`was`, `was_blocked`) to (`now`, `blocked`) asks
-    /// of the person. A session seen for the first time never counts as finished, so reconnecting
-    /// doesn't replay old turns.
+    /// of the person. A session seen for the first time raises nothing, so connecting or
+    /// reconnecting doesn't replay old turns or old waits, and one still waiting isn't finished.
     pub fn raised_by(
         was: Option<SessionStatus>,
         was_blocked: bool,
         now: SessionStatus,
         blocked: bool,
     ) -> Option<Self> {
-        if blocked && !was_blocked {
-            Some(Self::NeedsYou)
+        let was = was?;
+        if blocked {
+            (!was_blocked).then_some(Self::NeedsYou)
         } else {
-            (was == Some(SessionStatus::Active) && now == SessionStatus::Idle).then_some(Self::Finished)
+            (was == SessionStatus::Active && now == SessionStatus::Idle).then_some(Self::Finished)
         }
     }
 }
@@ -68,6 +69,11 @@ mod tests {
             Some(NoticeKind::NeedsYou)
         );
         assert_eq!(NoticeKind::raised_by(Some(Active), true, Active, true), None);
+        assert_eq!(NoticeKind::raised_by(None, false, Active, true), None);
+        assert_eq!(
+            NoticeKind::raised_by(Some(Active), true, SessionStatus::Idle, true),
+            None
+        );
     }
 
     #[test]
