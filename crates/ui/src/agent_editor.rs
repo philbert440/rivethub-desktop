@@ -35,24 +35,28 @@ impl EventEmitter<AgentEditorEvent> for AgentEditor {}
 impl AgentEditor {
     pub fn new(hub: Hub, agent: Option<&Agent>, cx: &mut Context<Self>) -> Self {
         let draft = agent.map(AgentDraft::from_agent).unwrap_or_default();
-        let field = |placeholder: &'static str, text: Option<&str>, cx: &mut Context<Self>| {
-            cx.new(|cx| {
-                let mut input = TextInput::new(placeholder, cx);
-                if let Some(text) = text {
-                    input.set_text(text, cx);
-                }
-                input
-            })
-        };
-        let name = field("Name", agent.map(|agent| agent.name.as_str()), cx);
+        let field =
+            |placeholder: &'static str, text: Option<&str>, multiline: bool, cx: &mut Context<Self>| {
+                cx.new(|cx| {
+                    let input = TextInput::new(placeholder, cx);
+                    let mut input = if multiline { input.multiline() } else { input };
+                    if let Some(text) = text {
+                        input.set_text(text, cx);
+                    }
+                    input
+                })
+            };
+        let name = field("Name", agent.map(|agent| agent.name.as_str()), false, cx);
         let folder = field(
             "Working folder, such as /home/you/work/project",
             draft.directory.as_deref(),
+            false,
             cx,
         );
         let instructions = field(
             "Instructions added to the harness's own system prompt",
             draft.instructions.as_deref(),
+            true,
             cx,
         );
         let editor = Self {

@@ -10,7 +10,8 @@ use gpui::{
     ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions,
     anchored, deferred, div, prelude::*, px,
 };
-use model::session::{SessionStatus, SessionSummary};
+use model::notice::Notice;
+use model::session::SessionSummary;
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
@@ -74,7 +75,14 @@ pub struct Workspace {
     _feed: [gpui::Task<()>; 2],
 }
 
+/// A session worth a desktop notification, with its title when this node's listing has it.
+pub struct Attention {
+    pub notice: Notice,
+    pub title: Option<String>,
+}
+
 impl EventEmitter<ViewInMemory> for Workspace {}
+impl EventEmitter<Attention> for Workspace {}
 
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -108,7 +116,7 @@ impl Workspace {
         let mut activity = feed.activity();
         let repaint = cx.spawn(async move |this, cx| {
             while activity.changed().await.is_ok() {
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                if this.update(cx, Self::take_notices).is_err() {
                     break;
                 }
             }
@@ -141,6 +149,26 @@ impl Workspace {
         workspace
     }
 
+    fn take_notices(&mut self, cx: &mut Context<Self>) {
+        for notice in self.feed.take_notices() {
+            let title = self
+                .sessions
+                .iter()
+                .find(|session| session.id == notice.session)
+                .and_then(|session| session.title.clone());
+            cx.emit(Attention { notice, title });
+        }
+        cx.notify();
+    }
+
+    /// The session open in the pane, if the workspace is showing one.
+    pub fn on_screen(&self) -> Option<&SessionId> {
+        match &self.altitude {
+            Altitude::Session { session, .. } => Some(session),
+            Altitude::Everything | Altitude::Topic(_) => None,
+        }
+    }
+
     fn load(&self, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
@@ -154,6 +182,9 @@ impl Workspace {
         let mut problems = Vec::new();
         match sessions {
             Ok(all) => {
+                if let Some(nodes) = &all.other_nodes {
+                    self.feed.follow_nodes(nodes);
+                }
                 self.sessions = all.sessions;
                 if !all.unreachable.is_empty() {
                     problems.push(format!("couldn't reach {}", all.unreachable.join(", ")));
@@ -405,10 +436,7 @@ impl Workspace {
     }
 
     fn next_needing_you(&mut self, _: &NextNeedingYou, window: &mut Window, cx: &mut Context<Self>) {
-        let current = match &self.altitude {
-            Altitude::Session { session, .. } => Some(session.clone()),
-            Altitude::Everything | Altitude::Topic(_) => None,
-        };
+        let current = self.on_screen().cloned();
         let feed = &self.feed;
         let next = model::attention::next_needing_you(&self.sessions, current.as_ref(), |session| {
             feed.needs_you(session)
@@ -765,7 +793,7 @@ impl Workspace {
     fn dot(&self, session: &SessionSummary) -> Rgba {
         if self.feed.needs_you(session) {
             Theme::warn()
-        } else if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
+        } else if self.feed.is_active(session) {
             Theme::accent()
         } else {
             Theme::ink_dim()
@@ -778,7 +806,7 @@ impl Workspace {
         for session in sessions {
             if self.feed.needs_you(session) {
                 waiting += 1;
-            } else if self.feed.is_working(&session.id) || session.status == SessionStatus::Active {
+            } else if self.feed.is_active(session) {
                 active += 1;
             } else {
                 idle += 1;

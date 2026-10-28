@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::prompt::SentFile;
 use crate::session::{Role, ToolCall, ToolState, Turn};
 use crate::tools::ToolInput;
 
@@ -73,6 +74,7 @@ pub enum ExchangeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exchange {
     pub prompt: Option<String>,
+    pub files: Vec<SentFile>,
     pub steps: Vec<Step>,
     pub answer: String,
     pub state: ExchangeState,
@@ -81,9 +83,10 @@ pub struct Exchange {
 }
 
 impl Exchange {
-    fn new(prompt: Option<String>) -> Self {
+    fn new(prompt: Option<String>, files: Vec<SentFile>) -> Self {
         Self {
             prompt,
+            files,
             steps: Vec::new(),
             answer: String::new(),
             state: ExchangeState::Completed,
@@ -152,10 +155,10 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
                     exchange.state = ExchangeState::Stopped;
                 }
             }
-            Role::User => out.push(Exchange::new(Some(turn.text.clone()))),
+            Role::User => out.push(Exchange::new(Some(turn.text.clone()), turn.files.clone())),
             Role::Assistant => {
                 if out.is_empty() {
-                    out.push(Exchange::new(None));
+                    out.push(Exchange::new(None, Vec::new()));
                 }
                 if let Some(exchange) = out.last_mut() {
                     exchange.absorb(turn);
@@ -289,6 +292,7 @@ mod tests {
             thinking: String::new(),
             model: None,
             output_tokens: 0,
+            files: Vec::new(),
             tools: tools
                 .iter()
                 .map(|(name, state)| ToolCall {

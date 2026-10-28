@@ -38,8 +38,13 @@ actions!(
 
 pub struct Submitted(pub String);
 
+/// An image pasted into a multi-line input, for the view that owns it to attach.
+pub struct PastedImage(pub gpui::Image);
+
 pub struct TextInput {
     focus_handle: FocusHandle,
+    /// Whether the text may span lines: Shift+Enter and pasted newlines stay, where a one-line input flattens them.
+    multiline: bool,
     content: SharedString,
     placeholder: SharedString,
     selected_range: Range<usize>,
@@ -97,10 +102,9 @@ impl TextInput {
     }
 
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
-        self.replace_text_in_range(
-            None, "
-", window, cx,
-        );
+        if self.multiline {
+            self.replace_text_in_range(None, "\n", window, cx);
+        }
     }
 
     fn vertical(&self, rows: f32) -> Option<usize> {
@@ -191,8 +195,26 @@ impl TextInput {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace('\n', " "), window, cx);
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        if let Some(text) = item.text() {
+            let text = text.replace("\r\n", "\n");
+            let text = if self.multiline {
+                text
+            } else {
+                text.replace('\n', " ")
+            };
+            self.replace_text_in_range(None, &text, window, cx);
+            return;
+        }
+        if !self.multiline {
+            return;
+        }
+        for entry in item.entries() {
+            if let gpui::ClipboardEntry::Image(image) = entry {
+                cx.emit(PastedImage(image.clone()));
+            }
         }
     }
 
@@ -751,11 +773,13 @@ impl Focusable for TextInput {
 }
 
 impl EventEmitter<Submitted> for TextInput {}
+impl EventEmitter<PastedImage> for TextInput {}
 
 impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            multiline: false,
             content: SharedString::default(),
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -766,6 +790,13 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
         }
+    }
+
+    /// Lets the text span lines, as a message or instructions do.
+    #[must_use]
+    pub fn multiline(mut self) -> Self {
+        self.multiline = true;
+        self
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {

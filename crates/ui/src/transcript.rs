@@ -1,12 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Hsla, IntoElement, ParentElement, Pixels, SharedString, Styled,
-    WeakEntity, Window, div, prelude::*, pulsating_between, px,
+    Animation, AnimationExt, AnyElement, ClipboardItem, Hsla, IntoElement, ParentElement, Pixels,
+    SharedString, Styled, WeakEntity, Window, div, img, prelude::*, pulsating_between, px,
 };
 use model::chat::{Exchange, ExchangeState, Step, group_summary, running_label, thought_summary};
 use model::markdown::{Block, Parsed, parse};
+use model::prompt::SentFile;
 
 use crate::markdown_view;
 use crate::session_pane::SessionPane;
@@ -86,7 +88,9 @@ pub struct Context<'a> {
     pub pane: WeakEntity<SessionPane>,
     pub cwd: Option<&'a str>,
     pub home: Option<&'a str>,
-    pub fetched: &'a std::collections::HashMap<String, model::tools::ToolOutput>,
+    pub fetched: &'a HashMap<String, model::tools::ToolOutput>,
+    /// Sent images fetched from the node that holds their uploads, by upload.
+    pub previews: &'a HashMap<String, Arc<gpui::Image>>,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
@@ -213,17 +217,66 @@ fn status(label: &str) -> AnyElement {
         .into_any_element()
 }
 
-fn bubble(prompt: &str, column: Pixels) -> impl IntoElement {
-    div().w_full().flex().justify_end().child(
-        div()
-            .max_w(column * 0.702)
-            .px_4()
-            .py(px(10.))
-            .rounded(px(20.))
-            .bg(Theme::raised())
-            .text_color(Theme::ink())
-            .child(prompt.trim().to_owned()),
-    )
+/// A sent image shows as a thumbnail while its upload lasts.
+fn sent_file(file: &SentFile, cx: &Context<'_>) -> AnyElement {
+    let label = file.label().to_owned();
+    match file.viewable_upload().and_then(|upload| cx.previews.get(upload)) {
+        Some(image) => img(Arc::clone(image))
+            .h(px(160.))
+            .max_w(px(320.))
+            .rounded(px(12.))
+            .with_fallback(move || file_chip(label.clone()))
+            .into_any_element(),
+        None => file_chip(label),
+    }
+}
+
+/// A sent file by name: before its thumbnail loads, after its upload is gone, or when it isn't an image.
+fn file_chip(label: String) -> AnyElement {
+    div()
+        .h(px(28.))
+        .px_3()
+        .rounded(px(14.))
+        .bg(Theme::raised())
+        .flex()
+        .items_center()
+        .text_xs()
+        .text_color(Theme::ink_dim())
+        .child(div().max_w(px(220.)).truncate().child(label))
+        .into_any_element()
+}
+
+fn sent(prompt: &str, files: &[SentFile], cx: &Context<'_>) -> impl IntoElement {
+    let prompt = prompt.trim();
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap_2()
+        .when(!files.is_empty(), |sent| {
+            sent.child(
+                div()
+                    .max_w(cx.column * 0.702)
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap_2()
+                    .children(files.iter().map(|file| sent_file(file, cx))),
+            )
+        })
+        .when(!prompt.is_empty(), |sent| {
+            sent.child(
+                div()
+                    .max_w(cx.column * 0.702)
+                    .px_4()
+                    .py(px(10.))
+                    .rounded(px(20.))
+                    .bg(Theme::raised())
+                    .text_color(Theme::ink())
+                    .child(prompt.to_owned()),
+            )
+        })
 }
 
 fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> impl IntoElement {
@@ -268,6 +321,42 @@ fn meta(exchange: &Exchange) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
+/// What shows under a finished exchange while the pointer is over it: a copy of the reply's markdown, then the
+/// model and tokens behind it.
+fn actions(exchange: &Exchange, ix: usize) -> Option<impl IntoElement> {
+    let reply = exchange.answer.trim().to_owned();
+    let meta = meta(exchange);
+    if reply.is_empty() && meta.is_none() {
+        return None;
+    }
+    let row = div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap_3()
+        .text_xs()
+        .text_color(Theme::ink_dim())
+        .invisible()
+        .group_hover("exchange", gpui::Styled::visible)
+        .when(!reply.is_empty(), |row| {
+            row.child(
+                div()
+                    .id(SharedString::from(format!("copy-reply-{ix}")))
+                    .size(px(24.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|copy| copy.bg(Theme::raised()))
+                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(reply.clone())))
+                    .child(crate::brand::icon("icons/copy.svg", 14., Theme::ink_dim())),
+            )
+        })
+        .children(meta);
+    Some(row)
+}
+
 pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyElement {
     let exchange = &view.exchange;
     let ix = cx.index;
@@ -281,7 +370,7 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
         .gap_3()
         .py_3();
     if let Some(prompt) = &exchange.prompt {
-        column = column.child(bubble(prompt, cx.column));
+        column = column.child(sent(prompt, &exchange.files, cx));
     }
     if exchange.has_process() {
         let fold = Fold::Exchange(ix);
@@ -316,16 +405,8 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 )),
         );
     }
-    if let Some(meta) = meta(exchange).filter(|_| !working) {
-        column = column.child(
-            div()
-                .h(px(20.))
-                .text_xs()
-                .text_color(Theme::ink_dim())
-                .invisible()
-                .group_hover("exchange", gpui::Styled::visible)
-                .child(meta),
-        );
+    if !working {
+        column = column.children(actions(exchange, ix));
     }
     if working {
         let label = exchange

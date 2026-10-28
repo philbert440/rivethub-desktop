@@ -1,4 +1,5 @@
 use crate::SessionId;
+use crate::prompt::SentFile;
 use crate::tools::{Question, ToolInput, ToolOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,7 @@ pub struct Turn {
     pub ends_with_text: bool,
     pub model: Option<String>,
     pub output_tokens: u64,
+    pub files: Vec<SentFile>,
 }
 
 impl Turn {
@@ -44,6 +46,7 @@ impl Turn {
             ends_with_text: false,
             model: None,
             output_tokens: 0,
+            files: Vec::new(),
         }
     }
 }
@@ -314,6 +317,7 @@ mod tests {
             ends_with_text: true,
             model: None,
             output_tokens: 0,
+            files: Vec::new(),
         }
     }
 

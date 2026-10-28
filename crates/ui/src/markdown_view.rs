@@ -1,12 +1,38 @@
 use gpui::{
-    AnyElement, ClipboardItem, FontStyle, FontWeight, Hsla, IntoElement, ParentElement, SharedString,
-    StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle, Window, div, font, prelude::*, px,
+    AnyElement, ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, IntoElement, ParentElement,
+    SharedString, StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle, Window, div, font,
+    prelude::*, px,
 };
 use model::markdown::{Block, Run};
 
 use crate::theme::Theme;
 
-fn styled(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> StyledText {
+/// Inline text, whose web links open in the browser when clicked.
+fn styled(runs: &[Run], base: Hsla, bold_all: bool, id: &str, window: &Window) -> AnyElement {
+    let text = styled_text(runs, base, bold_all, window);
+    let mut ranges = Vec::new();
+    let mut urls = Vec::new();
+    let mut offset = 0;
+    for run in runs {
+        if let Some(url) = run.url() {
+            ranges.push(offset..offset + run.text.len());
+            urls.push(url.to_owned());
+        }
+        offset += run.text.len();
+    }
+    if urls.is_empty() {
+        return text.into_any_element();
+    }
+    InteractiveText::new(SharedString::from(format!("text-{id}")), text)
+        .on_click(ranges, move |index, _, cx| {
+            if let Some(url) = urls.get(index) {
+                cx.open_url(url);
+            }
+        })
+        .into_any_element()
+}
+
+fn styled_text(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> StyledText {
     let prose = window.text_style().font();
     let text: String = runs.iter().map(|run| run.text.as_str()).collect();
     let text_runs = runs
@@ -27,13 +53,13 @@ fn styled(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> StyledTe
             TextRun {
                 len: run.text.len(),
                 font: face,
-                color: if run.link.is_some() {
+                color: if run.url().is_some() {
                     Theme::accent().into()
                 } else {
                     base
                 },
                 background_color: run.code.then(|| Theme::card().into()),
-                underline: run.link.is_some().then(|| UnderlineStyle {
+                underline: run.url().is_some().then(|| UnderlineStyle {
                     thickness: px(1.),
                     color: Some(Theme::accent().into()),
                     wavy: false,
@@ -101,7 +127,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
     match block {
         Block::Paragraph(runs) => div()
             .w_full()
-            .child(styled(runs, base, false, window))
+            .child(styled(runs, base, false, scope, window))
             .into_any_element(),
         Block::Heading { level, runs } => {
             let size = match level {
@@ -114,7 +140,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                 .w_full()
                 .pt_2()
                 .text_size(px(size))
-                .child(styled(runs, Theme::ink().into(), true, window))
+                .child(styled(runs, Theme::ink().into(), true, scope, window))
                 .into_any_element()
         }
         Block::List { start, items } => div()
@@ -158,33 +184,42 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
             text,
             SharedString::from(format!("copy-{scope}")),
         ),
-        Block::Table { head, rows } => div()
-            .w_full()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(Theme::line())
-            .overflow_hidden()
-            .child(div().flex().bg(Theme::card()).children(head.iter().map(|cell| {
-                div()
-                    .flex_1()
-                    .px_4()
-                    .py(px(10.))
-                    .child(styled(cell, Theme::ink().into(), true, window))
-            })))
-            .children(rows.iter().map(|row| {
-                div()
-                    .flex()
-                    .border_t_1()
-                    .border_color(Theme::line())
-                    .children(row.iter().map(|cell| {
-                        div()
-                            .flex_1()
-                            .px_4()
-                            .py(px(10.))
-                            .child(styled(cell, base, false, window))
-                    }))
-            }))
-            .into_any_element(),
+        Block::Table { head, rows } => {
+            div()
+                .w_full()
+                .rounded(px(12.))
+                .border_1()
+                .border_color(Theme::line())
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .bg(Theme::card())
+                        .children(head.iter().enumerate().map(|(column, cell)| {
+                            div().flex_1().px_4().py(px(10.)).child(styled(
+                                cell,
+                                Theme::ink().into(),
+                                true,
+                                &format!("{scope}-head-{column}"),
+                                window,
+                            ))
+                        })),
+                )
+                .children(rows.iter().enumerate().map(|(line, row)| {
+                    div().flex().border_t_1().border_color(Theme::line()).children(
+                        row.iter().enumerate().map(|(column, cell)| {
+                            div().flex_1().px_4().py(px(10.)).child(styled(
+                                cell,
+                                base,
+                                false,
+                                &format!("{scope}-{line}-{column}"),
+                                window,
+                            ))
+                        }),
+                    )
+                }))
+                .into_any_element()
+        }
         Block::Rule => div().w_full().h(px(1.)).bg(Theme::line()).into_any_element(),
     }
 }
