@@ -123,6 +123,38 @@ pub fn blocks(blocks: &[Block], scope: &str, base: Hsla, window: &Window) -> Vec
         .collect()
 }
 
+fn list(start: Option<u64>, items: &[Vec<Block>], scope: &str, base: Hsla, window: &Window) -> AnyElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .children(items.iter().enumerate().map(|(index, item)| {
+            let marker = start.map_or_else(|| "•".to_owned(), |first| format!("{}.", first + index as u64));
+            div()
+                .w_full()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_none()
+                        .min_w(px(18.))
+                        .text_color(Theme::ink_dim())
+                        .child(marker),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(blocks(item, &format!("{scope}-{index}"), base, window)),
+                )
+        }))
+        .into_any_element()
+}
+
 fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement {
     match block {
         Block::Paragraph(runs) => div()
@@ -143,32 +175,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                 .child(styled(runs, Theme::ink().into(), true, scope, window))
                 .into_any_element()
         }
-        Block::List { start, items } => div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .children(items.iter().enumerate().map(|(index, item)| {
-                let marker =
-                    start.map_or_else(|| "•".to_owned(), |first| format!("{}.", first + index as u64));
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_none()
-                            .min_w(px(18.))
-                            .text_color(Theme::ink_dim())
-                            .child(marker),
-                    )
-                    .child(div().flex_1().flex().flex_col().gap_2().children(blocks(
-                        item,
-                        &format!("{scope}-{index}"),
-                        base,
-                        window,
-                    )))
-            }))
-            .into_any_element(),
+        Block::List { start, items } => list(*start, items, scope, base, window),
         Block::Quote(inner) => div()
             .w_full()
             .pl_3()
@@ -196,7 +203,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                         .flex()
                         .bg(Theme::card())
                         .children(head.iter().enumerate().map(|(column, cell)| {
-                            div().flex_1().px_4().py(px(10.)).child(styled(
+                            div().flex_1().min_w_0().px_4().py(px(10.)).child(styled(
                                 cell,
                                 Theme::ink().into(),
                                 true,
@@ -208,7 +215,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                 .children(rows.iter().enumerate().map(|(line, row)| {
                     div().flex().border_t_1().border_color(Theme::line()).children(
                         row.iter().enumerate().map(|(column, cell)| {
-                            div().flex_1().px_4().py(px(10.)).child(styled(
+                            div().flex_1().min_w_0().px_4().py(px(10.)).child(styled(
                                 cell,
                                 base,
                                 false,
