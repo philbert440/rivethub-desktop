@@ -148,8 +148,8 @@ impl Shell {
             } else {
                 div().flex().flex_col().items_center().gap_2().pb_3().child(mark)
             })
-            .child(self.nav_item(Page::Workspace, "icons/workspace.svg", "Workspace", cx))
-            .child(self.nav_item(Page::Memory, "icons/memory.svg", "Memory", cx))
+            .child(self.nav_item(Page::Workspace, "icons/message-square.svg", "Workspace", cx))
+            .child(self.nav_item(Page::Memory, "icons/library.svg", "Memory", cx))
             .child(div().flex_1())
             .child(self.nav_item(Page::Settings, "icons/settings.svg", "Settings", cx))
     }
