@@ -235,13 +235,20 @@ impl SidePanel {
         cx.spawn(async move |this, cx| {
             let renamed = hub.rename(&session, title).await;
             this.update(cx, |this, cx| {
+                // The person may have moved on to renaming another session meanwhile.
+                let still_open = this
+                    .renaming
+                    .as_mut()
+                    .filter(|renaming| renaming.session.id == session.id);
                 match renamed {
                     Ok(renamed) => {
-                        this.renaming = None;
+                        if still_open.is_some() {
+                            this.renaming = None;
+                        }
                         cx.emit(PanelEvent::Renamed(renamed));
                     }
                     Err(err) => {
-                        if let Some(renaming) = this.renaming.as_mut() {
+                        if let Some(renaming) = still_open {
                             renaming.problem = Some(format!("rename failed: {err}"));
                         }
                     }
