@@ -1,10 +1,19 @@
-use gpui::{Rgba, rgb};
+use gpui::{Rgba, rgb, rgba};
 
 pub struct Theme;
 
 impl Theme {
     pub const MONO: &str = "JetBrains Mono";
     pub const SANS: &str = "Roboto Flex";
+    /// The colours an agent can be given.
+    pub const AGENT_COLORS: [u32; 6] = [
+        0x006c_dbac,
+        0x008e_cbff,
+        0x00f5_c56b,
+        0x00ff_b4ab,
+        0x00c9_b2ff,
+        0x00a7_b2ab,
+    ];
 
     pub fn window() -> Rgba {
         rgb(0x000f_1512)
@@ -62,5 +71,9 @@ impl Theme {
     }
     pub fn on_accent() -> Rgba {
         rgb(0x0000_3825)
+    }
+    /// Dims the workspace behind a modal.
+    pub fn scrim() -> Rgba {
+        rgba(0x0509_07b3)
     }
 }

@@ -32,21 +32,23 @@ pub fn roster_command(id: &SessionId) -> Result<String, GatewayError> {
         .ok_or_else(|| GatewayError::SessionId(id.to_string()))
 }
 
+pub fn agent(raw: wire::gateway::agents::AgentPreset) -> model::agents::Agent {
+    let filled = |value: String| Some(value).filter(|value| !value.trim().is_empty());
+    model::agents::Agent {
+        id: raw.id,
+        name: raw.name,
+        color: model::agents::parse_color(&raw.color),
+        harness: raw.harness_id.map(|harness| HarnessId::new(harness.to_string())),
+        model: filled(raw.model),
+        node: raw.node,
+        effort: filled(raw.effort),
+        directory: raw.directory,
+        instructions: filled(raw.system_prompt),
+    }
+}
+
 pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::Roster {
-    let agents = raw
-        .agents
-        .into_iter()
-        .map(|agent| model::agents::Agent {
-            id: agent.id,
-            name: agent.name,
-            color: model::agents::parse_color(&agent.color),
-            harness: agent
-                .harness_id
-                .map(|harness| HarnessId::new(harness.to_string())),
-            model: Some(agent.model).filter(|model| !model.is_empty()),
-            node: agent.node,
-        })
-        .collect();
+    let agents = raw.agents.into_iter().map(agent).collect();
     model::agents::Roster {
         node: raw.node,
         agents,

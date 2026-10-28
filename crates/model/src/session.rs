@@ -80,6 +80,12 @@ pub enum SessionStatus {
     Failed,
 }
 
+impl SessionStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, Self::Ended | Self::Failed)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
     pub id: SessionId,
@@ -91,6 +97,21 @@ pub struct SessionSummary {
     pub parent: Option<SessionId>,
     pub node: Option<String>,
     pub blocked: bool,
+}
+
+impl SessionSummary {
+    /// Whether a typed filter finds this session by its title, folder, harness or model.
+    pub fn matches(&self, query: &str) -> bool {
+        crate::search::mentions(
+            [
+                self.title.as_deref().unwrap_or_default(),
+                self.cwd.as_deref().unwrap_or_default(),
+                self.id.harness().display_name(),
+                self.model.as_deref().unwrap_or_default(),
+            ],
+            query,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

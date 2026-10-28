@@ -1,3 +1,4 @@
+mod agent_editor;
 mod brand;
 mod input;
 mod launcher;
