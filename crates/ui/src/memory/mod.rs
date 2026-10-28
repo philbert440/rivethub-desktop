@@ -14,6 +14,7 @@ use model::{SessionId, TopicId};
 
 use crate::brand;
 use crate::input::{Submitted, TextInput};
+use crate::menu::OpenMenu;
 use crate::shell;
 use crate::theme::Theme;
 
@@ -54,6 +55,7 @@ pub enum Focus {
 
 pub enum MemoryEvent {
     OpenSession(SessionId),
+    TopicDeleted(TopicId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +85,7 @@ pub struct MemoryPage {
     opened: Option<Opened>,
     reading: Option<Reading>,
     tidy: Option<Tidy>,
+    menu: Option<OpenMenu>,
     _submitted: [Subscription; 2],
 }
 
@@ -123,6 +126,7 @@ impl MemoryPage {
             opened: None,
             reading: None,
             tidy: None,
+            menu: None,
             _submitted: [asked, found],
         };
         page.load_tidy(cx);
@@ -238,5 +242,6 @@ impl Render for MemoryPage {
             .flex_col()
             .child(shell::header().child(shell::title("Memory")).child(self.tabs(cx)))
             .child(shell::tile().flex().flex_col().child(content))
+            .children(self.menu.as_ref().map(OpenMenu::overlay))
     }
 }

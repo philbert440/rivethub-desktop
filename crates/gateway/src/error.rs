@@ -20,6 +20,8 @@ pub enum GatewayError {
     Status { status: u16, detail: String },
     #[error("websocket: {0}")]
     Socket(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("{0}")]
+    Conflict(String),
     #[error("refused: {0}")]
     Refused(String),
     #[error("not a session id: {0}")]

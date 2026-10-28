@@ -69,4 +69,10 @@ impl Hub {
         })
         .await
     }
+
+    pub async fn delete_topic(&self, topic: TopicId) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.delete_topic(&topic).await })
+            .await
+    }
 }

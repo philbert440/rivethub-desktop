@@ -1,12 +1,14 @@
 use gpui::{
-    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, ParentElement, Styled, Window,
+    div, prelude::*, px,
 };
 use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
 use model::wiki::{Page, loose, readable};
 
-use super::{MemoryPage, Opened, Reading};
+use super::{Focus, MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
+use crate::menu::{Menu, MenuEvent, OpenMenu};
 use crate::text::{ago, now_ms};
 use crate::theme::Theme;
 
@@ -74,6 +76,47 @@ impl MemoryPage {
                 .map(reading)
         });
         self.opened = Some(Opened::Topic(topic));
+        cx.notify();
+    }
+
+    fn open_menu(&mut self, topic: TopicId, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let name = self
+            .library
+            .as_ref()
+            .and_then(|library| library.topics.iter().find(|known| known.id == topic))
+            .map(|known| known.name.clone());
+        let hub = self.hub.clone();
+        let menu = cx.new(|_| Menu::new(hub, Focus::Topic(topic), name));
+        let events = cx.subscribe(&menu, |this, menu, event: &MenuEvent, cx| {
+            if this.menu.as_ref().is_none_or(|open| open.menu != menu) {
+                return;
+            }
+            this.menu = None;
+            match event {
+                MenuEvent::ViewInMemory(focus) => this.focus(focus.clone(), cx),
+                MenuEvent::Deleted(topic) => {
+                    this.topic_deleted(topic, cx);
+                    cx.emit(MemoryEvent::TopicDeleted(topic.clone()));
+                }
+                MenuEvent::Closed => {}
+            }
+            cx.notify();
+        });
+        self.menu = Some(OpenMenu {
+            menu,
+            at: event.position,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    /// Lets go of a deleted topic's page and lists the topics again.
+    pub fn topic_deleted(&mut self, topic: &TopicId, cx: &mut Context<Self>) {
+        if self.opened.as_ref() == Some(&Opened::Topic(topic.clone())) {
+            self.opened = None;
+            self.reading = None;
+        }
+        self.load_library(cx);
         cx.notify();
     }
 
@@ -218,12 +261,18 @@ impl MemoryPage {
             .children(topics.into_iter().enumerate().map(|(index, (depth, topic))| {
                 let here = self.opened == Some(Opened::Topic(topic.id.clone()));
                 let open = topic.id.clone();
+                let menu = topic.id.clone();
                 let active = topic.last_active_ms.map(|at| ago(now, at)).unwrap_or_default();
-                Self::row(("memory-topic", index), topic.name.clone(), depth, active, here).on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                Self::row(("memory-topic", index), topic.name.clone(), depth, active, here)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.open_topic(open.clone(), cx);
-                    }),
-                )
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            this.open_menu(menu.clone(), event, cx);
+                        }),
+                    )
             }))
             .child(heading("PAGES WITHOUT A TOPIC".into()))
             .children(pages.into_iter().enumerate().map(|(index, listing)| {

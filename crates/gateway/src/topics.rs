@@ -92,4 +92,18 @@ impl Gateway {
         let _: PlacementReply = Self::read_json(self.http.delete(url).send().await)?.await?;
         Ok(())
     }
+
+    /// Deletes a topic; its sessions go back to Forming. rh refuses category topics and topics
+    /// with child topics, and that refusal comes back as `Conflict` carrying rh's own message.
+    pub async fn delete_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str()])?;
+        let reply = self.http.delete(url).send().await.map_err(GatewayError::Http)?;
+        match Self::check(reply).await {
+            Err(GatewayError::Status { status: 409, detail }) => Err(GatewayError::Conflict(
+                serde_json::from_str::<wire::gateway::GatewayError>(&detail)
+                    .map_or(detail, |body| body.error),
+            )),
+            checked => checked.map(drop),
+        }
+    }
 }

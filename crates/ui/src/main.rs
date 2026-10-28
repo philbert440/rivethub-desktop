@@ -4,6 +4,7 @@ mod input;
 mod launcher;
 mod markdown_view;
 mod memory;
+mod menu;
 mod session_pane;
 mod settings;
 mod shell;
