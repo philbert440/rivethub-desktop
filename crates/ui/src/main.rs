@@ -30,9 +30,26 @@ use session_pane::ToggleTerminal;
 use shell::Shell;
 use workspace::{NewSession, NextNeedingYou, ToggleSidePanel, ZoomOut};
 
+/// The local gateway this app talks to: `RIVETHUB_URL` when it is set, else the default.
+#[derive(Debug)]
+pub struct GatewayUrl {
+    pub url: String,
+    pub from_env: bool,
+}
+
+pub fn gateway_url() -> GatewayUrl {
+    std::env::var("RIVETHUB_URL").map_or_else(
+        |_| GatewayUrl {
+            url: "https://127.0.0.1:5174".into(),
+            from_env: false,
+        },
+        |url| GatewayUrl { url, from_env: true },
+    )
+}
+
 fn endpoint() -> Endpoint {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let base_url = std::env::var("RIVETHUB_URL").unwrap_or_else(|_| "https://127.0.0.1:5174".into());
+    let base_url = gateway_url().url;
     let ca_pem =
         std::env::var_os("RIVETHUB_CA").map_or_else(|| home.join(".rivethub/step-root.crt"), PathBuf::from);
     Endpoint {

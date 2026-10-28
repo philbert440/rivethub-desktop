@@ -195,6 +195,17 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
     out
 }
 
+/// Whether a transcript that had `count` exchanges, the last in state `last`, moved on to where a
+/// reader wants to be in `now`: an exchange added at the end (your send, or a reply that came without
+/// one), or the running one finishing.
+pub fn arrived(count: usize, last: Option<ExchangeState>, now: &[Exchange]) -> bool {
+    now.len() > count
+        || (last == Some(ExchangeState::Working)
+            && now
+                .last()
+                .is_some_and(|exchange| exchange.state != ExchangeState::Working))
+}
+
 fn is_interruption(text: &str) -> bool {
     text.trim_start().starts_with("[Request interrupted by user")
 }
@@ -280,7 +291,7 @@ fn capitalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExchangeState, Step, exchanges, group_summary, thought_summary};
+    use super::{ExchangeState, Step, arrived, exchanges, group_summary, thought_summary};
     use crate::session::{Role, ToolCall, ToolState, Turn};
     use crate::tools::ToolInput;
 
@@ -356,6 +367,23 @@ mod tests {
         let folded = exchanges(&turns, Some(&live));
         assert_eq!(folded[0].state, ExchangeState::Working);
         assert_eq!(folded[0].answer, "Partial");
+    }
+
+    #[test]
+    fn a_send_or_a_finished_turn_is_an_arrival_but_streaming_is_not() {
+        let asked = exchanges(&[turn(Role::User, "go", &[])], None);
+        assert!(arrived(0, None, &asked));
+        let streaming = exchanges(
+            &[turn(Role::User, "go", &[])],
+            Some(&turn(Role::Assistant, "Wor", &[])),
+        );
+        assert!(!arrived(1, Some(ExchangeState::Working), &streaming));
+        let done = exchanges(
+            &[turn(Role::User, "go", &[]), turn(Role::Assistant, "Done.", &[])],
+            None,
+        );
+        assert!(arrived(1, Some(ExchangeState::Working), &done));
+        assert!(!arrived(1, Some(ExchangeState::Completed), &done));
     }
 
     #[test]

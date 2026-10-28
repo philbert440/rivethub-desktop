@@ -8,7 +8,7 @@ use gpui::{
     ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
     Window, div, list, prelude::*, px, relative,
 };
-use model::chat::exchanges;
+use model::chat::{arrived, exchanges};
 use model::prompt::{Attachment, Prompt, image_media_type};
 use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
@@ -607,6 +607,12 @@ impl SessionPane {
             exchanges(view.turns(), view.live())
         };
         let previous = Arc::clone(&self.exchanges);
+        let jump = self.hub.preferences().jump_to_newest
+            && arrived(
+                previous.len(),
+                previous.last().map(|view| view.exchange.state),
+                &folded,
+            );
         let views: Vec<ExchangeView> = folded
             .into_iter()
             .enumerate()
@@ -628,6 +634,9 @@ impl SessionPane {
         } else {
             let stale = first_changed.min(known);
             self.turns.splice(stale..known, count - stale);
+        }
+        if jump {
+            self.turns.scroll_to_end();
         }
         self.exchanges = Arc::new(views);
         self.fetch_previews(cx);
