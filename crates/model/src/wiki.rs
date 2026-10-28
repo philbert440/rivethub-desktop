@@ -32,7 +32,8 @@ pub fn loose<'a>(listings: &'a [Listing], owned: &[Page]) -> Vec<&'a Listing> {
 }
 
 /// Where a subtopic's section starts among a page's blocks. rh writes each subtopic as a `##`
-/// section headed with the subtopic's name; a section folded in from a merged page sits deeper.
+/// section headed with the subtopic's name, after the page's own `##` sections, so the last such
+/// heading wins; a section folded in from a merged page sits deeper.
 pub fn section(blocks: &[Block], name: &str) -> Option<usize> {
     let name = name.trim();
     let headed = |block: &Block| match block {
@@ -45,7 +46,7 @@ pub fn section(blocks: &[Block], name: &str) -> Option<usize> {
     let levels: Vec<Option<u8>> = blocks.iter().map(headed).collect();
     levels
         .iter()
-        .position(|level| *level == Some(2))
+        .rposition(|level| *level == Some(2))
         .or_else(|| levels.iter().position(Option::is_some))
 }
 
@@ -151,10 +152,11 @@ mod tests {
     #[test]
     fn a_subtopic_lands_on_its_own_section_heading() {
         let blocks = parse(&readable(
-            "# Tools\n\nArticle.\n\n### Writer spool\n\nAn aside.\n\n## tmux\n\nScopes.\n\n## Writer Spool\n\nFlushes on exit.\n",
+            "# Tools\n\n## Summary\n\nThe tools.\n\n### Writer spool\n\nAn aside.\n\n## tmux\n\nScopes.\n\n## Summary\n\nA subtopic.\n\n## Writer Spool\n\nFlushes on exit.\n",
         ));
-        assert_eq!(section(&blocks, "writer spool"), Some(5));
-        assert_eq!(section(&blocks, "tmux"), Some(3));
+        assert_eq!(section(&blocks, "writer spool"), Some(8));
+        assert_eq!(section(&blocks, "summary"), Some(6));
+        assert_eq!(section(&blocks, "tmux"), Some(4));
         assert_eq!(section(&blocks, "missing"), None);
     }
 }
