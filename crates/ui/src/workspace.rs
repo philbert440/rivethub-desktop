@@ -10,6 +10,7 @@ use gpui::{
     ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions,
     anchored, deferred, div, prelude::*, px,
 };
+use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
 use model::session::SessionSummary;
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
@@ -116,7 +117,13 @@ impl Workspace {
         let mut activity = feed.activity();
         let repaint = cx.spawn(async move |this, cx| {
             while activity.changed().await.is_ok() {
-                if this.update(cx, Self::take_notices).is_err() {
+                // Live waits and finishes don't reload the listing, so the History chips
+                // catch up here.
+                let synced = this.update(cx, |this, cx| {
+                    this.take_notices(cx);
+                    this.sync_panel(cx);
+                });
+                if synced.is_err() {
                     break;
                 }
             }
@@ -278,6 +285,17 @@ impl Workspace {
     fn sync_panel(&self, cx: &mut Context<Self>) {
         let board = self.board();
         let history: Vec<SessionSummary> = board.history.iter().map(|session| (*session).clone()).collect();
+        let phases: HashMap<SessionId, Phase> = history
+            .iter()
+            .map(|session| {
+                let phase = Phase::of(
+                    self.feed.needs_you(session),
+                    self.feed.is_active(session),
+                    session.status.is_finished(),
+                );
+                (session.id.clone(), phase)
+            })
+            .collect();
         let past: Vec<PastTopic> = board
             .past
             .iter()
@@ -291,7 +309,7 @@ impl Workspace {
         let topics = self.topics.clone();
         let known = self.sessions.clone();
         self.panel.update(cx, |panel, cx| {
-            panel.set_sessions(history, known, cx);
+            panel.set_sessions(history, phases, known, cx);
             panel.set_topics(topics, past, cx);
         });
     }
