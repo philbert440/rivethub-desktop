@@ -148,22 +148,53 @@ impl Hub {
     }
 
     pub async fn upload(&self, summary: &SessionSummary, path: PathBuf) -> Result<Attachment, GatewayError> {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| GatewayError::Refused(format!("{} is not a file", path.display())))?;
+        image_media_type(&name).ok_or_else(|| GatewayError::Refused(format!("{name} isn't an image")))?;
+        let read = name.clone();
+        let bytes = self
+            .on_runtime(async move {
+                tokio::task::spawn_blocking(move || std::fs::read(&path))
+                    .await
+                    .map_err(|join| GatewayError::Refused(format!("reading {read} stopped: {join}")))?
+                    .map_err(|err| GatewayError::Refused(format!("reading {read}: {err}")))
+            })
+            .await?;
+        self.upload_bytes(summary, name, bytes).await
+    }
+
+    /// Uploads a file that has no path, such as an image pasted from the clipboard.
+    pub async fn upload_bytes(
+        &self,
+        summary: &SessionSummary,
+        name: String,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment, GatewayError> {
         let hub = self.clone();
         let session = summary.id.clone();
         let node = summary.node.clone();
         self.on_runtime(async move {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .ok_or_else(|| GatewayError::Refused(format!("{} is not a file", path.display())))?;
             let media_type = image_media_type(&name)
                 .ok_or_else(|| GatewayError::Refused(format!("{name} isn't an image")))?;
-            let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
-                .await
-                .map_err(|join| GatewayError::Refused(format!("reading {name} stopped: {join}")))?
-                .map_err(|err| GatewayError::Refused(format!("reading {name}: {err}")))?;
             let gateway = hub.gateway_for(node.as_deref()).await?;
             gateway.upload(&session, &name, media_type, bytes).await
+        })
+        .await
+    }
+
+    /// The bytes of a file sent earlier in the session, from the node that holds it.
+    pub async fn download(
+        &self,
+        summary: &SessionSummary,
+        upload_id: String,
+    ) -> Result<Vec<u8>, GatewayError> {
+        let hub = self.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            gateway.download(&upload_id).await
         })
         .await
     }

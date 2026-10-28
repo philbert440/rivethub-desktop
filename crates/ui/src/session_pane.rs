@@ -1,22 +1,26 @@
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use app::{Hub, SessionHandle};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, Focusable, IntoElement, ListAlignment, ListState,
-    ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task, Window, div, list,
-    prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Context, Entity, ExternalPaths, Focusable, ImageFormat, IntoElement,
+    ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
+    Window, div, list, prelude::*, px, relative,
 };
 use model::chat::exchanges;
-use model::prompt::{Attachment, Prompt};
+use model::prompt::{Attachment, Prompt, image_media_type};
 use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
 
-use crate::input::{Submitted, TextInput};
+use crate::input::{PastedImage, Submitted, TextInput};
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
 
 gpui::actions!(session, [ToggleTerminal]);
+
+const IMAGES_ONLY: &str = "Only PNG, JPEG, GIF and WebP images can be sent.";
 
 const FIRST_TERMINAL: GridSize = GridSize {
     columns: 120,
@@ -50,7 +54,9 @@ pub struct SessionPane {
     turns: ListState,
     exchanges: Arc<Vec<ExchangeView>>,
     folds: Arc<Folds>,
-    fetched: Arc<std::collections::HashMap<String, model::tools::ToolOutput>>,
+    fetched: Arc<HashMap<String, model::tools::ToolOutput>>,
+    previews: Arc<HashMap<String, Arc<gpui::Image>>>,
+    requested_previews: HashSet<String>,
     hovered_turn: Option<usize>,
     width: Option<Pixels>,
     composer: Entity<TextInput>,
@@ -61,6 +67,7 @@ pub struct SessionPane {
     renaming: Option<Renaming>,
     _revisions: Task<()>,
     _submitted: Subscription,
+    _pasted: Subscription,
     _typed: Subscription,
 }
 
@@ -68,9 +75,12 @@ impl SessionPane {
     pub fn new(hub: Hub, summary: SessionSummary, cx: &mut Context<Self>) -> Self {
         let handle = hub.open_session(&summary);
         let placeholder = format!("Message {}…", summary.id.harness().display_name());
-        let composer = cx.new(|cx| TextInput::new(placeholder, cx));
+        let composer = cx.new(|cx| TextInput::new(placeholder, cx).multiline());
         let submitted = cx.subscribe(&composer, |this, _, Submitted(text), cx| {
             this.submit(text.clone(), cx);
+        });
+        let pasted = cx.subscribe(&composer, |this, _, PastedImage(image), cx| {
+            this.attach_pasted(image, cx);
         });
         let typed = cx.observe(&composer, |_, _, cx| cx.notify());
         let mut revisions = handle.revisions();
@@ -92,7 +102,9 @@ impl SessionPane {
             turns: ListState::new(0, ListAlignment::Bottom, px(600.)),
             exchanges: Arc::new(Vec::new()),
             folds: Arc::new(Folds::default()),
-            fetched: Arc::new(std::collections::HashMap::new()),
+            fetched: Arc::new(HashMap::new()),
+            previews: Arc::new(HashMap::new()),
+            requested_previews: HashSet::new(),
             hovered_turn: None,
             width: None,
             composer,
@@ -103,6 +115,7 @@ impl SessionPane {
             renaming: None,
             _revisions: watcher,
             _submitted: submitted,
+            _pasted: pasted,
             _typed: typed,
         }
     }
@@ -145,8 +158,6 @@ impl SessionPane {
             multiple: true,
             prompt: Some("Attach images".into()),
         });
-        let hub = self.hub.clone();
-        let summary = self.summary.clone();
         self.attach_problem = None;
         cx.spawn(async move |this, cx| {
             let paths = match picked.await {
@@ -161,29 +172,140 @@ impl SessionPane {
                     return;
                 }
             };
-            for path in paths {
-                if this
-                    .update(cx, |this, cx| {
-                        this.uploading += 1;
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    return;
+            this.update(cx, |this, cx| this.attach_paths(paths, cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Clears the last attachment problem, or says why nothing can be attached here.
+    fn accepts_attachments(&mut self, cx: &mut Context<Self>) -> bool {
+        self.attach_problem = (!self.takes_images).then(|| {
+            format!(
+                "{} doesn't take attachments in this session",
+                self.summary.id.harness().display_name()
+            )
+        });
+        cx.notify();
+        self.takes_images
+    }
+
+    /// Files dropped on the chat attach when rh takes them, which today means images only.
+    fn attach_dropped(&mut self, dropped: &ExternalPaths, cx: &mut Context<Self>) {
+        if !self.accepts_attachments(cx) {
+            return;
+        }
+        let (images, refused): (Vec<PathBuf>, Vec<PathBuf>) =
+            dropped.paths().iter().cloned().partition(|path| {
+                path.file_name()
+                    .and_then(|name| image_media_type(&name.to_string_lossy()))
+                    .is_some()
+            });
+        if !refused.is_empty() {
+            let names = refused
+                .iter()
+                .map(|path| path.file_name().unwrap_or(path.as_os_str()).to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.attach_problem = Some(format!("Not attached: {names}. {IMAGES_ONLY}"));
+        }
+        self.attach_paths(images, cx);
+        cx.notify();
+    }
+
+    fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for path in paths {
+            let hub = self.hub.clone();
+            let summary = self.summary.clone();
+            self.track_upload(async move { hub.upload(&summary, path).await }, cx);
+        }
+    }
+
+    fn attach_pasted(&mut self, image: &gpui::Image, cx: &mut Context<Self>) {
+        if !self.accepts_attachments(cx) {
+            return;
+        }
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        let name = format!("pasted-image.{}", image.format.extension());
+        if image_media_type(&name).is_none() {
+            self.attach_problem = Some(IMAGES_ONLY.to_owned());
+            cx.notify();
+            return;
+        }
+        let bytes = image.bytes.clone();
+        self.track_upload(async move { hub.upload_bytes(&summary, name, bytes).await }, cx);
+    }
+
+    /// Counts an upload in flight, so the prompt waits for it, and adds what it uploaded to the next prompt.
+    fn track_upload<E: std::fmt::Display>(
+        &mut self,
+        upload: impl Future<Output = Result<Attachment, E>> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.uploading += 1;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let uploaded = upload.await;
+            this.update(cx, |this, cx| {
+                this.uploading = this.uploading.saturating_sub(1);
+                match uploaded {
+                    Ok(attachment) => this.attachments.push(attachment),
+                    Err(err) => this.attach_problem = Some(err.to_string()),
                 }
-                let uploaded = hub.upload(&summary, path).await;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fetches the images sent earlier in the session that are still held on the node, once each.
+    fn fetch_previews(&mut self, cx: &mut Context<Self>) {
+        let wanted: Vec<(String, ImageFormat)> = self
+            .exchanges
+            .iter()
+            .flat_map(|view| &view.exchange.files)
+            .filter_map(|file| {
+                let upload = file
+                    .viewable_upload()
+                    .filter(|upload| !self.requested_previews.contains(*upload))?;
+                Some((upload.to_owned(), ImageFormat::from_mime_type(&file.media_type)?))
+            })
+            .collect();
+        for (upload, format) in wanted {
+            if !self.requested_previews.insert(upload.clone()) {
+                continue;
+            }
+            let hub = self.hub.clone();
+            let summary = self.summary.clone();
+            cx.spawn(async move |this, cx| {
+                let fetched = hub.download(&summary, upload.clone()).await;
+                let bytes = match fetched {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        tracing::debug!(%err, upload, "a sent image is no longer available");
+                        return;
+                    }
+                };
                 this.update(cx, |this, cx| {
-                    this.uploading = this.uploading.saturating_sub(1);
-                    match uploaded {
-                        Ok(attachment) => this.attachments.push(attachment),
-                        Err(err) => this.attach_problem = Some(err.to_string()),
+                    let image = Arc::new(gpui::Image::from_bytes(format, bytes));
+                    Arc::make_mut(&mut this.previews).insert(upload.clone(), image);
+                    let showing = this.exchanges.iter().enumerate().filter(|(_, view)| {
+                        view.exchange
+                            .files
+                            .iter()
+                            .any(|file| file.viewable_upload() == Some(upload.as_str()))
+                    });
+                    let items = this.turns.item_count();
+                    for (index, _) in showing.filter(|(index, _)| *index < items) {
+                        this.turns.splice(index..index + 1, 1);
                     }
                     cx.notify();
                 })
                 .ok();
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
     }
 
     pub fn session_id(&self) -> &model::SessionId {
@@ -501,6 +623,7 @@ impl SessionPane {
             self.turns.splice(stale..known, count - stale);
         }
         self.exchanges = Arc::new(views);
+        self.fetch_previews(cx);
         cx.notify();
     }
 
@@ -538,6 +661,7 @@ impl SessionPane {
         let exchanges = Arc::clone(&self.exchanges);
         let folds = Arc::clone(&self.folds);
         let fetched = Arc::clone(&self.fetched);
+        let previews = Arc::clone(&self.previews);
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -555,6 +679,7 @@ impl SessionPane {
                             cwd: cwd.as_deref(),
                             home: home.as_deref(),
                             fetched: &fetched,
+                            previews: &previews,
                         };
                         transcript::exchange(exchange, &context, window)
                     },
@@ -587,6 +712,10 @@ impl SessionPane {
             .flex()
             .flex_col()
             .items_center()
+            .border_2()
+            .border_color(gpui::transparent_black())
+            .drag_over::<ExternalPaths>(|style, _, _, _| style.border_color(Theme::accent()))
+            .on_drop(cx.listener(|this, dropped: &ExternalPaths, _, cx| this.attach_dropped(dropped, cx)))
             .child(
                 div()
                     .relative()

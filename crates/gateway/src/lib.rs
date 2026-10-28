@@ -189,6 +189,17 @@ impl Gateway {
         Ok(translate::attachment(created))
     }
 
+    /// The bytes of an upload rh still holds.
+    pub async fn download(&self, upload_id: &str) -> Result<Vec<u8>, GatewayError> {
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .map_err(|err| GatewayError::Refused(format!("gateway url: {err}")))?;
+        url.path_segments_mut()
+            .map_err(|()| GatewayError::Refused("gateway url cannot take a path".into()))?
+            .extend(["api", "uploads", upload_id]);
+        let reply = Self::check(self.http.get(url).send().await.map_err(GatewayError::Http)?).await?;
+        Ok(reply.bytes().await.map_err(GatewayError::Http)?.to_vec())
+    }
+
     pub async fn decide(
         &self,
         session: &SessionId,

@@ -1,4 +1,6 @@
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use std::ops::Range;
+
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Marks {
@@ -13,6 +15,20 @@ pub struct Run {
     pub marks: Marks,
     pub code: bool,
     pub link: Option<String>,
+}
+
+impl Run {
+    /// Where clicking the run goes: only a web or mail address, since a relative or local target
+    /// would resolve against wherever the app happens to run rather than the session's folder.
+    pub fn url(&self) -> Option<&str> {
+        self.link.as_deref().filter(|target| {
+            ["https://", "http://", "mailto:"].iter().any(|scheme| {
+                target
+                    .get(..scheme.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(scheme))
+            })
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +109,24 @@ impl Builder {
         if self.runs().is_none() {
             self.stack.push(Frame::Paragraph(Vec::new()));
         }
+        let link = self.style.link.last().cloned();
+        if code || link.is_some() {
+            self.push_run(text, code, link);
+            return;
+        }
+        let mut from = 0;
+        for url in bare_links(text) {
+            self.push_run(&text[from..url.start], false, None);
+            self.push_run(&text[url.clone()], false, Some(text[url.clone()].to_owned()));
+            from = url.end;
+        }
+        self.push_run(&text[from..], false, None);
+    }
+
+    fn push_run(&mut self, text: &str, code: bool, link: Option<String>) {
+        if text.is_empty() {
+            return;
+        }
         let run = Run {
             text: text.to_owned(),
             marks: Marks {
@@ -101,7 +135,7 @@ impl Builder {
                 strike: self.style.strike > 0,
             },
             code,
-            link: self.style.link.last().cloned(),
+            link,
         };
         if let Some(runs) = self.runs() {
             match runs.last_mut() {
@@ -166,6 +200,49 @@ impl Builder {
     }
 }
 
+/// The web addresses written out in plain text, which a reply means as links even without link syntax.
+/// An address ends at whitespace, and the punctuation that closes the sentence around it isn't part of it.
+fn bare_links(text: &str) -> Vec<Range<usize>> {
+    let mut links = Vec::new();
+    let mut from = 0;
+    while let Some(found) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| text[from..].find(scheme).map(|at| (from + at, scheme.len())))
+        .min()
+    {
+        let (start, scheme) = found;
+        let rest = &text[start..];
+        let mut end = start
+            + rest
+                .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`'))
+                .unwrap_or(rest.len());
+        loop {
+            let url = &text[start..end];
+            let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '"']);
+            let unbalanced =
+                trimmed.ends_with(')') && trimmed.matches(')').count() > trimmed.matches('(').count();
+            let trimmed = if unbalanced {
+                &trimmed[..trimmed.len() - 1]
+            } else {
+                trimmed
+            };
+            if trimmed.len() == url.len() {
+                break;
+            }
+            end = start + trimmed.len();
+        }
+        let joined = text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric);
+        if end > start + scheme && !joined {
+            links.push(start..end);
+        }
+        from = end.max(start + scheme);
+    }
+    links
+}
+
 fn level(heading: HeadingLevel) -> u8 {
     match heading {
         HeadingLevel::H1 => 1,
@@ -183,7 +260,7 @@ pub fn parse(source: &str) -> Vec<Block> {
         stack: vec![Frame::Root(Vec::new())],
         style: Style::default(),
     };
-    for event in Parser::new_ext(source, options) {
+    for event in TextMergeStream::new(Parser::new_ext(source, options)) {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => builder.stack.push(Frame::Paragraph(Vec::new())),
@@ -345,7 +422,7 @@ impl Parsed {
 
 #[cfg(test)]
 mod tests {
-    use super::{Block, parse};
+    use super::{Block, bare_links, parse};
 
     #[test]
     fn headings_paragraphs_and_code_become_blocks() {
@@ -378,6 +455,40 @@ mod tests {
         };
         assert_eq!(head.len(), 2);
         assert_eq!(rows[0][1][0].text, "2");
+    }
+
+    #[test]
+    fn bare_addresses_become_links_without_the_punctuation_around_them() {
+        let text = "See https://example.com/a_b. Or (http://x.org/path) and myhttps://no, then https://";
+        let found: Vec<&str> = bare_links(text).into_iter().map(|range| &text[range]).collect();
+        assert_eq!(found, ["https://example.com/a_b", "http://x.org/path"]);
+        let wiki = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+        let found: Vec<&str> = bare_links(wiki).into_iter().map(|range| &wiki[range]).collect();
+        assert_eq!(found, [wiki]);
+    }
+
+    #[test]
+    fn links_keep_their_target_and_code_stays_plain() {
+        let blocks = parse(
+            "Read [the docs](https://docs.rs) or https://crates.io, not `https://code` or [here](src/main.rs).",
+        );
+        let Block::Paragraph(runs) = &blocks[0] else {
+            unreachable!("one paragraph")
+        };
+        let links: Vec<(&str, Option<&str>)> = runs
+            .iter()
+            .filter(|run| run.link.is_some() || run.code)
+            .map(|run| (run.text.as_str(), run.url()))
+            .collect();
+        assert_eq!(
+            links,
+            [
+                ("the docs", Some("https://docs.rs")),
+                ("https://crates.io", Some("https://crates.io")),
+                ("https://code", None),
+                ("here", None),
+            ]
+        );
     }
 
     #[test]
