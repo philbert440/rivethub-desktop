@@ -109,6 +109,11 @@ impl Workspace {
                     PanelEvent::TopicMenu(topic, at) => {
                         this.open_menu(Focus::Topic(topic.clone()), *at, window, cx);
                     }
+                    PanelEvent::SessionMenu(session, at) => {
+                        if let Some(focus) = Self::session_focus(session) {
+                            this.open_menu(focus, *at, window, cx);
+                        }
+                    }
                 },
             );
         let feed = hub.watch_workspace();
@@ -409,12 +414,12 @@ impl Workspace {
     }
 
     fn open_menu(&mut self, focus: Focus, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let topic = match &focus {
-            Focus::Topic(topic) => self.topic(topic).map(|known| known.name.clone()),
+        let delete = match &focus {
+            Focus::Topic(topic) => self.topic(topic).map(|known| (topic.clone(), known.name.clone())),
             Focus::Search(_) => None,
         };
         let hub = self.hub.clone();
-        let menu = cx.new(|_| Menu::new(hub, focus, topic));
+        let menu = cx.new(|_| Menu::new(hub, Some(focus), delete));
         let events = cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, window, cx| {
             if this.menu.as_ref().is_none_or(|open| &open.menu != menu) {
                 return;
