@@ -105,7 +105,7 @@ impl AgentEditor {
         };
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let offers = hub.harnesses_on(node).await;
+            let offers = hub.harnesses(Some(node)).await;
             this.update(cx, |this, cx| {
                 match offers {
                     Ok(offers) => {

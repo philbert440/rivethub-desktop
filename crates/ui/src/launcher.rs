@@ -13,11 +13,13 @@ use crate::topic_picker::{PickerEvent, TopicPicker};
 
 const DEFAULT_HARNESS: &str = "claude-code";
 
-/// What a new session runs: one of your agents, or a harness on this node with a model.
+/// What a new session runs: one of your agents on its own node, or a harness on a chosen node
+/// (`None` is this client's node) with a model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
     Agent(Agent),
     Harness {
+        node: Option<String>,
         harness: HarnessId,
         model: Option<String>,
     },
@@ -36,9 +38,21 @@ pub enum LauncherEvent {
     Dismissed,
 }
 
+/// The harness list of the node the launcher is showing.
+enum Offers {
+    Reading,
+    Read(Vec<HarnessOffer>),
+    Failed(String),
+}
+
 pub struct Launcher {
+    hub: Hub,
+    loaded: bool,
     agents: Vec<Agent>,
-    offers: Vec<HarnessOffer>,
+    /// This node first, then every other online mesh node.
+    nodes: Vec<String>,
+    node: Option<String>,
+    offers: Offers,
     choice: Option<Choice>,
     preset: Option<(TopicId, String)>,
     picker: Entity<TopicPicker>,
@@ -67,16 +81,26 @@ impl Launcher {
             };
             this.start(target, cx);
         });
-        let hub = hub.clone();
+        let loading = hub.clone();
         cx.spawn(async move |this, cx| {
-            let agents = hub.agents().await.map(|roster| roster.agents).unwrap_or_default();
-            let offers = hub.harnesses().await.unwrap_or_default();
-            this.update(cx, |this, cx| this.loaded(agents, offers, cx)).ok();
+            let agents = loading
+                .agents()
+                .await
+                .map(|roster| roster.agents)
+                .unwrap_or_default();
+            let nodes = loading.agent_hosts().await.unwrap_or_default();
+            let offers = loading.harnesses(None).await;
+            this.update(cx, |this, cx| this.loaded(agents, nodes, offers, cx))
+                .ok();
         })
         .detach();
         Self {
+            hub: hub.clone(),
+            loaded: false,
             agents: Vec::new(),
-            offers: Vec::new(),
+            nodes: Vec::new(),
+            node: None,
+            offers: Offers::Reading,
             choice: None,
             preset,
             picker,
@@ -84,23 +108,79 @@ impl Launcher {
         }
     }
 
-    fn loaded(&mut self, agents: Vec<Agent>, offers: Vec<HarnessOffer>, cx: &mut Context<Self>) {
+    fn loaded(
+        &mut self,
+        agents: Vec<Agent>,
+        nodes: Vec<String>,
+        offers: Result<Vec<HarnessOffer>, gateway::GatewayError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.loaded = true;
         self.agents = agents.into_iter().filter(Agent::launchable).collect();
-        self.offers = offers.into_iter().filter(|offer| offer.chat).collect();
+        self.nodes = nodes;
+        self.read(offers);
         if self.choice.is_none() {
             self.choice = self
-                .offers
-                .iter()
-                .find(|offer| offer.id.as_str() == DEFAULT_HARNESS)
-                .or_else(|| self.offers.first())
-                .map(Self::harness_choice)
+                .default_harness()
                 .or_else(|| self.agents.first().cloned().map(Choice::Agent));
         }
         cx.notify();
     }
 
-    fn harness_choice(offer: &HarnessOffer) -> Choice {
+    fn read(&mut self, offers: Result<Vec<HarnessOffer>, gateway::GatewayError>) {
+        self.offers = match offers {
+            Ok(offers) => Offers::Read(offers.into_iter().filter(|offer| offer.chat).collect()),
+            Err(err) => Offers::Failed(err.to_string()),
+        };
+    }
+
+    fn offers(&self) -> &[HarnessOffer] {
+        match &self.offers {
+            Offers::Read(offers) => offers,
+            Offers::Reading | Offers::Failed(_) => &[],
+        }
+    }
+
+    fn default_harness(&self) -> Option<Choice> {
+        let offers = self.offers();
+        offers
+            .iter()
+            .find(|offer| offer.id.as_str() == DEFAULT_HARNESS)
+            .or_else(|| offers.first())
+            .map(|offer| self.harness_choice(offer))
+    }
+
+    /// Shows `node`'s harnesses, reading them again if that failed; picking a node means starting a
+    /// harness there, so its default is chosen.
+    fn show_node(&mut self, node: Option<String>, cx: &mut Context<Self>) {
+        if self.node == node && !matches!(self.offers, Offers::Failed(_)) {
+            return;
+        }
+        self.node.clone_from(&node);
+        self.offers = Offers::Reading;
+        self.choice = None;
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let offers = hub.harnesses(node.clone()).await;
+            this.update(cx, |this, cx| {
+                if this.node != node {
+                    return;
+                }
+                this.read(offers);
+                if this.choice.is_none() {
+                    this.choice = this.default_harness();
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn harness_choice(&self, offer: &HarnessOffer) -> Choice {
         Choice::Harness {
+            node: self.node.clone(),
             harness: offer.id.clone(),
             model: offer
                 .models
@@ -149,6 +229,7 @@ impl Launcher {
     }
 
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let nodes = (self.nodes.len() > 1).then(|| self.node_chips(cx));
         let agents = self.agents.iter().enumerate().map(|(index, agent)| {
             let pick = Choice::Agent(agent.clone());
             let selected = self.choice.as_ref() == Some(&pick);
@@ -172,43 +253,77 @@ impl Launcher {
                 )
                 .into_any_element()
         });
-        let harnesses = self.offers.iter().enumerate().map(|(index, offer)| {
+        let harnesses = self.offers().iter().enumerate().map(|(index, offer)| {
             let selected =
                 matches!(&self.choice, Some(Choice::Harness { harness, .. }) if *harness == offer.id);
-            let pick = Self::harness_choice(offer);
+            let pick = self.harness_choice(offer);
             Self::chip(("launch-harness", index), selected)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.choice = Some(pick.clone());
                     cx.notify();
                 }))
-                .child(offer.id.as_str().to_owned())
+                .child(offer.id.display_name().to_owned())
                 .into_any_element()
         });
+        let here = self.node.as_deref().unwrap_or("this node");
+        let status = match &self.offers {
+            Offers::Reading => Some(format!("Reading {here}'s harnesses…")),
+            Offers::Failed(err) => Some(format!("Couldn't read {here}'s harnesses: {err}")),
+            Offers::Read(offers) if offers.is_empty() => Some(format!("No chat harnesses on {here}")),
+            Offers::Read(_) => None,
+        };
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(Self::label("Agents"))
             .child(div().flex().flex_wrap().gap(px(6.)).children(agents))
-            .child(Self::label("Or a harness on this node"))
+            .map(|list| match nodes {
+                Some(nodes) => list.child(Self::label("Or a harness on")).child(nodes),
+                None => list.child(Self::label("Or a harness on this node")),
+            })
+            .children(status.map(|status| div().px_1().text_xs().text_color(Theme::ink_dim()).child(status)))
             .child(div().flex().flex_wrap().gap(px(6.)).children(harnesses))
     }
 
+    fn node_chips(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let chips = self.nodes.iter().enumerate().map(|(index, name)| {
+            let node = (index > 0).then(|| name.clone());
+            let selected = self.node == node;
+            Self::chip(("launch-node", index), selected)
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.show_node(node.clone(), cx);
+                }))
+                .child(name.clone())
+                .when(index == 0, |chip| {
+                    chip.child(div().text_xs().text_color(Theme::ink_dim()).child("this node"))
+                })
+        });
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(px(6.))
+            .children(chips)
+            .into_any_element()
+    }
+
     fn models(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let Some(Choice::Harness { harness, model }) = &self.choice else {
+        let Some(Choice::Harness { node, harness, model }) = &self.choice else {
             return None;
         };
-        let offer = self.offers.iter().find(|offer| offer.id == *harness)?;
+        let offer = self.offers().iter().find(|offer| offer.id == *harness)?;
         if offer.models.is_empty() {
             return None;
         }
         let chips = offer.models.iter().enumerate().map(|(index, choice)| {
             let selected = model.as_deref() == Some(choice.id.as_str());
+            let node = node.clone();
             let harness = harness.clone();
             let id = choice.id.clone();
             Self::chip(("launch-model", index), selected)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.choice = Some(Choice::Harness {
+                        node: node.clone(),
                         harness: harness.clone(),
                         model: Some(id.clone()),
                     });
@@ -284,15 +399,14 @@ impl Focusable for Launcher {
 
 impl Render for Launcher {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let loading = self.agents.is_empty() && self.offers.is_empty();
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .when(loading, |list| {
+            .when(!self.loaded, |list| {
                 list.child(Self::label("Loading agents and harnesses…"))
             })
-            .when(!loading, |list| list.child(self.choices(cx)))
+            .when(self.loaded, |list| list.child(self.choices(cx)))
             .children(self.models(cx))
             .child(self.topic(cx))
     }

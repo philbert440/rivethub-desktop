@@ -1,5 +1,5 @@
 use model::chat::Category;
-use model::tools::{ToolInput, ToolOutput};
+use model::tools::{Question, QuestionOption, ToolInput, ToolOutput};
 use serde_json::Value;
 use wire::JsonObject;
 
@@ -32,6 +32,54 @@ fn edits(input: &JsonObject) -> Option<(String, String)> {
     Some((side("old_string"), side("new_string")))
 }
 
+/// Claude's `AskUserQuestion` nests up to four questions; Grok's `ask_user_question` and `RivetOS`'s
+/// `ask_user` ask one, with options or choices that are labels or `{label}` objects.
+fn questions(input: &JsonObject) -> Vec<Question> {
+    let option = |value: &Value| {
+        let label = match value {
+            Value::String(label) => label.trim(),
+            other => other.get("label").and_then(Value::as_str)?.trim(),
+        };
+        (!label.is_empty()).then(|| QuestionOption {
+            label: label.to_owned(),
+            description: value
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned),
+        })
+    };
+    let question = |value: &Value| {
+        let text = |key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
+        let options: Vec<QuestionOption> = ["options", "choices"]
+            .iter()
+            .filter_map(|key| value.get(key).and_then(Value::as_array))
+            .flatten()
+            .filter_map(option)
+            .collect();
+        (!options.is_empty()).then(|| Question {
+            question: text("question"),
+            header: text("header"),
+            multi_select: value.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
+            options,
+        })
+    };
+    match input.get("questions").and_then(Value::as_array) {
+        Some(nested) => nested.iter().filter_map(question).collect(),
+        None => question(&Value::Object(input.as_map().clone()))
+            .into_iter()
+            .collect(),
+    }
+}
+
 fn fields(input: &JsonObject) -> ToolInput {
     let shown: Vec<(String, String)> = input
         .as_map()
@@ -57,6 +105,12 @@ pub fn parse(name: &str, input: Option<&JsonObject>) -> ToolInput {
     let Some(input) = input else {
         return ToolInput::Unknown;
     };
+    if matches!(name, "AskUserQuestion" | "ask_user_question" | "ask_user") {
+        let asked = questions(input);
+        if !asked.is_empty() {
+            return ToolInput::Ask(asked);
+        }
+    }
     let path = || text(input, &["file_path", "path", "notebook_path", "filename"]);
     let parsed = match Category::of(name) {
         Category::Command => text(input, &["command", "cmd"]).map(|command| ToolInput::Command {
@@ -140,6 +194,18 @@ mod tests {
                 before: "x".into(),
                 after: "y".into()
             }
+        );
+        let ask = object(
+            r#"{"questions":[{"question":"Which store?","header":"Store","multiSelect":false,"options":[{"label":"Postgres","description":"durable"},{"label":"SQLite"}]}]}"#,
+        );
+        let ToolInput::Ask(asked) = parse("AskUserQuestion", Some(&ask)) else {
+            unreachable!("AskUserQuestion parses as a question");
+        };
+        assert_eq!(asked[0].header.as_deref(), Some("Store"));
+        assert_eq!(asked[0].options[0].description.as_deref(), Some("durable"));
+        let flat = object(r#"{"question":"Ship it?","choices":["Yes","No"]}"#);
+        assert!(
+            matches!(parse("ask_user", Some(&flat)), ToolInput::Ask(asked) if asked[0].options.len() == 2)
         );
         let odd = object(r#"{"server":"rivet","limit":3}"#);
         assert!(matches!(parse("mcp__x__y", Some(&odd)), ToolInput::Fields(fields) if fields.len() == 2));
