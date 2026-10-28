@@ -1,5 +1,6 @@
 mod feed;
 mod session;
+mod status;
 mod terminal;
 mod topics;
 

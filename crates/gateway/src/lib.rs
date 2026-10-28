@@ -11,6 +11,7 @@ pub use chat::SessionStream;
 pub use error::GatewayError;
 pub use events::WorkspaceEvent;
 pub use terminal::{TermInput, TermOutput, TerminalStream};
+pub use tls::certificates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -92,6 +93,7 @@ impl Gateway {
                 name: node.name,
                 url: node.url,
                 online: node.online,
+                sessions: node.sessions,
             })
             .collect())
     }
@@ -100,6 +102,15 @@ impl Gateway {
         let list: wire::gateway::agents::AgentListResponse =
             self.get_json(&format!("{}/api/agents", self.base_url)).await?;
         Ok(translate::roster(list))
+    }
+
+    pub async fn memory_health(&self) -> Result<model::health::MemoryHealth, GatewayError> {
+        let (stats, health) = futures::future::try_join(
+            self.get_json(&format!("{}/api/memory/stats", self.base_url)),
+            self.get_json(&format!("{}/api/memory/health", self.base_url)),
+        )
+        .await?;
+        Ok(translate::memory_health(&stats, &health))
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<model::search::Hit>, GatewayError> {

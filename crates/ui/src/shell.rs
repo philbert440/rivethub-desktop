@@ -24,6 +24,7 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let settings = cx.new(|cx| SettingsPage::new(hub.clone(), cx));
         let workspace = cx.new(|cx| Workspace::new(hub, window, cx));
         window.focus(&workspace.focus_handle(cx), cx);
         Self {
@@ -31,7 +32,7 @@ impl Shell {
             sidebar_open: true,
             workspace,
             memory: cx.new(|_| MemoryPage::default()),
-            settings: cx.new(|_| SettingsPage),
+            settings,
         }
     }
 

@@ -95,6 +95,24 @@ pub fn offer(raw: wire::harness::HarnessOffering) -> model::harness::HarnessOffe
     }
 }
 
+pub fn memory_health(
+    stats: &wire::gateway::memory::MemoryStatsResponse,
+    health: &wire::gateway::memory::MemoryHealthResponse,
+) -> model::health::MemoryHealth {
+    use wire::gateway::memory::{EmbedStatus, MemoryHealthStatus};
+    model::health::MemoryHealth {
+        status: match health.status {
+            MemoryHealthStatus::Ok => model::health::Status::Ok,
+            MemoryHealthStatus::Degraded => model::health::Status::Degraded,
+            MemoryHealthStatus::Error => model::health::Status::Error,
+        },
+        observed_at_ms: health.observed_at.map(|at| at.timestamp_millis()),
+        semantic: health.embeddings.status == EmbedStatus::Ok,
+        conversations: stats.conversations,
+        messages: stats.messages,
+    }
+}
+
 pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     SessionSummary {
         id: session(&raw.session_id),

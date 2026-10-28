@@ -8,6 +8,8 @@ pub enum GatewayError {
     EmptyCa(String),
     #[error("the device key at {0} holds no private key")]
     Key(String),
+    #[error("the certificate at {0} cannot be read")]
+    Certificate(String),
     #[error("no reachable gateway for node {0}")]
     UnknownNode(String),
     #[error("tls: {0}")]
