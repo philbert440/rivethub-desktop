@@ -51,6 +51,15 @@ impl SessionHandle {
         let _ = self.commands.try_send(Command::Stop);
     }
 
+    /// Answers an open ask-user question. A harness whose ask tool blocks keeps its turn running
+    /// until it is stopped, so the answer goes out as the next turn after that.
+    pub fn answer(&self, prompt: Prompt) {
+        if self.view.read().busy() {
+            self.stop();
+        }
+        self.send(prompt);
+    }
+
     pub fn queued(&self) -> Vec<Prompt> {
         self.queue.read().iter().cloned().collect()
     }

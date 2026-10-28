@@ -177,13 +177,18 @@ impl SessionPane {
         }
         self.attach_problem = None;
         self.picking = None;
-        self.handle.send(Prompt {
+        let prompt = Prompt {
             text,
             attachments: std::mem::take(&mut self.attachments),
             switch: self
                 .picked
                 .against(self.summary.model.as_deref(), self.summary.effort.as_deref()),
-        });
+        };
+        if self.questions.read(cx).waiting() {
+            self.handle.answer(prompt);
+        } else {
+            self.handle.send(prompt);
+        }
         cx.notify();
     }
 
