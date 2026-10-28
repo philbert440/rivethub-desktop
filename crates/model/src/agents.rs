@@ -17,12 +17,9 @@ pub struct Roster {
 }
 
 impl Agent {
-    pub fn launchable_on(&self, node: &str) -> bool {
+    /// An agent with a harness starts on its own node, whichever node this client talks to.
+    pub fn launchable(&self) -> bool {
         self.harness.is_some()
-            && self
-                .node
-                .as_deref()
-                .is_none_or(|home| home.eq_ignore_ascii_case(node))
     }
 }
 
@@ -50,10 +47,10 @@ mod tests {
     }
 
     #[test]
-    fn only_agents_with_a_harness_on_this_node_launch_here() {
-        assert!(agent(Some("cursor"), Some("Phildesk")).launchable_on("phildesk"));
-        assert!(!agent(Some("claude-code"), Some("ct115")).launchable_on("phildesk"));
-        assert!(!agent(None, Some("phildesk")).launchable_on("phildesk"));
+    fn agents_with_a_harness_launch_from_any_node() {
+        assert!(agent(Some("cursor"), Some("Phildesk")).launchable());
+        assert!(agent(Some("claude-code"), Some("ct115")).launchable());
+        assert!(!agent(None, Some("phildesk")).launchable());
         assert_eq!(parse_color("#b86e19"), Some(0x00b8_6e19));
         assert_eq!(parse_color("teal"), None);
     }

@@ -209,7 +209,6 @@ impl SidePanel {
     }
 
     fn agents(&self, cx: &mut Context<Self>) -> AnyElement {
-        let node = self.roster.node.clone();
         div()
             .px_2()
             .pb_3()
@@ -217,7 +216,7 @@ impl SidePanel {
             .flex_wrap()
             .gap(px(6.))
             .children(self.roster.agents.iter().enumerate().map(|(index, agent)| {
-                let launchable = agent.launchable_on(&node);
+                let launchable = agent.launchable();
                 let dot = agent.color.map_or(Theme::ink_dim(), rgb);
                 let chip = div()
                     .id(("agent", index))
