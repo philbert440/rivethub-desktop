@@ -11,6 +11,8 @@ pub struct Attachment {
 pub struct Prompt {
     pub text: String,
     pub attachments: Vec<Attachment>,
+    /// The model or effort the session switches to before this turn runs.
+    pub switch: Switch,
 }
 
 impl Prompt {
@@ -18,6 +20,30 @@ impl Prompt {
         Self {
             text: text.into(),
             attachments: Vec::new(),
+            switch: Switch::default(),
+        }
+    }
+}
+
+/// A model and effort picked for the turns a person sends next.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Switch {
+    pub model: Option<String>,
+    /// One of [`crate::agents::EFFORTS`].
+    pub effort: Option<String>,
+}
+
+impl Switch {
+    /// What a turn has to ask for: only the picks that differ from what the session runs, so an
+    /// unchanged pick never makes rh switch again.
+    #[must_use]
+    pub fn against(&self, model: Option<&str>, effort: Option<&str>) -> Self {
+        Self {
+            model: self.model.clone().filter(|picked| Some(picked.as_str()) != model),
+            effort: self
+                .effort
+                .clone()
+                .filter(|picked| Some(picked.as_str()) != effort),
         }
     }
 }
@@ -57,5 +83,21 @@ pub fn image_media_type(file_name: &str) -> Option<&'static str> {
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Switch;
+
+    #[test]
+    fn a_turn_asks_only_for_what_the_session_does_not_run_yet() {
+        let picked = Switch {
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+        };
+        let asked = picked.against(Some("opus"), Some("low"));
+        assert_eq!(asked.model, None);
+        assert_eq!(asked.effort.as_deref(), Some("high"));
     }
 }

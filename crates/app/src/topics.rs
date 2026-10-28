@@ -1,12 +1,69 @@
 use gateway::GatewayError;
 use std::collections::HashMap;
 
+use model::decisions::{Decision, Group, on_page};
 use model::topics::{Placements, Suggestion, Topic};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
 
 impl Hub {
+    /// The decisions a root topic's page holds: the root's own, then each sub-topic's.
+    pub async fn page_decisions(
+        &self,
+        topics: Vec<Topic>,
+        root: TopicId,
+    ) -> Result<Vec<Group>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            let page = on_page(&topics, &root);
+            let listed =
+                futures::future::try_join_all(page.iter().map(|topic| gateway.decisions(&topic.id))).await?;
+            Ok(page
+                .into_iter()
+                .zip(listed)
+                .map(|(topic, decisions)| Group {
+                    topic: topic.id.clone(),
+                    name: topic.name.clone(),
+                    decisions,
+                })
+                .collect())
+        })
+        .await
+    }
+
+    pub async fn add_decision(&self, topic: TopicId, text: String) -> Result<Decision, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.add_decision(&topic, &text).await })
+            .await
+    }
+
+    pub async fn edit_decision(
+        &self,
+        topic: TopicId,
+        decision: String,
+        text: String,
+    ) -> Result<Decision, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.edit_decision(&topic, &decision, &text).await })
+            .await
+    }
+
+    pub async fn supersede_decision(
+        &self,
+        topic: TopicId,
+        decision: String,
+        text: Option<String>,
+    ) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            gateway
+                .supersede_decision(&topic, &decision, text.as_deref())
+                .await
+        })
+        .await
+    }
+
     pub async fn topics(&self) -> Result<(Vec<Topic>, Placements), GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {

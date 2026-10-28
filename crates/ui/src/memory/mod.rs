@@ -1,4 +1,5 @@
 mod ask;
+mod decisions;
 mod tidy;
 mod topics;
 
@@ -7,6 +8,7 @@ use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     ScrollHandle, Styled, Subscription, Window, div, prelude::*, px,
 };
+use model::decisions::Group;
 use model::markdown::Block;
 use model::memory::{Found, Period};
 use model::wiki::{Listing, Page};
@@ -84,6 +86,8 @@ pub struct MemoryPage {
     loose: Vec<Listing>,
     opened: Option<Opened>,
     reading: Option<Reading>,
+    decisions: Option<Vec<Group>>,
+    deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
     menu: Option<OpenMenu>,
@@ -126,6 +130,8 @@ impl MemoryPage {
             loose: Vec::new(),
             opened: None,
             reading: None,
+            decisions: None,
+            deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
             menu: None,

@@ -9,8 +9,9 @@ use gpui::{
     Window, div, list, prelude::*, px, relative,
 };
 use model::chat::{ExchangeState, arrived, exchanges};
-use model::prompt::{Attachment, Prompt, image_media_type};
-use model::session::{Decision, SessionSummary, SessionView};
+use model::harness::ModelChoice;
+use model::prompt::{Attachment, Prompt, Switch, image_media_type};
+use model::session::{Decision, SessionSummary, SessionView, Switches};
 use term::GridSize;
 
 use crate::input::{PastedImage, Submitted, TextInput};
@@ -18,6 +19,10 @@ use crate::question_card::QuestionCard;
 use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
+
+mod switch;
+
+use switch::Picker;
 
 gpui::actions!(session, [ToggleTerminal]);
 
@@ -65,6 +70,10 @@ pub struct SessionPane {
     width: Option<Pixels>,
     composer: Entity<TextInput>,
     takes_images: bool,
+    switches: Switches,
+    models: Vec<ModelChoice>,
+    picked: Switch,
+    picking: Option<Picker>,
     attachments: Vec<Attachment>,
     uploading: usize,
     attach_problem: Option<String>,
@@ -118,6 +127,10 @@ impl SessionPane {
             width: None,
             composer,
             takes_images: false,
+            switches: Switches::default(),
+            models: Vec::new(),
+            picked: Switch::default(),
+            picking: None,
             attachments: Vec::new(),
             uploading: 0,
             attach_problem: None,
@@ -131,15 +144,23 @@ impl SessionPane {
         }
     }
 
+    /// What the session's harness takes with a prompt: images, and a switch of model or effort
+    /// when its node says the running session can change them.
     fn read_offer(hub: &Hub, summary: &SessionSummary, cx: &mut Context<Self>) {
         let hub = hub.clone();
         let summary = summary.clone();
         cx.spawn(async move |this, cx| {
-            let Ok(Some(offer)) = hub.offer(&summary).await else {
-                return;
-            };
+            let offer = hub.offer(&summary).await;
+            let described = hub.describe(&summary).await;
             this.update(cx, |this, cx| {
-                this.takes_images = offer.takes_images;
+                if let Ok(Some(offer)) = offer {
+                    this.takes_images = offer.takes_images;
+                    this.models = offer.models;
+                }
+                if let Ok(described) = described {
+                    this.switches = described.switches;
+                    this.take_listing(&described.summary, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -155,9 +176,13 @@ impl SessionPane {
             return;
         }
         self.attach_problem = None;
+        self.picking = None;
         self.handle.send(Prompt {
             text,
             attachments: std::mem::take(&mut self.attachments),
+            switch: self
+                .picked
+                .against(self.summary.model.as_deref(), self.summary.effort.as_deref()),
         });
         cx.notify();
     }
@@ -323,10 +348,19 @@ impl SessionPane {
         &self.summary.id
     }
 
-    /// The workspace's listing has a newer copy of this session, such as the title the harness gave it.
+    /// The workspace's listing has a newer copy of this session, such as the title the harness gave
+    /// it or the model and effort a turn switched it to.
     pub fn take_listing(&mut self, latest: &SessionSummary, cx: &mut Context<Self>) {
         if self.renaming.is_none() && latest.title != self.summary.title {
             self.summary.title.clone_from(&latest.title);
+            cx.notify();
+        }
+        if latest.model.is_some() && latest.model != self.summary.model {
+            self.summary.model.clone_from(&latest.model);
+            cx.notify();
+        }
+        if latest.effort.is_some() && latest.effort != self.summary.effort {
+            self.summary.effort.clone_from(&latest.effort);
             cx.notify();
         }
     }
@@ -680,7 +714,7 @@ impl SessionPane {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(wait))
                     .await;
-                let Ok(latest) = hub.summary(&summary).await else {
+                let Ok(latest) = hub.describe(&summary).await.map(|described| described.summary) else {
                     continue;
                 };
                 if latest.title.is_some() {
@@ -1166,6 +1200,7 @@ impl SessionPane {
             .flex()
             .flex_col()
             .children(self.attachment_row(cx))
+            .children(self.picker_row(cx))
             .child(
                 div()
                     .min_h(px(44.))
@@ -1182,6 +1217,7 @@ impl SessionPane {
                     .flex()
                     .items_center()
                     .when(self.takes_images, |row| row.child(Self::attach_button(cx)))
+                    .children(self.switch_chips(cx))
                     .child(div().flex_1())
                     .child(self.send_button(view.busy(), cx)),
             )

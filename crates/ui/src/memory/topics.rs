@@ -4,7 +4,7 @@ use gpui::{
 };
 use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
-use model::wiki::{Page, loose, readable, section};
+use model::wiki::{Page, loose, readable, section, without_decisions};
 
 use super::{Focus, MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
@@ -17,6 +17,12 @@ const PAGE_COLUMN: f32 = 820.;
 
 fn reading(page: Page) -> Reading {
     let blocks = model::markdown::parse(&readable(&page.markdown));
+    Reading { page, blocks }
+}
+
+/// A topic's page, whose Decisions section the page view shows itself, editable.
+fn topic_reading(page: Page) -> Reading {
+    let blocks = model::markdown::parse(&readable(&without_decisions(&page.markdown)));
     Reading { page, blocks }
 }
 
@@ -70,25 +76,44 @@ impl MemoryPage {
     /// scrolled to the subtopic's section.
     pub(super) fn open_topic(&mut self, topic: TopicId, cx: &mut Context<Self>) {
         let mut at = None;
-        self.reading = self.library.as_ref().and_then(|library| {
+        let root = self.library.as_ref().map(|library| {
             let placements = Placements::new();
-            let atlas = Atlas::new(&library.topics, &[], &placements);
-            let root = atlas.root(&topic);
-            let read = library
-                .pages
-                .iter()
-                .find(|page| page.topic.as_ref() == Some(root))
-                .cloned()
-                .map(reading)?;
-            if root != &topic {
-                at = library
-                    .topics
-                    .iter()
-                    .find(|known| known.id == topic)
-                    .and_then(|sub| section(&read.blocks, &sub.name));
-            }
-            Some(read)
+            Atlas::new(&library.topics, &[], &placements).root(&topic).clone()
         });
+        let same_page = root.is_some()
+            && self
+                .decisions
+                .as_ref()
+                .and_then(|groups| groups.first())
+                .map(|group| &group.topic)
+                == root.as_ref();
+        if !same_page {
+            self.decisions = None;
+            self.deciding = None;
+        }
+        if let Some(root) = root.clone() {
+            self.load_decisions(root, cx);
+        }
+        self.reading = self
+            .library
+            .as_ref()
+            .zip(root.as_ref())
+            .and_then(|(library, root)| {
+                let read = library
+                    .pages
+                    .iter()
+                    .find(|page| page.topic.as_ref() == Some(root))
+                    .cloned()
+                    .map(topic_reading)?;
+                if *root != topic {
+                    at = library
+                        .topics
+                        .iter()
+                        .find(|known| known.id == topic)
+                        .and_then(|sub| section(&read.blocks, &sub.name));
+                }
+                Some(read)
+            });
         match at {
             Some(block) => self.page_scroll.scroll_to_top_of_item(block + 1),
             None => self.page_scroll.set_offset(Point::default()),
@@ -133,6 +158,8 @@ impl MemoryPage {
         if self.opened.as_ref() == Some(&Opened::Topic(topic.clone())) {
             self.opened = None;
             self.reading = None;
+            self.decisions = None;
+            self.deciding = None;
         }
         self.load_library(cx);
         cx.notify();
@@ -141,6 +168,8 @@ impl MemoryPage {
     fn open_page(&mut self, slug: String, cx: &mut Context<Self>) {
         self.opened = Some(Opened::Page(slug.clone()));
         self.reading = None;
+        self.decisions = None;
+        self.deciding = None;
         self.page_scroll.set_offset(Point::default());
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
@@ -175,7 +204,7 @@ impl MemoryPage {
             .flex()
             .child(self.index(cx))
             .child(div().w(px(1.)).h_full().bg(Theme::line()))
-            .child(self.page(window))
+            .child(self.page(window, cx))
             .into_any_element()
     }
 
@@ -313,7 +342,7 @@ impl MemoryPage {
 
     /// The open page. The head and each markdown block are the scroll container's own children,
     /// so a subtopic's section heading is child `block + 1` for the page's scroll handle.
-    fn page(&self, window: &Window) -> AnyElement {
+    fn page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let head = div().flex().flex_col().gap_3().children(
             self.problem
                 .clone()
@@ -357,6 +386,7 @@ impl MemoryPage {
                                 .child(format!("updated {} ago", ago(now_ms(), read.page.updated_ms))),
                         ),
                 )
+                .children(self.decisions_panel(cx))
                 .when(read.blocks.is_empty(), |head| {
                     head.child(
                         div()
@@ -366,11 +396,13 @@ impl MemoryPage {
                     )
                 })
             }
-            (Some(Opened::Topic(_)), None) if self.library.is_some() => head.child(
-                div()
-                    .text_color(Theme::ink_dim())
-                    .child("Memory hasn't started this topic's page yet."),
-            ),
+            (Some(Opened::Topic(_)), None) if self.library.is_some() => head
+                .child(
+                    div()
+                        .text_color(Theme::ink_dim())
+                        .child("Memory hasn't started this topic's page yet."),
+                )
+                .children(self.decisions_panel(cx)),
             (Some(_), None) => head.child(div().text_color(Theme::ink_dim()).child("Loading…")),
             (None, None) => head.child(
                 div()

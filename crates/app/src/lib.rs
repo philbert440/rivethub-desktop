@@ -23,7 +23,7 @@ use model::harness::HarnessOffer;
 use model::prefs::Preferences;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
-use model::session::SessionSummary;
+use model::session::{Described, SessionSummary};
 use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 
@@ -140,14 +140,15 @@ impl Hub {
         .await
     }
 
-    /// The session as its node describes it now, such as with the title its harness gave it.
-    pub async fn summary(&self, summary: &SessionSummary) -> Result<SessionSummary, GatewayError> {
+    /// The session as its node describes it now, such as with the title its harness gave it and
+    /// whether a turn can switch its model or effort.
+    pub async fn describe(&self, summary: &SessionSummary) -> Result<Described, GatewayError> {
         let hub = self.clone();
         let session = summary.id.clone();
         let node = summary.node.clone();
         self.on_runtime(async move {
-            let mut latest = hub.gateway_for(node.as_deref()).await?.summary(&session).await?;
-            latest.node = node;
+            let mut latest = hub.gateway_for(node.as_deref()).await?.describe(&session).await?;
+            latest.summary.node = node;
             Ok(latest)
         })
         .await

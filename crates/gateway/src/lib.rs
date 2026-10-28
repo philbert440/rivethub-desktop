@@ -22,6 +22,9 @@ use model::{HarnessId, SessionId, session::SessionSummary};
 use rustls::ClientConfig;
 use serde::Serialize;
 
+/// The roles a memory search leaves out, so it finds only what people and agents said.
+const SAID_ONLY: &str = "tool,system";
+
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub cert_pem: PathBuf,
@@ -96,6 +99,8 @@ impl Gateway {
                 url: node.url,
                 online: node.online,
                 sessions: node.sessions,
+                version: node.version,
+                revision: node.revision,
             })
             .collect())
     }
@@ -118,7 +123,12 @@ impl Gateway {
     pub async fn search(&self, query: &str) -> Result<Vec<model::search::Hit>, GatewayError> {
         let url = reqwest::Url::parse_with_params(
             &format!("{}/api/memory/search", self.base_url),
-            &[("q", query), ("scope", "messages"), ("limit", "60")],
+            &[
+                ("q", query),
+                ("scope", "messages"),
+                ("limit", "60"),
+                ("exclude_roles", SAID_ONLY),
+            ],
         )
         .map_err(|err| GatewayError::Refused(format!("search url: {err}")))?;
         let reply = self.http.get(url).send().await.map_err(GatewayError::Http)?;
@@ -161,7 +171,7 @@ impl Gateway {
 
     pub async fn send_turn(&self, session: &SessionId, prompt: &Prompt) -> Result<(), GatewayError> {
         let url = format!("{}/api/harness-sessions/{session}/turn", self.base_url);
-        let body = translate::prompt(prompt);
+        let body = translate::prompt(prompt)?;
         let accepted: wire::gateway::sessions::SessionPostAccepted =
             Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
         if accepted.accepted {
@@ -254,12 +264,15 @@ impl Gateway {
         }
     }
 
-    pub async fn summary(&self, session: &SessionId) -> Result<SessionSummary, GatewayError> {
+    pub async fn describe(&self, session: &SessionId) -> Result<model::session::Described, GatewayError> {
         let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
         let described: wire::gateway::sessions::HarnessSessionResponse = self
             .get_json(&format!("{}/api/harness-sessions/{segment}", self.base_url))
             .await?;
-        Ok(translate::summary(described.summary))
+        Ok(model::session::Described {
+            summary: translate::summary(described.summary),
+            switches: translate::switches(described.switches),
+        })
     }
 
     pub async fn rename(&self, session: &SessionId, title: &str) -> Result<SessionSummary, GatewayError> {

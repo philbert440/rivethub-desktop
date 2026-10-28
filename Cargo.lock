@@ -6234,6 +6234,7 @@ name = "ui"
 version = "0.1.0"
 dependencies = [
  "app",
+ "chrono",
  "gateway",
  "gpui",
  "gpui_platform",

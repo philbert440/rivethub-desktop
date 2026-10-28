@@ -271,6 +271,7 @@ impl SidePanel {
                 title: None,
                 status: model::session::SessionStatus::Idle,
                 model: None,
+                effort: None,
                 cwd: None,
                 updated_at_ms: found.latest_ms,
                 parent: None,

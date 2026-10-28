@@ -133,6 +133,7 @@ mod tests {
             title: Some(title.into()),
             status,
             model: None,
+            effort: None,
             cwd: None,
             updated_at_ms: 0,
             parent: None,

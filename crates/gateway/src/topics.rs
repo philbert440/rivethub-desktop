@@ -1,7 +1,10 @@
+use model::decisions::Decision;
 use model::topics::{Suggestion, Topic};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
-    PlacementReply, PlacementRequest, TopicCreateRequest, TopicList, TopicRecord, TopicSessionList,
+    DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
+    PlacementRequest, TopicCreateRequest, TopicDecision, TopicDecisionList, TopicList, TopicRecord,
+    TopicSessionList,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -93,17 +96,89 @@ impl Gateway {
         Ok(())
     }
 
+    /// The topic's own decisions, oldest first.
+    pub async fn decisions(&self, topic: &TopicId) -> Result<Vec<Decision>, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "decisions"])?;
+        let list: TopicDecisionList = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(list.decisions.into_iter().map(translate::decision).collect())
+    }
+
+    pub async fn add_decision(&self, topic: &TopicId, text: &str) -> Result<Decision, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "decisions"])?;
+        let body = DecisionCreateRequest {
+            text: text.to_owned(),
+            session_id: None,
+        };
+        let added: TopicDecision = Self::decided(self.http.post(url).json(&body).send().await).await?;
+        Ok(translate::decision(added))
+    }
+
+    pub async fn edit_decision(
+        &self,
+        topic: &TopicId,
+        decision: &str,
+        text: &str,
+    ) -> Result<Decision, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "decisions", decision])?;
+        let body = DecisionUpdate {
+            text: text.to_owned(),
+        };
+        let edited: TopicDecision = Self::decided(self.http.patch(url).json(&body).send().await).await?;
+        Ok(translate::decision(edited))
+    }
+
+    /// Marks a decision superseded and, given `text`, adds the decision that replaces it.
+    pub async fn supersede_decision(
+        &self,
+        topic: &TopicId,
+        decision: &str,
+        text: Option<&str>,
+    ) -> Result<(), GatewayError> {
+        let url = self.api_url(&[
+            "api",
+            "topics",
+            topic.as_str(),
+            "decisions",
+            decision,
+            "supersede",
+        ])?;
+        let body = DecisionSupersedeRequest {
+            text: text.map(str::to_owned),
+            session_id: None,
+        };
+        let _: DecisionSuperseded = Self::decided(self.http.post(url).json(&body).send().await).await?;
+        Ok(())
+    }
+
+    /// A decision write's reply. rh answers 409 for a decision already superseded and 400 for empty
+    /// text, and both come back as `Conflict` carrying rh's own message.
+    async fn decided<T: serde::de::DeserializeOwned>(
+        sent: Result<reqwest::Response, reqwest::Error>,
+    ) -> Result<T, GatewayError> {
+        match Self::read_json(sent)?.await {
+            Err(GatewayError::Status {
+                status: 400 | 409,
+                detail,
+            }) => Err(GatewayError::Conflict(rh_message(detail))),
+            read => read,
+        }
+    }
+
     /// Deletes a topic; its sessions go back to Forming. rh refuses category topics and topics
     /// with child topics, and that refusal comes back as `Conflict` carrying rh's own message.
     pub async fn delete_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str()])?;
         let reply = self.http.delete(url).send().await.map_err(GatewayError::Http)?;
         match Self::check(reply).await {
-            Err(GatewayError::Status { status: 409, detail }) => Err(GatewayError::Conflict(
-                serde_json::from_str::<wire::gateway::GatewayError>(&detail)
-                    .map_or(detail, |body| body.error),
-            )),
+            Err(GatewayError::Status { status: 409, detail }) => {
+                Err(GatewayError::Conflict(rh_message(detail)))
+            }
             checked => checked.map(drop),
         }
     }
+}
+
+/// The message in rh's error body, or the body itself when it isn't one.
+fn rh_message(detail: String) -> String {
+    serde_json::from_str::<wire::gateway::GatewayError>(&detail).map_or(detail, |body| body.error)
 }

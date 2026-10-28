@@ -79,10 +79,7 @@ impl QuestionCard {
             return;
         }
         asked.answered = true;
-        self.handle.send(Prompt {
-            text,
-            attachments: Vec::new(),
-        });
+        self.handle.send(Prompt::new(text));
         cx.notify();
     }
 

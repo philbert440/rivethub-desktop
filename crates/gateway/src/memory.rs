@@ -21,7 +21,8 @@ impl Gateway {
             params
                 .append_pair("q", query)
                 .append_pair("scope", "both")
-                .append_pair("limit", SEARCH_LIMIT);
+                .append_pair("limit", SEARCH_LIMIT)
+                .append_pair("exclude_roles", crate::SAID_ONLY);
             if let Some(window) = translate::browse_window(period) {
                 params.append_pair("window", &window.to_string());
             }
