@@ -8,6 +8,7 @@ pub mod markdown;
 pub mod memory;
 pub mod mesh;
 pub mod nav;
+pub mod prompt;
 pub mod search;
 pub mod session;
 pub mod tools;

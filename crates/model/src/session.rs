@@ -30,6 +30,8 @@ pub struct Turn {
     pub thinking: String,
     pub tools: Vec<ToolCall>,
     pub ends_with_text: bool,
+    pub model: Option<String>,
+    pub output_tokens: u64,
 }
 
 impl Turn {
@@ -40,6 +42,8 @@ impl Turn {
             thinking: String::new(),
             tools: Vec::new(),
             ends_with_text: false,
+            model: None,
+            output_tokens: 0,
         }
     }
 }
@@ -62,6 +66,10 @@ impl ContextUsage {
         let ratio = self.used as f32 / self.window as f32;
         ratio.clamp(0.0, 1.0)
     }
+
+    pub fn nearly_full(self) -> bool {
+        self.fraction() >= 0.8
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -80,6 +88,12 @@ pub enum SessionStatus {
     Failed,
 }
 
+impl SessionStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, Self::Ended | Self::Failed)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
     pub id: SessionId,
@@ -91,6 +105,21 @@ pub struct SessionSummary {
     pub parent: Option<SessionId>,
     pub node: Option<String>,
     pub blocked: bool,
+}
+
+impl SessionSummary {
+    /// Whether a typed filter finds this session by its title, folder, harness or model.
+    pub fn matches(&self, query: &str) -> bool {
+        crate::search::mentions(
+            [
+                self.title.as_deref().unwrap_or_default(),
+                self.cwd.as_deref().unwrap_or_default(),
+                self.id.harness().display_name(),
+                self.model.as_deref().unwrap_or_default(),
+            ],
+            query,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,6 +300,8 @@ mod tests {
             thinking: String::new(),
             tools: Vec::new(),
             ends_with_text: true,
+            model: None,
+            output_tokens: 0,
         }
     }
 

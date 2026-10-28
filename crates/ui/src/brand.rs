@@ -48,6 +48,8 @@ impl gpui::AssetSource for Icons {
             "icons/side-panel.svg" => include_bytes!("../assets/icons/side-panel.svg"),
             "icons/workspace.svg" => include_bytes!("../assets/icons/workspace.svg"),
             "icons/rename.svg" => include_bytes!("../assets/icons/rename.svg"),
+            "icons/arrow-up.svg" => include_bytes!("../assets/icons/arrow-up.svg"),
+            "icons/square.svg" => include_bytes!("../assets/icons/square.svg"),
             "icons/plus.svg" => include_bytes!("../assets/icons/plus.svg"),
             "icons/memory.svg" => include_bytes!("../assets/icons/memory.svg"),
             "icons/settings.svg" => include_bytes!("../assets/icons/settings.svg"),

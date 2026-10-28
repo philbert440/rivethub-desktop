@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use model::SessionId;
+use model::prompt::Prompt;
 use model::session::{Decision, SessionEvent, SessionView};
 use parking_lot::RwLock;
 use tokio::runtime::Handle;
@@ -14,7 +15,7 @@ const COMMAND_BUFFER: usize = 32;
 
 #[derive(Debug)]
 enum Command {
-    Send(String),
+    Send(Prompt),
     Stop,
     Unqueue(usize),
     Decide { request_id: String, decision: Decision },
@@ -24,7 +25,7 @@ enum Command {
 pub struct SessionHandle {
     id: SessionId,
     view: Arc<RwLock<SessionView>>,
-    queue: Arc<RwLock<VecDeque<String>>>,
+    queue: Arc<RwLock<VecDeque<Prompt>>>,
     revision: watch::Receiver<u64>,
     commands: mpsc::Sender<Command>,
 }
@@ -42,15 +43,15 @@ impl SessionHandle {
         self.revision.clone()
     }
 
-    pub fn send(&self, text: String) {
-        let _ = self.commands.try_send(Command::Send(text));
+    pub fn send(&self, prompt: Prompt) {
+        let _ = self.commands.try_send(Command::Send(prompt));
     }
 
     pub fn stop(&self) {
         let _ = self.commands.try_send(Command::Stop);
     }
 
-    pub fn queued(&self) -> Vec<String> {
+    pub fn queued(&self) -> Vec<Prompt> {
         self.queue.read().iter().cloned().collect()
     }
 
@@ -68,7 +69,7 @@ struct Actor {
     node: Option<String>,
     id: SessionId,
     view: Arc<RwLock<SessionView>>,
-    queue: Arc<RwLock<VecDeque<String>>>,
+    queue: Arc<RwLock<VecDeque<Prompt>>>,
     revision: watch::Sender<u64>,
 }
 
@@ -101,15 +102,15 @@ impl Actor {
         self.send(next).await;
     }
 
-    async fn send(&self, text: String) {
+    async fn send(&self, prompt: Prompt) {
         let outcome = match self.gateway().await {
-            Ok(gateway) => gateway.send_turn(&self.id, &text).await,
+            Ok(gateway) => gateway.send_turn(&self.id, &prompt).await,
             Err(err) => Err(err),
         };
         match outcome {
             Ok(()) => {}
             Err(err) if err.is_turn_in_flight() => {
-                self.queue.write().push_front(text);
+                self.queue.write().push_front(prompt);
                 self.changed();
             }
             Err(err) => self.fail(&err.to_string()),
@@ -160,12 +161,12 @@ impl Actor {
 
     async fn handle(&self, command: Command) {
         let outcome = match command {
-            Command::Send(text) => {
+            Command::Send(prompt) => {
                 if self.view.read().busy() || !self.queue.read().is_empty() {
-                    self.queue.write().push_back(text);
+                    self.queue.write().push_back(prompt);
                     self.changed();
                 } else {
-                    self.send(text).await;
+                    self.send(prompt).await;
                 }
                 Ok(())
             }

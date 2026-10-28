@@ -3,9 +3,11 @@ use std::sync::Arc;
 use app::{Hub, SessionHandle};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, Focusable, IntoElement, ListAlignment, ListState,
-    ParentElement, Pixels, Render, Styled, Subscription, Task, Window, div, list, prelude::*, px, relative,
+    ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task, Window, div, list,
+    prelude::*, px, relative,
 };
 use model::chat::exchanges;
+use model::prompt::{Attachment, Prompt};
 use model::session::{Decision, SessionSummary, SessionView};
 use term::GridSize;
 
@@ -50,7 +52,12 @@ pub struct SessionPane {
     folds: Arc<Folds>,
     fetched: Arc<std::collections::HashMap<String, model::tools::ToolOutput>>,
     hovered_turn: Option<usize>,
+    width: Option<Pixels>,
     composer: Entity<TextInput>,
+    takes_images: bool,
+    attachments: Vec<Attachment>,
+    uploading: usize,
+    attach_problem: Option<String>,
     renaming: Option<Renaming>,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -62,8 +69,8 @@ impl SessionPane {
         let handle = hub.open_session(&summary);
         let placeholder = format!("Message {}…", summary.id.harness().display_name());
         let composer = cx.new(|cx| TextInput::new(placeholder, cx));
-        let submitted = cx.subscribe(&composer, |this, _, Submitted(text), _| {
-            this.handle.send(text.clone());
+        let submitted = cx.subscribe(&composer, |this, _, Submitted(text), cx| {
+            this.submit(text.clone(), cx);
         });
         let typed = cx.observe(&composer, |_, _, cx| cx.notify());
         let mut revisions = handle.revisions();
@@ -74,6 +81,7 @@ impl SessionPane {
                 }
             }
         });
+        Self::read_offer(&hub, &summary, cx);
         Self {
             hub,
             summary,
@@ -86,12 +94,96 @@ impl SessionPane {
             folds: Arc::new(Folds::default()),
             fetched: Arc::new(std::collections::HashMap::new()),
             hovered_turn: None,
+            width: None,
             composer,
+            takes_images: false,
+            attachments: Vec::new(),
+            uploading: 0,
+            attach_problem: None,
             renaming: None,
             _revisions: watcher,
             _submitted: submitted,
             _typed: typed,
         }
+    }
+
+    fn read_offer(hub: &Hub, summary: &SessionSummary, cx: &mut Context<Self>) {
+        let hub = hub.clone();
+        let summary = summary.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Some(offer)) = hub.offer(&summary).await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.takes_images = offer.takes_images;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A prompt waits for the images still uploading, so none is sent without what was attached.
+    fn submit(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.uploading > 0 {
+            self.composer
+                .update(cx, |composer, cx| composer.set_text(&text, cx));
+            return;
+        }
+        self.attach_problem = None;
+        self.handle.send(Prompt {
+            text,
+            attachments: std::mem::take(&mut self.attachments),
+        });
+        cx.notify();
+    }
+
+    fn attach(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach images".into()),
+        });
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        self.attach_problem = None;
+        cx.spawn(async move |this, cx| {
+            let paths = match picked.await {
+                Ok(Ok(Some(paths))) => paths,
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(err)) => {
+                    this.update(cx, |this, cx| {
+                        this.attach_problem = Some(format!("couldn't open the file picker: {err}"));
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            for path in paths {
+                if this
+                    .update(cx, |this, cx| {
+                        this.uploading += 1;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                let uploaded = hub.upload(&summary, path).await;
+                this.update(cx, |this, cx| {
+                    this.uploading = this.uploading.saturating_sub(1);
+                    match uploaded {
+                        Ok(attachment) => this.attachments.push(attachment),
+                        Err(err) => this.attach_problem = Some(err.to_string()),
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     pub fn session_id(&self) -> &model::SessionId {
@@ -322,7 +414,7 @@ impl SessionPane {
             .child(label)
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn header(&self, view: &SessionView, cx: &mut Context<Self>) -> gpui::Div {
         let meta = [self.summary.model.as_deref(), self.summary.cwd.as_deref()]
             .into_iter()
             .flatten()
@@ -346,6 +438,7 @@ impl SessionPane {
                     .child(meta),
             )
             .child(div().flex_1())
+            .children(Self::context_meter(view))
             .child(
                 div()
                     .flex_none()
@@ -437,7 +530,7 @@ impl SessionPane {
         column: Pixels,
         behind: bool,
         footer: gpui::Div,
-        window: &mut Window,
+        wide: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let shared = self.handle.view();
@@ -502,16 +595,15 @@ impl SessionPane {
                     .pt_2()
                     .child(transcript)
                     .children(
-                        (window.viewport_size().width > px(900.))
-                            .then(|| {
-                                let rail = crate::turn_rail::Rail {
-                                    exchanges: &self.exchanges,
-                                    active: self.active_turn(),
-                                    hovered: self.hovered_turn,
-                                };
-                                crate::turn_rail::rail(&rail, cx)
-                            })
-                            .flatten(),
+                        wide.then(|| {
+                            let rail = crate::turn_rail::Rail {
+                                exchanges: &self.exchanges,
+                                active: self.active_turn(),
+                                hovered: self.hovered_turn,
+                            };
+                            crate::turn_rail::rail(&rail, cx)
+                        })
+                        .flatten(),
                     )
                     .child(Self::fade()),
             )
@@ -595,29 +687,34 @@ impl SessionPane {
         cx.notify();
     }
 
-    fn context_bar(view: &SessionView) -> Option<impl IntoElement> {
+    fn context_meter(view: &SessionView) -> Option<gpui::Div> {
         let usage = view.context()?;
-        let fraction = usage.fraction();
-        let fill = if fraction >= 0.8 {
+        let fill = if usage.nearly_full() {
             Theme::warn()
         } else {
             Theme::accent()
         };
         Some(
             div()
+                .flex_none()
                 .flex()
                 .items_center()
-                .gap_3()
+                .gap_2()
                 .text_xs()
                 .text_color(Theme::ink_dim())
-                .child("Context")
                 .child(
                     div()
-                        .flex_1()
+                        .w(px(64.))
                         .h(px(6.))
                         .rounded(px(3.))
                         .bg(Theme::card())
-                        .child(div().h_full().w(relative(fraction)).rounded(px(3.)).bg(fill)),
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(usage.fraction()))
+                                .rounded(px(3.))
+                                .bg(fill),
+                        ),
                 )
                 .child(format!("{}k / {}k", usage.used / 1000, usage.window / 1000)),
         )
@@ -724,8 +821,13 @@ impl SessionPane {
                     queued.len(),
                     if queued.len() == 1 { "message" } else { "messages" }
                 )))
-                .children(queued.into_iter().enumerate().map(|(index, text)| {
+                .children(queued.into_iter().enumerate().map(|(index, prompt)| {
                     let handle = self.handle.clone();
+                    let images = match prompt.attachments.len() {
+                        0 => None,
+                        1 => Some("1 image".to_owned()),
+                        count => Some(format!("{count} images")),
+                    };
                     div()
                         .flex()
                         .items_center()
@@ -735,7 +837,10 @@ impl SessionPane {
                                 .flex_1()
                                 .truncate()
                                 .text_color(Theme::ink())
-                                .child(crate::text::one_line(Some(&text))),
+                                .child(crate::text::one_line(Some(&prompt.text))),
+                        )
+                        .children(
+                            images.map(|images| div().text_xs().text_color(Theme::ink_dim()).child(images)),
                         )
                         .child(
                             div()
@@ -750,19 +855,14 @@ impl SessionPane {
         )
     }
 
-    fn composer_card(&self, view: &SessionView, cx: &mut Context<Self>) -> AnyElement {
-        let busy = view.busy();
+    fn send_button(&self, busy: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let draft = !self.composer.read(cx).is_empty();
-        let (label, enabled) = match (busy, draft) {
-            (true, false) => ("■", true),
-            (true, true) => ("Queue", true),
-            (false, draft) => ("↑", draft),
-        };
+        let stop = busy && !draft;
+        let enabled = stop || (draft && self.uploading == 0);
         let button = div()
             .id("send")
             .h(px(34.))
             .min_w(px(34.))
-            .px_3()
             .rounded(px(17.))
             .flex()
             .items_center()
@@ -772,55 +872,163 @@ impl SessionPane {
             .when(!enabled, |button| button.opacity(0.4))
             .when(enabled, gpui::Styled::cursor_pointer)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if busy && !draft {
+                if stop {
                     this.handle.stop();
-                } else if let Some(text) = this.composer.update(cx, super::input::TextInput::take) {
-                    this.handle.send(text);
+                } else if let Some(text) = this.composer.update(cx, TextInput::take) {
+                    this.submit(text, cx);
                 }
-            }))
-            .child(label);
+            }));
+        match (stop, busy) {
+            (true, _) => button.child(crate::brand::icon("icons/square.svg", 14., Theme::on_accent())),
+            (false, true) => button.px_3().child("Queue"),
+            (false, false) => button.child(crate::brand::icon("icons/arrow-up.svg", 18., Theme::on_accent())),
+        }
+    }
+
+    fn attach_button(cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("attach")
+            .size(px(34.))
+            .rounded(px(17.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|button| button.bg(Theme::raised()))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.attach(cx)))
+            .child(crate::brand::icon("icons/plus.svg", 18., Theme::ink_dim()))
+    }
+
+    fn attachment_row(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if self.attachments.is_empty() && self.uploading == 0 && self.attach_problem.is_none() {
+            return None;
+        }
+        let chip = || {
+            div()
+                .h(px(28.))
+                .px_3()
+                .rounded(px(14.))
+                .bg(Theme::raised())
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .text_color(Theme::ink())
+        };
+        Some(
+            div()
+                .px_4()
+                .pt_3()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .children(self.attachments.iter().enumerate().map(|(index, attachment)| {
+                    chip()
+                        .child(div().max_w(px(220.)).truncate().child(attachment.name.clone()))
+                        .child(
+                            div()
+                                .id(("detach", index))
+                                .cursor_pointer()
+                                .text_color(Theme::ink_dim())
+                                .hover(|remove| remove.text_color(Theme::ink()))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    if index < this.attachments.len() {
+                                        this.attachments.remove(index);
+                                    }
+                                    cx.notify();
+                                }))
+                                .child("×"),
+                        )
+                }))
+                .when(self.uploading > 0, |row| {
+                    row.child(
+                        chip()
+                            .text_color(Theme::ink_dim())
+                            .child(format!("Uploading {}…", self.uploading)),
+                    )
+                })
+                .children(
+                    self.attach_problem
+                        .clone()
+                        .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
+                ),
+        )
+    }
+
+    fn composer_card(&self, view: &SessionView, cx: &mut Context<Self>) -> AnyElement {
         div()
             .w_full()
-            .pl_5()
-            .pr_2()
-            .py_2()
             .rounded(px(28.))
             .bg(Theme::card())
             .flex()
-            .items_end()
-            .gap_2()
-            .child(div().flex_1().py_1().child(self.composer.clone()))
-            .child(button)
+            .flex_col()
+            .children(self.attachment_row(cx))
+            .child(
+                div()
+                    .min_h(px(44.))
+                    .pl_5()
+                    .pr_4()
+                    .pt_3()
+                    .child(self.composer.clone()),
+            )
+            .child(
+                div()
+                    .h(px(46.))
+                    .px_2()
+                    .pb_2()
+                    .flex()
+                    .items_center()
+                    .when(self.takes_images, |row| row.child(Self::attach_button(cx)))
+                    .child(div().flex_1())
+                    .child(self.send_button(view.busy(), cx)),
+            )
             .into_any_element()
     }
 }
 
-fn column_width(window: &Window) -> Pixels {
-    let body = window.viewport_size().width - px(68.);
-    (body * 0.64).clamp(px(680.), px(920.)).min(body - px(48.))
+/// The transcript column: 64% of the pane, kept between 680 and 920px, and never wider than the pane allows.
+fn column_width(body: Pixels) -> Pixels {
+    (body * 0.64)
+        .clamp(px(680.), px(920.))
+        .min(body - px(48.))
+        .max(Pixels::ZERO)
 }
 
 impl gpui::EventEmitter<PaneEvent> for SessionPane {}
 
 impl Render for SessionPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let column = column_width(window);
+        let body_width = self.width.unwrap_or_else(|| window.viewport_size().width);
+        let column = column_width(body_width);
+        let pane = cx.entity().downgrade();
+        let measure = gpui::canvas(
+            move |bounds, _, cx| {
+                pane.update(cx, |this, cx| {
+                    if this.width != Some(bounds.size.width) {
+                        this.width = Some(bounds.size.width);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .size_full();
         let behind = self.turns.is_scrolled_to_end() == Some(false);
         let footer = {
             let shared = self.handle.view();
             let view = shared.read();
-            div()
-                .w(column)
-                .pb_5()
-                .pt_2()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .children(
-                    view.error()
-                        .map(|message| div().text_color(Theme::warn()).child(message.to_owned())),
-                )
-                .children(Self::context_bar(&view))
+            div().w(column).pb_5().pt_2().flex().flex_col().gap_3().children(
+                view.error()
+                    .map(|message| div().text_color(Theme::warn()).child(message.to_owned())),
+            )
+        };
+        let header = {
+            let shared = self.handle.view();
+            let view = shared.read();
+            self.header(&view, cx)
         };
         let prompt = self.spawn_prompt(cx);
         let body = match (self.mode, &self.terminal) {
@@ -834,15 +1042,17 @@ impl Render for SessionPane {
                 .px_4()
                 .child(div().flex_1().w_full().child(terminal.clone()))
                 .child(footer),
-            _ => self.chat_body(column, behind, footer, window, cx),
+            _ => self.chat_body(column, behind, footer, body_width > px(900.), cx),
         };
         div()
             .key_context("Session")
             .on_action(cx.listener(Self::toggle))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
-            .child(self.header(cx))
+            .child(measure)
+            .child(header)
             .child(body)
     }
 }

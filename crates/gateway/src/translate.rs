@@ -32,21 +32,23 @@ pub fn roster_command(id: &SessionId) -> Result<String, GatewayError> {
         .ok_or_else(|| GatewayError::SessionId(id.to_string()))
 }
 
+pub fn agent(raw: wire::gateway::agents::AgentPreset) -> model::agents::Agent {
+    let filled = |value: String| Some(value).filter(|value| !value.trim().is_empty());
+    model::agents::Agent {
+        id: raw.id,
+        name: raw.name,
+        color: model::agents::parse_color(&raw.color),
+        harness: raw.harness_id.map(|harness| HarnessId::new(harness.to_string())),
+        model: filled(raw.model),
+        node: raw.node,
+        effort: filled(raw.effort),
+        directory: raw.directory,
+        instructions: filled(raw.system_prompt),
+    }
+}
+
 pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::Roster {
-    let agents = raw
-        .agents
-        .into_iter()
-        .map(|agent| model::agents::Agent {
-            id: agent.id,
-            name: agent.name,
-            color: model::agents::parse_color(&agent.color),
-            harness: agent
-                .harness_id
-                .map(|harness| HarnessId::new(harness.to_string())),
-            model: Some(agent.model).filter(|model| !model.is_empty()),
-            node: agent.node,
-        })
-        .collect();
+    let agents = raw.agents.into_iter().map(agent).collect();
     model::agents::Roster {
         node: raw.node,
         agents,
@@ -68,6 +70,38 @@ pub fn hits(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::sear
             })
         })
         .collect()
+}
+
+pub fn attachment(raw: wire::gateway::uploads::UploadCreated) -> model::prompt::Attachment {
+    model::prompt::Attachment {
+        name: raw.name,
+        media_type: raw.media_type,
+        uri: raw.uri,
+    }
+}
+
+pub fn prompt(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::SessionPostRequest {
+    let attachments = prompt
+        .attachments
+        .iter()
+        .map(|attachment| wire::gateway::agents::UserTurnAttachment {
+            mime: attachment.media_type.clone(),
+            path_or_uri: attachment.uri.clone(),
+            name: Some(attachment.name.clone()),
+        })
+        .collect::<Vec<_>>();
+    wire::gateway::sessions::SessionPostRequest {
+        exclude_tools: None,
+        text: prompt.text.clone(),
+        user_id: None,
+        agent: None,
+        thinking: None,
+        system_prompt: None,
+        attachments: Some(attachments).filter(|list| !list.is_empty()),
+        harness: None,
+        model: None,
+        working_dir: None,
+    }
 }
 
 pub fn found(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::memory::Found> {
@@ -168,6 +202,7 @@ pub fn offer(raw: wire::harness::HarnessOffering) -> model::harness::HarnessOffe
         id: HarnessId::new(raw.harness_id.to_string()),
         chat: raw.chat,
         lists_sessions: capabilities.observation.list_sessions,
+        takes_images: capabilities.image_attachments.unwrap_or(false),
         models: capabilities
             .models
             .unwrap_or_default()
@@ -210,6 +245,8 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
         },
         text: raw.text,
         thinking: raw.thinking.unwrap_or_default(),
+        model: raw.model,
+        output_tokens: raw.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
         tools: raw
             .tools
             .unwrap_or_default()
