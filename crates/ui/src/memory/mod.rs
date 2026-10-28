@@ -4,8 +4,8 @@ mod topics;
 
 use app::{Hub, Library, Tidy};
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
-    Subscription, Window, div, prelude::*, px,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    ScrollHandle, Styled, Subscription, Window, div, prelude::*, px,
 };
 use model::markdown::Block;
 use model::memory::{Found, Period};
@@ -82,6 +82,7 @@ pub struct MemoryPage {
     loose: Vec<Listing>,
     opened: Option<Opened>,
     reading: Option<Reading>,
+    page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
     _submitted: [Subscription; 2],
 }
@@ -122,6 +123,7 @@ impl MemoryPage {
             loose: Vec::new(),
             opened: None,
             reading: None,
+            page_scroll: ScrollHandle::new(),
             tidy: None,
             _submitted: [asked, found],
         };

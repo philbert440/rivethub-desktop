@@ -1,9 +1,9 @@
 use gpui::{
-    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Point, Styled, Window, div, prelude::*, px,
 };
 use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
-use model::wiki::{Page, loose, readable};
+use model::wiki::{Page, loose, readable, section};
 
 use super::{MemoryPage, Opened, Reading};
 use crate::markdown_view;
@@ -60,19 +60,32 @@ impl MemoryPage {
     }
 
     /// Shows the page that holds this topic: its own, or for a subtopic the root topic's page,
-    /// where the subtopic is a section.
+    /// scrolled to the subtopic's section.
     pub(super) fn open_topic(&mut self, topic: TopicId, cx: &mut Context<Self>) {
+        let mut at = None;
         self.reading = self.library.as_ref().and_then(|library| {
             let placements = Placements::new();
             let atlas = Atlas::new(&library.topics, &[], &placements);
             let root = atlas.root(&topic);
-            library
+            let read = library
                 .pages
                 .iter()
                 .find(|page| page.topic.as_ref() == Some(root))
                 .cloned()
-                .map(reading)
+                .map(reading)?;
+            if root != &topic {
+                at = library
+                    .topics
+                    .iter()
+                    .find(|known| known.id == topic)
+                    .and_then(|sub| section(&read.blocks, &sub.name));
+            }
+            Some(read)
         });
+        match at {
+            Some(block) => self.page_scroll.scroll_to_top_of_item(block + 1),
+            None => self.page_scroll.set_offset(Point::default()),
+        }
         self.opened = Some(Opened::Topic(topic));
         cx.notify();
     }
@@ -80,6 +93,7 @@ impl MemoryPage {
     fn open_page(&mut self, slug: String, cx: &mut Context<Self>) {
         self.opened = Some(Opened::Page(slug.clone()));
         self.reading = None;
+        self.page_scroll.set_offset(Point::default());
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let fetched = hub.wiki_page(slug.clone()).await;
@@ -243,22 +257,24 @@ impl MemoryPage {
             .into_any_element()
     }
 
+    /// The open page. The head and each markdown block are the scroll container's own children,
+    /// so a subtopic's section heading is child `block + 1` for the page's scroll handle.
     fn page(&self, window: &Window) -> AnyElement {
-        let column = div()
-            .w_full()
-            .max_w(px(PAGE_COLUMN))
-            .px_10()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .children(
-                self.problem
-                    .clone()
-                    .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
-            );
-        let column = match (&self.opened, &self.reading) {
-            (_, Some(read)) => column
-                .child(
+        let head = div().flex().flex_col().gap_3().children(
+            self.problem
+                .clone()
+                .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
+        );
+        let mut blocks = Vec::new();
+        let head = match (&self.opened, &self.reading) {
+            (_, Some(read)) => {
+                blocks = markdown_view::blocks(
+                    &read.blocks,
+                    &format!("wiki-{}", read.page.slug),
+                    Theme::ink().into(),
+                    window,
+                );
+                head.child(
                     div()
                         .text_2xl()
                         .text_color(Theme::ink())
@@ -287,27 +303,22 @@ impl MemoryPage {
                                 .child(format!("updated {} ago", ago(now_ms(), read.page.updated_ms))),
                         ),
                 )
-                .when(read.blocks.is_empty(), |column| {
-                    column.child(
+                .when(read.blocks.is_empty(), |head| {
+                    head.child(
                         div()
                             .pt_2()
                             .text_color(Theme::ink_dim())
                             .child("Memory hasn't written anything on this page yet."),
                     )
                 })
-                .children(markdown_view::blocks(
-                    &read.blocks,
-                    &format!("wiki-{}", read.page.slug),
-                    Theme::ink().into(),
-                    window,
-                )),
-            (Some(Opened::Topic(_)), None) if self.library.is_some() => column.child(
+            }
+            (Some(Opened::Topic(_)), None) if self.library.is_some() => head.child(
                 div()
                     .text_color(Theme::ink_dim())
                     .child("Memory hasn't started this topic's page yet."),
             ),
-            (Some(_), None) => column.child(div().text_color(Theme::ink_dim()).child("Loading…")),
-            (None, None) => column.child(
+            (Some(_), None) => head.child(div().text_color(Theme::ink_dim()).child("Loading…")),
+            (None, None) => head.child(
                 div()
                     .text_color(Theme::ink_dim())
                     .child("Pick a topic to read its page."),
@@ -315,14 +326,21 @@ impl MemoryPage {
         };
         div()
             .id("memory-page")
+            .track_scroll(&self.page_scroll)
             .flex_1()
             .min_w_0()
             .h_full()
             .overflow_y_scroll()
             .py_8()
             .flex()
-            .justify_center()
-            .child(column)
+            .flex_col()
+            .items_center()
+            .gap_3()
+            .children(
+                std::iter::once(head.into_any_element())
+                    .chain(blocks)
+                    .map(|child| div().w_full().max_w(px(PAGE_COLUMN)).px_10().child(child)),
+            )
             .into_any_element()
     }
 }
