@@ -15,7 +15,7 @@ use term::GridSize;
 
 use crate::input::{PastedImage, Submitted, TextInput};
 use crate::question_card::QuestionCard;
-use crate::terminal_view::TerminalView;
+use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
 
@@ -30,7 +30,9 @@ const FIRST_TERMINAL: GridSize = GridSize {
 
 #[derive(Debug, Clone)]
 pub enum PaneEvent {
-    Renamed(SessionSummary),
+    Renamed(Box<SessionSummary>),
+    /// The session's terminal rang its bell while the window was in the background.
+    Bell,
 }
 
 struct Renaming {
@@ -356,7 +358,7 @@ impl SessionPane {
                     Ok(renamed) => {
                         this.summary.title = renamed.title;
                         this.renaming = None;
-                        cx.emit(PaneEvent::Renamed(this.summary.clone()));
+                        cx.emit(PaneEvent::Renamed(Box::new(this.summary.clone())));
                     }
                     Err(err) => {
                         if let Some(renaming) = this.renaming.as_mut() {
@@ -470,7 +472,10 @@ impl SessionPane {
         self.confirm_spawn = false;
         let terminal = self.terminal.get_or_insert_with(|| {
             let handle = self.hub.open_terminal(&self.summary, FIRST_TERMINAL);
-            cx.new(|cx| TerminalView::new(handle, cx))
+            let terminal = cx.new(|cx| TerminalView::new(handle, window, cx));
+            cx.subscribe(&terminal, |_, _, Bell, cx| cx.emit(PaneEvent::Bell))
+                .detach();
+            terminal
         });
         window.focus(&terminal.focus_handle(cx), cx);
         cx.notify();

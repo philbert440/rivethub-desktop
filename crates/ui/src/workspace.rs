@@ -10,7 +10,7 @@ use gpui::{
     ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions,
     anchored, deferred, div, prelude::*, px,
 };
-use model::notice::Notice;
+use model::notice::{Notice, NoticeKind};
 use model::session::SessionSummary;
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
@@ -161,6 +161,20 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A terminal's bell asks for the person the way a blocked session does.
+    fn rang(&self, session: SessionId, cx: &mut Context<Self>) {
+        let title = self
+            .sessions
+            .iter()
+            .find(|known| known.id == session)
+            .and_then(|known| known.title.clone());
+        let notice = Notice {
+            kind: NoticeKind::NeedsYou,
+            session,
+        };
+        cx.emit(Attention { notice, title });
+    }
+
     /// The session open in the pane, if the workspace is showing one.
     pub fn on_screen(&self) -> Option<&SessionId> {
         match &self.altitude {
@@ -296,9 +310,15 @@ impl Workspace {
         let session = summary.id.clone();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
-        self.pane_events = Some(cx.subscribe(&pane, |this, _, event: &PaneEvent, cx| match event {
-            PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
-        }));
+        self.pane_events = Some(
+            cx.subscribe(&pane, |this, pane, event: &PaneEvent, cx| match event {
+                PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
+                PaneEvent::Bell => {
+                    let session = pane.read(cx).session_id().clone();
+                    this.rang(session, cx);
+                }
+            }),
+        );
         self.pane = Some(pane);
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };
