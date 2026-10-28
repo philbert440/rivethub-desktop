@@ -303,11 +303,10 @@ fn sent(prompt: &str, files: &[SentFile], at_ms: Option<i64>, cx: &Context<'_>) 
 
 fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> impl IntoElement {
     let verdict = exchange.verdict();
-    let tools = exchange.tool_count();
-    let detail = if tools == 1 {
-        "1 tool call".to_owned()
-    } else {
-        format!("{tools} tool calls")
+    let heading = match exchange.tool_count() {
+        0 => verdict,
+        1 => format!("{verdict} · 1 tool call"),
+        tools => format!("{verdict} · {tools} tool calls"),
     };
     toggle_on(
         SharedString::from(format!("exchange-{ix}")),
@@ -323,7 +322,7 @@ fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> 
     .text_size(px(13.))
     .text_color(Theme::ink_dim())
     .hover(|row| row.text_color(Theme::ink()))
-    .child(format!("{verdict} · {detail}"))
+    .child(heading)
     .child(div().flex_1())
     .child(chevron(open))
 }
