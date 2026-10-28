@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::TopicId;
+use crate::markdown::Block;
 
 /// A wiki page. A root topic owns one, and its subtopics are sections on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +29,25 @@ pub fn loose<'a>(listings: &'a [Listing], owned: &[Page]) -> Vec<&'a Listing> {
         .iter()
         .filter(|listing| !owned.contains(listing.slug.as_str()))
         .collect()
+}
+
+/// Where a subtopic's section starts among a page's blocks. rh writes each subtopic as a `##`
+/// section headed with the subtopic's name, after the page's own `##` sections, so the last such
+/// heading wins; a section folded in from a merged page sits deeper.
+pub fn section(blocks: &[Block], name: &str) -> Option<usize> {
+    let name = name.trim();
+    let headed = |block: &Block| match block {
+        Block::Heading { level, runs } => {
+            let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+            text.trim().eq_ignore_ascii_case(name).then_some(*level)
+        }
+        _ => None,
+    };
+    let levels: Vec<Option<u8>> = blocks.iter().map(headed).collect();
+    levels
+        .iter()
+        .rposition(|level| *level == Some(2))
+        .or_else(|| levels.iter().position(Option::is_some))
 }
 
 fn without_front_matter(markdown: &str) -> &str {
@@ -109,7 +129,8 @@ pub fn readable(markdown: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::readable;
+    use super::{readable, section};
+    use crate::markdown::parse;
 
     #[test]
     fn a_page_reads_without_front_matter_title_or_empty_sections() {
@@ -126,5 +147,16 @@ mod tests {
             readable("## Hosts\n\n### gerty\n\nThe incus host.\n\n### pve3\n"),
             "## Hosts\n\n### gerty\n\nThe incus host."
         );
+    }
+
+    #[test]
+    fn a_subtopic_lands_on_its_own_section_heading() {
+        let blocks = parse(&readable(
+            "# Tools\n\n## Summary\n\nThe tools.\n\n### Writer spool\n\nAn aside.\n\n## tmux\n\nScopes.\n\n## Summary\n\nA subtopic.\n\n## Writer Spool\n\nFlushes on exit.\n",
+        ));
+        assert_eq!(section(&blocks, "writer spool"), Some(8));
+        assert_eq!(section(&blocks, "summary"), Some(6));
+        assert_eq!(section(&blocks, "tmux"), Some(4));
+        assert_eq!(section(&blocks, "missing"), None);
     }
 }
