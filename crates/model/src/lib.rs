@@ -7,6 +7,7 @@ pub mod lineage;
 pub mod markdown;
 pub mod mesh;
 pub mod nav;
+pub mod prompt;
 pub mod search;
 pub mod session;
 pub mod tools;

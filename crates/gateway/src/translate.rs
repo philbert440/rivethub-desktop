@@ -72,6 +72,38 @@ pub fn hits(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::sear
         .collect()
 }
 
+pub fn attachment(raw: wire::gateway::uploads::UploadCreated) -> model::prompt::Attachment {
+    model::prompt::Attachment {
+        name: raw.name,
+        media_type: raw.media_type,
+        uri: raw.uri,
+    }
+}
+
+pub fn prompt(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::SessionPostRequest {
+    let attachments = prompt
+        .attachments
+        .iter()
+        .map(|attachment| wire::gateway::agents::UserTurnAttachment {
+            mime: attachment.media_type.clone(),
+            path_or_uri: attachment.uri.clone(),
+            name: Some(attachment.name.clone()),
+        })
+        .collect::<Vec<_>>();
+    wire::gateway::sessions::SessionPostRequest {
+        exclude_tools: None,
+        text: prompt.text.clone(),
+        user_id: None,
+        agent: None,
+        thinking: None,
+        system_prompt: None,
+        attachments: Some(attachments).filter(|list| !list.is_empty()),
+        harness: None,
+        model: None,
+        working_dir: None,
+    }
+}
+
 pub fn wire_session(id: &SessionId) -> Result<wire::session_id::SessionId, GatewayError> {
     id.to_string()
         .parse()
@@ -84,6 +116,7 @@ pub fn offer(raw: wire::harness::HarnessOffering) -> model::harness::HarnessOffe
         id: HarnessId::new(raw.harness_id.to_string()),
         chat: raw.chat,
         lists_sessions: capabilities.observation.list_sessions,
+        takes_images: capabilities.image_attachments.unwrap_or(false),
         models: capabilities
             .models
             .unwrap_or_default()
@@ -126,6 +159,8 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
         },
         text: raw.text,
         thinking: raw.thinking.unwrap_or_default(),
+        model: raw.model,
+        output_tokens: raw.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
         tools: raw
             .tools
             .unwrap_or_default()
