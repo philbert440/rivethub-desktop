@@ -32,7 +32,7 @@ pub enum Target {
 
 #[derive(Debug, Clone)]
 pub enum LauncherEvent {
-    Start { choice: Choice, target: Target },
+    Start { choice: Box<Choice>, target: Target },
     Dismissed,
 }
 
@@ -112,7 +112,10 @@ impl Launcher {
 
     fn start(&self, target: Target, cx: &mut Context<Self>) {
         if let Some(choice) = self.choice.clone() {
-            cx.emit(LauncherEvent::Start { choice, target });
+            cx.emit(LauncherEvent::Start {
+                choice: Box::new(choice),
+                target,
+            });
         }
     }
 

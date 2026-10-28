@@ -255,6 +255,53 @@ impl Hub {
             .await
     }
 
+    /// Agent presets live in the shared store, so this node's gateway writes them for every node.
+    pub async fn save_agent(
+        &self,
+        id: Option<String>,
+        draft: model::agents::AgentDraft,
+    ) -> Result<model::agents::Agent, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            match id {
+                Some(id) => gateway.update_agent(&id, &draft).await,
+                None => gateway.create_agent(&draft).await,
+            }
+        })
+        .await
+    }
+
+    pub async fn delete_agent(&self, id: String) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.delete_agent(&id).await })
+            .await
+    }
+
+    /// This node first, then every other online mesh node.
+    pub async fn nodes(&self) -> Result<Vec<String>, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let local = hub.inner.local.agents().await?.node;
+            let mut names = vec![local.clone()];
+            for node in hub.inner.local.mesh().await.unwrap_or_default() {
+                if node.online && !node.answers_to(&local) {
+                    names.push(node.name);
+                }
+            }
+            Ok(names)
+        })
+        .await
+    }
+
+    pub async fn harnesses_on(
+        &self,
+        node: String,
+    ) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move { hub.gateway_for(Some(&node)).await?.harnesses().await })
+            .await
+    }
+
     /// The harnesses this client's own node offers.
     pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
         let hub = self.clone();

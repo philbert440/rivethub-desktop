@@ -13,6 +13,7 @@ use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
+use crate::agent_editor::{AgentEditor, AgentEditorEvent};
 use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
@@ -61,6 +62,7 @@ pub struct Workspace {
     panel_open: bool,
     placing: Option<Placing>,
     launching: Option<(Entity<Launcher>, Subscription)>,
+    editing_agent: Option<(Entity<AgentEditor>, Subscription)>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     _feed: [gpui::Task<()>; 2],
@@ -77,6 +79,8 @@ impl Workspace {
                     PanelEvent::Open(summary) => this.open(summary.clone(), window, cx),
                     PanelEvent::OpenTopic(topic) => this.open_topic(topic.clone(), window, cx),
                     PanelEvent::Start(agent) => this.start_with(agent.clone(), None, window, cx),
+                    PanelEvent::NewAgent => this.edit_agent(None, window, cx),
+                    PanelEvent::EditAgent(agent) => this.edit_agent(Some(agent), window, cx),
                 },
             );
         let feed = hub.watch_workspace();
@@ -118,6 +122,7 @@ impl Workspace {
             panel_open: true,
             placing: None,
             launching: None,
+            editing_agent: None,
             feed,
             _panel_events: panel_events,
             _feed: [refresh, repaint],
@@ -360,6 +365,31 @@ impl Workspace {
         .detach();
     }
 
+    fn edit_agent(
+        &mut self,
+        agent: Option<&model::agents::Agent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let hub = self.hub.clone();
+        let editor = cx.new(|cx| AgentEditor::new(hub, agent, cx));
+        let events = cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, event: &AgentEditorEvent, window, cx| {
+                this.editing_agent = None;
+                if matches!(event, AgentEditorEvent::Saved | AgentEditorEvent::Deleted) {
+                    this.panel.update(cx, |panel, cx| panel.load_agents(cx));
+                }
+                window.focus(&this.focus, cx);
+                cx.notify();
+            },
+        );
+        window.focus(&editor.focus_handle(cx), cx);
+        self.editing_agent = Some((editor, events));
+        cx.notify();
+    }
+
     fn new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
         self.launch(window, cx);
     }
@@ -390,7 +420,7 @@ impl Workspace {
                 Target::In(topic) => Launch::In(topic.clone()),
                 Target::New(name) => Launch::New(name.clone()),
             };
-            match choice.clone() {
+            match (**choice).clone() {
                 Choice::Agent(agent) => this.start_agent(agent, launch, window, cx),
                 Choice::Harness { harness, model } => this.start_session(launch, harness, model, window, cx),
             }
@@ -814,5 +844,15 @@ impl Render for Workspace {
                     }),
             )
             .children(launcher)
+            .children(self.editing_agent.as_ref().map(|(editor, _)| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(gpui::rgba(0x0509_07b3))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(editor.clone())
+            }))
     }
 }
