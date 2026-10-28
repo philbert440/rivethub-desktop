@@ -79,7 +79,7 @@ impl QuestionCard {
             return;
         }
         asked.answered = true;
-        self.handle.send(Prompt::new(text));
+        self.handle.answer(Prompt::new(text));
         cx.notify();
     }
 
