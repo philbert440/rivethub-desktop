@@ -1,18 +1,22 @@
 mod keys;
+mod links;
 mod palette;
 
 pub use keys::{Modifiers, encode_key};
+pub use links::Link;
 pub use palette::Rgb;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode, viewport_to_point};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
+use links::find_links;
 use parking_lot::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,13 +76,19 @@ pub struct Snapshot {
     pub background: Rgb,
 }
 
+/// What the terminal raises while parsing: replies owed to the program, and whether it rang the bell.
 #[derive(Clone, Default)]
-struct Replies(Arc<Mutex<Vec<u8>>>);
+struct Replies {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    bell: Arc<AtomicBool>,
+}
 
 impl EventListener for Replies {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event {
-            self.0.lock().extend_from_slice(text.as_bytes());
+        match event {
+            Event::PtyWrite(text) => self.bytes.lock().extend_from_slice(text.as_bytes()),
+            Event::Bell => self.bell.store(true, Ordering::Relaxed),
+            _ => {}
         }
     }
 }
@@ -115,7 +125,12 @@ impl Screen {
 
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.parser.advance(&mut self.term, bytes);
-        std::mem::take(&mut *self.replies.0.lock())
+        std::mem::take(&mut *self.replies.bytes.lock())
+    }
+
+    /// Whether the bell rang since the last call.
+    pub fn take_bell(&self) -> bool {
+        self.replies.bell.swap(false, Ordering::Relaxed)
     }
 
     pub fn resize(&mut self, size: GridSize) {
@@ -163,6 +178,33 @@ impl Screen {
         let column = hit.column.min(usize::from(self.size.columns).saturating_sub(1));
         let point = viewport_to_point(self.term.grid().display_offset(), Point::new(row, Column(column)));
         (point, if hit.right_half { Side::Right } else { Side::Left })
+    }
+
+    /// The web address under a hit, if there is one. Its columns count characters, as snapshot
+    /// spans do, so a wide character's second cell maps back onto the character.
+    pub fn link_at(&self, hit: Hit) -> Option<Link> {
+        if hit.row >= usize::from(self.size.rows) {
+            return None;
+        }
+        let grid = self.term.grid();
+        let offset = i32::try_from(grid.display_offset()).ok()?;
+        let line = Line(i32::try_from(hit.row).ok()? - offset);
+        let mut text = String::new();
+        let mut chars = 0usize;
+        let mut under = None;
+        for (column, cell) in grid[line].into_iter().enumerate() {
+            if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                text.push(cell.c);
+                chars += 1;
+            }
+            if column == hit.column {
+                under = chars.checked_sub(1);
+            }
+        }
+        let under = under?;
+        find_links(&text)
+            .into_iter()
+            .find(|link| link.columns.contains(&under))
     }
 
     pub fn background(&self) -> Rgb {
@@ -273,6 +315,20 @@ mod tests {
         );
         screen.select(at(1, 8), SelectBy::Word);
         assert_eq!(screen.selected_text().as_deref(), Some("line"));
+    }
+
+    #[test]
+    fn a_link_is_found_under_a_cell_past_wide_characters() {
+        let mut screen = Screen::new(GridSize { columns: 30, rows: 2 });
+        screen.feed("日本 https://a.dev ok".as_bytes());
+        let at = |column| Hit {
+            row: 0,
+            column,
+            right_half: false,
+        };
+        let link = screen.link_at(at(5)).map(|link| (link.url, link.columns));
+        assert_eq!(link, Some(("https://a.dev".to_owned(), 3..16)));
+        assert_eq!(screen.link_at(at(4)), None);
     }
 
     #[test]
