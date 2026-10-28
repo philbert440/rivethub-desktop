@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 use app::Hub;
 use gateway::GatewayError;
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, MouseDownEvent, ParentElement,
-    Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions, anchored, deferred,
-    div, prelude::*, px,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Point, Render, Rgba, SharedString, Styled, Subscription, Window, actions,
+    anchored, deferred, div, prelude::*, px,
 };
 use model::session::{SessionStatus, SessionSummary};
 use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
@@ -316,6 +316,50 @@ impl Workspace {
             .title
             .as_deref()
             .map(|title| Focus::Search(one_line(Some(title)).to_string()))
+    }
+
+    /// The New session picker over a backdrop; clicking anywhere outside the picker closes it.
+    fn launcher(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let (launcher, _) = self.launching.as_ref()?;
+        let picker = div()
+            .absolute()
+            .top(px(52.))
+            .right(px(20.))
+            .w(px(460.))
+            .p_3()
+            .rounded(px(18.))
+            .bg(Theme::raised())
+            .border_1()
+            .border_color(Theme::line())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child("Start a session"),
+            )
+            .child(launcher.clone());
+        Some(
+            div()
+                .id("launcher-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                        this.launching = None;
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }),
+                )
+                .child(picker),
+        )
     }
 
     fn menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -871,30 +915,6 @@ impl Render for Workspace {
                     }))
             })
             .child(content);
-        let launcher = self.launching.as_ref().map(|(launcher, _)| {
-            div()
-                .absolute()
-                .top(px(52.))
-                .right(px(20.))
-                .w(px(460.))
-                .p_3()
-                .rounded(px(18.))
-                .bg(Theme::raised())
-                .border_1()
-                .border_color(Theme::line())
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .px_2()
-                        .pt_1()
-                        .text_xs()
-                        .text_color(Theme::ink_dim())
-                        .child("Start a session"),
-                )
-                .child(launcher.clone())
-        });
         div()
             .relative()
             .key_context("Workspace")
@@ -925,7 +945,7 @@ impl Render for Workspace {
                         )
                     }),
             )
-            .children(launcher)
+            .children(self.launcher(cx))
             .children(self.editing_agent.as_ref().map(|(editor, _)| {
                 div()
                     .absolute()
