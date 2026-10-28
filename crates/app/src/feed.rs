@@ -123,8 +123,12 @@ impl Signals {
                 let live = shared.sources.entry(source.clone()).or_default();
                 if working {
                     live.working.insert(native)
+                } else if live.working.remove(&native) {
+                    // A turn ended; harnesses title a session as its turns end.
+                    self.changes.send_modify(|count| *count += 1);
+                    true
                 } else {
-                    live.working.remove(&native)
+                    false
                 }
             }
             WorkspaceEvent::Updated { id, status, blocked } => {
@@ -135,6 +139,10 @@ impl Signals {
                 let now_blocked = blocked.unwrap_or(was_blocked);
                 if let Some(blocked) = blocked {
                     live.blocked.insert(id.clone(), blocked);
+                }
+                if was == Some(SessionStatus::Active) && status != SessionStatus::Active {
+                    // A turn ended; harnesses title a session as its turns end.
+                    self.changes.send_modify(|count| *count += 1);
                 }
                 if let Some(kind) = NoticeKind::raised_by(was, was_blocked, status, now_blocked) {
                     shared.notices.push(Notice { kind, session: id });
