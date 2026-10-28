@@ -3,13 +3,13 @@ use std::rc::Rc;
 
 use app::{TerminalHandle, TerminalState};
 use gpui::{
-    App, Bounds, ClickEvent, ClipboardItem, Context, Element, ElementId, FocusHandle, Focusable, FontStyle,
-    FontWeight, GlobalElementId, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, ShapedLine,
-    SharedString, Style, Task, TextAlign, TextRun, UnderlineStyle, Window, anchored, deferred, div, fill,
-    font, point, prelude::*, px, relative, rgb, size,
+    App, Bounds, ClickEvent, ClipboardItem, Context, Element, ElementId, EventEmitter, FocusHandle,
+    Focusable, FontStyle, FontWeight, GlobalElementId, InspectorElementId, IntoElement, KeyDownEvent,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
+    ScrollWheelEvent, ShapedLine, SharedString, Style, Subscription, Task, TextAlign, TextRun,
+    UnderlineStyle, Window, anchored, deferred, div, fill, font, point, prelude::*, px, relative, rgb, size,
 };
-use term::{GridSize, Hit, Modifiers, SelectBy, Snapshot, encode_key};
+use term::{GridSize, Hit, Link, Modifiers, SelectBy, Snapshot, encode_key};
 
 use crate::theme::Theme;
 
@@ -41,23 +41,45 @@ impl Geometry {
     }
 }
 
+/// The terminal rang its bell while the window was in the background.
+pub struct Bell;
+
+/// A link under the pointer, on the given visible row.
+#[derive(Clone)]
+struct Hovered {
+    row: usize,
+    link: Link,
+}
+
 pub struct TerminalView {
     handle: TerminalHandle,
     focus: FocusHandle,
     geometry: Rc<Cell<Option<Geometry>>>,
     selecting: bool,
     menu: Option<Point<Pixels>>,
+    pointer: Option<Hit>,
+    hovered: Option<Hovered>,
+    /// A bell already raised a notice; more wait until the window is active again.
+    bell_raised: bool,
     _revisions: Task<()>,
+    _activation: Subscription,
 }
 
+impl EventEmitter<Bell> for TerminalView {}
+
 impl TerminalView {
-    pub fn new(handle: TerminalHandle, cx: &mut Context<Self>) -> Self {
+    pub fn new(handle: TerminalHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut revisions = handle.revisions();
-        let watcher = cx.spawn(async move |this, cx| {
+        let watcher = cx.spawn_in(window, async move |this, cx| {
             while revisions.changed().await.is_ok() {
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                if this.update_in(cx, Self::changed).is_err() {
                     break;
                 }
+            }
+        });
+        let activation = cx.observe_window_activation(window, |this, window, _| {
+            if window.is_window_active() {
+                this.bell_raised = false;
             }
         });
         Self {
@@ -66,8 +88,34 @@ impl TerminalView {
             geometry: Rc::default(),
             selecting: false,
             menu: None,
+            pointer: None,
+            hovered: None,
+            bell_raised: false,
             _revisions: watcher,
+            _activation: activation,
         }
+    }
+
+    fn changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.handle.screen().read().take_bell() && !self.bell_raised && !window.is_window_active() {
+            self.bell_raised = true;
+            cx.emit(Bell);
+        }
+        self.hover(self.pointer);
+        cx.notify();
+    }
+
+    /// Points at `hit`, or at nothing, and says whether the link under the pointer changed.
+    fn hover(&mut self, hit: Option<Hit>) -> bool {
+        self.pointer = hit;
+        let hovered = hit.and_then(|hit| {
+            let link = self.handle.screen().read().link_at(hit)?;
+            Some(Hovered { row: hit.row, link })
+        });
+        let changed = hovered.as_ref().map(|now| (now.row, &now.link))
+            != self.hovered.as_ref().map(|was| (was.row, &was.link));
+        self.hovered = hovered;
+        changed
     }
 
     pub fn end(&self) {
@@ -131,6 +179,13 @@ impl TerminalView {
             return;
         };
         let hit = geometry.hit(event.position);
+        if event.modifiers.control
+            && event.click_count == 1
+            && let Some(link) = self.handle.screen().read().link_at(hit)
+        {
+            cx.open_url(&link.url);
+            return;
+        }
         let screen = self.handle.screen();
         let mut screen = screen.write();
         if event.modifiers.shift && event.click_count == 1 && screen.selected_text().is_some() {
@@ -148,20 +203,30 @@ impl TerminalView {
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
+        let Some(hit) = self.geometry.get().map(|geometry| geometry.hit(event.position)) else {
             return;
-        }
-        if let Some(geometry) = self.geometry.get() {
-            self.handle
-                .screen()
-                .write()
-                .extend_selection(geometry.hit(event.position));
+        };
+        if self.selecting && event.pressed_button == Some(MouseButton::Left) {
+            self.handle.screen().write().extend_selection(hit);
+            cx.notify();
+        } else if self
+            .pointer
+            .is_none_or(|was| (was.row, was.column) != (hit.row, hit.column))
+            && self.hover(Some(hit))
+        {
             cx.notify();
         }
     }
 
-    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.selecting = false;
+    /// A finished selection goes to the primary selection, so other apps can paste it; the
+    /// clipboard only changes on an explicit copy.
+    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.selecting) {
+            return;
+        }
+        if let Some(text) = self.handle.screen().read().selected_text() {
+            cx.write_to_primary(ClipboardItem::new_string(text));
+        }
     }
 
     fn open_menu(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -230,6 +295,7 @@ impl TerminalView {
         let lines = lines as i32;
         if lines != 0 {
             self.handle.screen().write().scroll(lines);
+            self.hover(self.pointer);
             cx.notify();
         }
     }
@@ -249,6 +315,7 @@ impl Render for TerminalView {
             TerminalState::Live => None,
         };
         div()
+            .id("terminal")
             .key_context("Terminal")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
@@ -258,6 +325,11 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::open_menu))
+            .on_hover(cx.listener(|this, inside: &bool, _, cx| {
+                if !inside && this.hover(None) {
+                    cx.notify();
+                }
+            }))
             .size_full()
             .p_3()
             .rounded(px(16.))
@@ -269,6 +341,7 @@ impl Render for TerminalView {
                 handle: self.handle.clone(),
                 focused: self.focus.clone(),
                 geometry: self.geometry.clone(),
+                link: self.hovered.clone(),
             })
             .children(self.menu.map(|at| self.context_menu(at, cx)))
     }
@@ -278,6 +351,7 @@ struct TerminalElement {
     handle: TerminalHandle,
     focused: FocusHandle,
     geometry: Rc<Cell<Option<Geometry>>>,
+    link: Option<Hovered>,
 }
 
 struct Prepainted {
@@ -455,6 +529,14 @@ impl Element for TerminalElement {
                 size(px(2.), line_height)
             };
             window.paint_quad(fill(Bounds::new(origin, shape), Theme::accent()));
+        }
+        if let Some(Hovered { row, link }) = &self.link {
+            let origin = point(
+                bounds.left() + cell * row_f32(link.columns.start),
+                bounds.top() + line_height * row_f32(*row + 1) - px(2.),
+            );
+            let width = cell * row_f32(link.columns.len());
+            window.paint_quad(fill(Bounds::new(origin, size(width, px(1.))), Theme::accent()));
         }
     }
 }
