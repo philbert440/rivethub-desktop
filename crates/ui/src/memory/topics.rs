@@ -46,13 +46,18 @@ impl MemoryPage {
         let hub = self.hub.clone();
         let query = self.finding.clone().unwrap_or_default();
         cx.spawn(async move |this, cx| {
-            let listed = hub.wiki_pages(query).await;
-            this.update(cx, |this, cx| match listed {
-                Ok(listed) => {
-                    this.loose = listed;
-                    cx.notify();
+            let listed = hub.wiki_pages(query.clone()).await;
+            this.update(cx, |this, cx| {
+                if this.finding.clone().unwrap_or_default() != query {
+                    return;
                 }
-                Err(err) => this.failed(&err, cx),
+                match listed {
+                    Ok(listed) => {
+                        this.loose = listed;
+                        cx.notify();
+                    }
+                    Err(err) => this.failed(&err, cx),
+                }
             })
             .ok();
         })
