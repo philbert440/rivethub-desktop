@@ -19,7 +19,6 @@ pub struct Listing {
     pub slug: String,
     pub title: String,
     pub updated_ms: i64,
-    pub excerpt: String,
 }
 
 /// The listed pages no topic owns.

@@ -3,7 +3,7 @@ use model::memory::{Found, Period, TagProposal, TermProposal, Verdict};
 use model::wiki::{Listing, Page};
 use wire::gateway::memory::{
     MemorySearchResponse, MemoryTagsDecideRequest, PendingTagListResult, TagDecisionResult, TagEntryPair,
-    TagState, TagTaxonomyDecideRequest, TagTaxonomyListResult,
+    TagTaxonomyDecideRequest, TagTaxonomyListResult,
 };
 use wire::gateway::topics::TopicPage;
 use wire::gateway::wiki::{WikiPageResponse, WikiTopicList};
@@ -62,12 +62,7 @@ impl Gateway {
         let mut url = self.api_url(&["api", "memory", "tags", "taxonomy"])?;
         url.query_pairs_mut().append_pair("state", "suggested");
         let listed: TagTaxonomyListResult = Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(listed
-            .entries
-            .into_iter()
-            .filter(|entry| entry.state == TagState::Suggested)
-            .map(translate::term_proposal)
-            .collect())
+        Ok(listed.entries.into_iter().map(translate::term_proposal).collect())
     }
 
     pub async fn decide_tag(&self, id: &str, verdict: Verdict) -> Result<(), GatewayError> {

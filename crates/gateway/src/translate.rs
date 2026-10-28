@@ -119,7 +119,6 @@ pub fn listing(raw: wire::gateway::wiki::WikiTopic) -> model::wiki::Listing {
         slug: raw.slug,
         title: raw.title,
         updated_ms: raw.updated_at.timestamp_millis(),
-        excerpt: raw.excerpt,
     }
 }
 
