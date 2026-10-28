@@ -15,6 +15,7 @@ pub use terminal::{TermInput, TermOutput, TerminalStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use model::prompt::{Attachment, Prompt};
 use model::{HarnessId, SessionId, session::SessionSummary};
 use rustls::ClientConfig;
 use serde::Serialize;
@@ -146,9 +147,9 @@ impl Gateway {
         Ok(translate::summary(created))
     }
 
-    pub async fn send_turn(&self, session: &SessionId, text: &str) -> Result<(), GatewayError> {
+    pub async fn send_turn(&self, session: &SessionId, prompt: &Prompt) -> Result<(), GatewayError> {
         let url = format!("{}/api/harness-sessions/{session}/turn", self.base_url);
-        let body = serde_json::json!({ "text": text });
+        let body = translate::prompt(prompt);
         let accepted: wire::gateway::sessions::SessionPostAccepted =
             Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
         if accepted.accepted {
@@ -156,6 +157,24 @@ impl Gateway {
         } else {
             Err(GatewayError::Refused("turn not accepted".into()))
         }
+    }
+
+    pub async fn upload(
+        &self,
+        session: &SessionId,
+        name: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment, GatewayError> {
+        let session = translate::wire_session(session)?.to_string();
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/api/uploads", self.base_url),
+            &[("name", name), ("mediaType", media_type), ("session", &session)],
+        )
+        .map_err(|err| GatewayError::Refused(format!("upload url: {err}")))?;
+        let created: wire::gateway::uploads::UploadCreated =
+            Self::read_json(self.http.post(url).body(bytes).send().await)?.await?;
+        Ok(translate::attachment(created))
     }
 
     pub async fn decide(

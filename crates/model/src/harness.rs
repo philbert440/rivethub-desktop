@@ -6,6 +6,7 @@ pub struct HarnessOffer {
     pub id: HarnessId,
     pub chat: bool,
     pub lists_sessions: bool,
+    pub takes_images: bool,
     pub models: Vec<ModelChoice>,
 }
 

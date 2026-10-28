@@ -30,6 +30,8 @@ pub struct Turn {
     pub thinking: String,
     pub tools: Vec<ToolCall>,
     pub ends_with_text: bool,
+    pub model: Option<String>,
+    pub output_tokens: u64,
 }
 
 impl Turn {
@@ -40,6 +42,8 @@ impl Turn {
             thinking: String::new(),
             tools: Vec::new(),
             ends_with_text: false,
+            model: None,
+            output_tokens: 0,
         }
     }
 }
@@ -61,6 +65,10 @@ impl ContextUsage {
         )]
         let ratio = self.used as f32 / self.window as f32;
         ratio.clamp(0.0, 1.0)
+    }
+
+    pub fn nearly_full(self) -> bool {
+        self.fraction() >= 0.8
     }
 }
 
@@ -271,6 +279,8 @@ mod tests {
             thinking: String::new(),
             tools: Vec::new(),
             ends_with_text: true,
+            model: None,
+            output_tokens: 0,
         }
     }
 

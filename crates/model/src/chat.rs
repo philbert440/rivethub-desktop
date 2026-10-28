@@ -1,4 +1,7 @@
+use std::collections::HashSet;
+
 use crate::session::{Role, ToolCall, ToolState, Turn};
+use crate::tools::ToolInput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
@@ -26,16 +29,17 @@ impl Category {
         }
     }
 
-    fn done(self) -> &'static str {
-        match self {
-            Self::Read => "read files",
-            Self::Search => "searched the code",
-            Self::Edit => "edited files",
-            Self::Command => "ran commands",
-            Self::Web => "searched the web",
-            Self::Subagent => "coordinated subagents",
-            Self::Tool => "used tools",
-        }
+    fn done(self, count: usize) -> String {
+        let (verb, one, many) = match self {
+            Self::Read => ("read", "file", "files"),
+            Self::Search => ("ran", "search", "searches"),
+            Self::Edit => ("edited", "file", "files"),
+            Self::Command => ("ran", "command", "commands"),
+            Self::Web => ("made", "web request", "web requests"),
+            Self::Subagent => ("ran", "subagent", "subagents"),
+            Self::Tool => ("used", "tool", "tools"),
+        };
+        format!("{verb} {count} {}", if count == 1 { one } else { many })
     }
 
     fn running(self) -> &'static str {
@@ -72,6 +76,8 @@ pub struct Exchange {
     pub steps: Vec<Step>,
     pub answer: String,
     pub state: ExchangeState,
+    pub model: Option<String>,
+    pub output_tokens: u64,
 }
 
 impl Exchange {
@@ -81,6 +87,8 @@ impl Exchange {
             steps: Vec::new(),
             answer: String::new(),
             state: ExchangeState::Completed,
+            model: None,
+            output_tokens: 0,
         }
     }
 
@@ -93,6 +101,10 @@ impl Exchange {
 
     fn absorb(&mut self, turn: &Turn) {
         self.take_answer_as_note();
+        if turn.model.is_some() {
+            self.model.clone_from(&turn.model);
+        }
+        self.output_tokens += turn.output_tokens;
         if !turn.thinking.trim().is_empty() {
             self.steps.push(Step::Thought(turn.thinking.clone()));
         }
@@ -184,25 +196,45 @@ fn is_interruption(text: &str) -> bool {
     text.trim_start().starts_with("[Request interrupted by user")
 }
 
+/// Names what a run of tool calls did, e.g. "Read 3 files and ran 2 commands".
+/// A file counts once however often the run read or edited it.
 pub fn group_summary(tools: &[ToolCall]) -> String {
-    let mut seen: Vec<Category> = Vec::new();
+    let mut tally: Vec<(Category, usize)> = Vec::new();
+    let mut files: HashSet<(Category, &str)> = HashSet::new();
     for tool in tools {
         let category = Category::of(&tool.name);
-        if !seen.contains(&category) {
-            seen.push(category);
+        if let Some(path) = file(&tool.input)
+            && !files.insert((category, path))
+        {
+            continue;
+        }
+        match tally.iter_mut().find(|(seen, _)| *seen == category) {
+            Some((_, count)) => *count += 1,
+            None => tally.push((category, 1)),
         }
     }
-    let words: Vec<&str> = seen.iter().take(3).map(|category| category.done()).collect();
+    let words: Vec<String> = tally
+        .iter()
+        .take(3)
+        .map(|(category, count)| category.done(*count))
+        .collect();
     let mut summary = match words.as_slice() {
         [] => String::new(),
-        [one] => (*one).to_owned(),
+        [one] => one.clone(),
         [first, second] => format!("{first} and {second}"),
         [first, second, third, ..] => format!("{first}, {second} and {third}"),
     };
-    if seen.len() > 3 {
+    if tally.len() > 3 {
         summary.push_str(", etc.");
     }
     capitalize(&summary)
+}
+
+fn file(input: &ToolInput) -> Option<&str> {
+    match input {
+        ToolInput::Read { path } | ToolInput::Edit { path, .. } | ToolInput::Write { path, .. } => Some(path),
+        _ => None,
+    }
 }
 
 pub fn running_label(tools: &[ToolCall]) -> Option<&'static str> {
@@ -247,6 +279,7 @@ fn capitalize(text: &str) -> String {
 mod tests {
     use super::{ExchangeState, Step, exchanges, group_summary, thought_summary};
     use crate::session::{Role, ToolCall, ToolState, Turn};
+    use crate::tools::ToolInput;
 
     fn turn(role: Role, text: &str, tools: &[(&str, ToolState)]) -> Turn {
         Turn {
@@ -254,13 +287,15 @@ mod tests {
             role,
             text: text.into(),
             thinking: String::new(),
+            model: None,
+            output_tokens: 0,
             tools: tools
                 .iter()
                 .map(|(name, state)| ToolCall {
                     id: None,
                     name: (*name).into(),
                     state: *state,
-                    input: crate::tools::ToolInput::Unknown,
+                    input: ToolInput::Unknown,
                     output: None,
                 })
                 .collect(),
@@ -320,21 +355,28 @@ mod tests {
     }
 
     #[test]
-    fn group_summaries_name_up_to_three_categories() {
-        let tools: Vec<ToolCall> = ["Read", "Bash", "Read", "Edit", "WebFetch"]
-            .iter()
-            .map(|name| ToolCall {
-                id: None,
-                name: (*name).into(),
-                state: ToolState::Done,
-                input: crate::tools::ToolInput::Unknown,
-                output: None,
-            })
-            .collect();
-        assert_eq!(group_summary(&tools[..2]), "Read files and ran commands");
+    fn group_summaries_count_up_to_three_categories_and_each_file_once() {
+        let call = |name: &str, input: ToolInput| ToolCall {
+            id: None,
+            name: name.into(),
+            state: ToolState::Done,
+            input,
+            output: None,
+        };
+        let read = |path: &str| call("Read", ToolInput::Read { path: path.into() });
+        let tools = [
+            read("a.rs"),
+            call("Bash", ToolInput::Unknown),
+            read("a.rs"),
+            read("b.rs"),
+            call("Bash", ToolInput::Unknown),
+            call("Grep", ToolInput::Unknown),
+            call("WebFetch", ToolInput::Unknown),
+        ];
+        assert_eq!(group_summary(&tools[..2]), "Read 1 file and ran 1 command");
         assert_eq!(
             group_summary(&tools),
-            "Read files, ran commands and edited files, etc."
+            "Read 2 files, ran 2 commands and ran 1 search, etc."
         );
     }
 
