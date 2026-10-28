@@ -238,10 +238,20 @@ impl Hub {
         .await
     }
 
-    pub async fn start_session(&self, harness: HarnessId) -> Result<SessionSummary, GatewayError> {
+    pub async fn start_session(
+        &self,
+        harness: HarnessId,
+        model: Option<String>,
+    ) -> Result<SessionSummary, GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.start_session(&harness).await })
+        self.on_runtime(async move { gateway.start_session(&harness, model.as_deref()).await })
             .await
+    }
+
+    /// The harnesses this client's own node offers.
+    pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.harnesses().await }).await
     }
 }
 
