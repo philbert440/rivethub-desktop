@@ -52,6 +52,35 @@ impl AddAssign for Pace {
     }
 }
 
+/// Times a model's writing as it streams: each burst of text or reasoning from its first token
+/// to its last, without the pauses while tools run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Stopwatch {
+    burst: Option<(u64, u64)>,
+    ms: u64,
+}
+
+impl Stopwatch {
+    /// A token streamed at `at_ms` on a monotonic clock.
+    pub fn token(&mut self, at_ms: u64) {
+        let start = self.burst.map_or(at_ms, |(start, _)| start);
+        self.burst = Some((start, at_ms.max(start)));
+    }
+
+    /// The model stopped writing, to call a tool or wait on an approval.
+    pub fn pause(&mut self) {
+        if let Some((start, end)) = self.burst.take() {
+            self.ms += end - start;
+        }
+    }
+
+    /// Ends the turn: the pace of its `output` tokens over the writing time measured.
+    pub fn stop(&mut self, output: u64) -> Option<Pace> {
+        self.pause();
+        Pace::of(output, std::mem::take(&mut self.ms))
+    }
+}
+
 /// A token count as people read it: "812", "1.2k", "24k", "1.3M".
 pub fn tokens(count: u64) -> String {
     match count {
@@ -74,6 +103,23 @@ mod tests {
         }
         assert_eq!(pace.tokens_per_second(), Some(40));
         assert_eq!(Pace::default().tokens_per_second(), None);
+    }
+
+    #[test]
+    fn the_stopwatch_times_streaming_bursts_and_not_the_tool_pauses_between() {
+        let mut watch = Stopwatch::default();
+        for at in [1_000, 2_000, 3_000] {
+            watch.token(at);
+        }
+        watch.pause();
+        for at in [60_000, 61_000] {
+            watch.token(at);
+        }
+        assert_eq!(
+            watch.stop(150).and_then(|pace| pace.tokens_per_second()),
+            Some(50)
+        );
+        assert_eq!(watch.stop(150), None);
     }
 
     #[test]

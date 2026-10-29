@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use model::SessionId;
 use model::prompt::Prompt;
 use model::session::{Decision, SessionEvent, SessionView};
-use parking_lot::RwLock;
+use model::usage::{Pace, Stopwatch};
+use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 
@@ -78,6 +79,8 @@ struct Actor {
     view: Arc<RwLock<SessionView>>,
     queue: Arc<RwLock<VecDeque<Prompt>>>,
     revision: watch::Sender<u64>,
+    stopwatch: Mutex<Stopwatch>,
+    clock: Instant,
 }
 
 impl Actor {
@@ -90,12 +93,35 @@ impl Actor {
     }
 
     async fn apply(&self, event: SessionEvent) {
-        let finished = event == SessionEvent::TurnComplete;
-        self.view.write().apply(event);
+        let finished = matches!(event, SessionEvent::TurnComplete(_));
+        let paced = self.time(&event);
+        {
+            let mut view = self.view.write();
+            if let Some(pace) = paced {
+                view.paced(pace);
+            }
+            view.apply(event);
+        }
         self.changed();
         if finished {
             self.drain().await;
         }
+    }
+
+    /// Times the model's writing from the stream; the end of a turn yields its pace.
+    fn time(&self, event: &SessionEvent) -> Option<Pace> {
+        let mut watch = self.stopwatch.lock();
+        match event {
+            SessionEvent::AssistantText(_) | SessionEvent::Reasoning(_) => {
+                watch.token(u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX));
+            }
+            SessionEvent::ToolStarted { .. }
+            | SessionEvent::ToolFinished { .. }
+            | SessionEvent::ApprovalRequested(_) => watch.pause(),
+            SessionEvent::TurnComplete(usage) => return watch.stop(usage.map_or(0, |usage| usage.output)),
+            _ => {}
+        }
+        None
     }
 
     async fn drain(&self) {
@@ -116,6 +142,7 @@ impl Actor {
         };
         match outcome {
             Ok(()) => {
+                *self.stopwatch.lock() = Stopwatch::default();
                 self.view.write().accepted();
                 self.changed();
             }
@@ -229,6 +256,8 @@ pub fn spawn(runtime: &Handle, hub: crate::Hub, id: SessionId, node: Option<Stri
         view: Arc::clone(&view),
         queue: Arc::clone(&queue),
         revision: revision_tx,
+        stopwatch: Mutex::new(Stopwatch::default()),
+        clock: Instant::now(),
     };
     runtime.spawn(actor.run(commands_rx));
     SessionHandle {

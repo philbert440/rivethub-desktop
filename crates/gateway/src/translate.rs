@@ -334,6 +334,15 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     }
 }
 
+/// What a turn reports as it ends. rh counts cache reads and writes in its prompt tokens.
+fn reported(raw: &wire::stream::LlmUsage) -> Usage {
+    Usage {
+        input: raw.prompt_tokens,
+        cached: raw.cached_tokens.or(raw.cache_read_tokens).unwrap_or(0),
+        output: raw.completion_tokens,
+    }
+}
+
 fn usage(raw: &MessageUsage) -> Usage {
     Usage {
         input: raw.prompt_tokens,
@@ -442,7 +451,7 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
             reason,
         }),
         HarnessEvent::ApprovalResolved { request_id, .. } => SessionEvent::ApprovalResolved { request_id },
-        HarnessEvent::TurnComplete { .. } => SessionEvent::TurnComplete,
+        HarnessEvent::TurnComplete { usage, .. } => SessionEvent::TurnComplete(usage.as_ref().map(reported)),
         HarnessEvent::Error { message, .. } => SessionEvent::Error(message),
         HarnessEvent::Transcript {
             turns,

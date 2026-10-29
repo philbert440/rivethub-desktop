@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::prompt::SentFile;
 use crate::session::{Role, ToolCall, ToolState, Turn};
 use crate::tools::ToolInput;
-use crate::usage::{Pace, Usage};
+use crate::usage::Usage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
@@ -81,8 +81,6 @@ pub struct Exchange {
     pub state: ExchangeState,
     pub model: Option<String>,
     pub usage: Usage,
-    /// How fast the exchange's timed model calls wrote their output.
-    pub pace: Pace,
     /// When the person sent the prompt, in epoch milliseconds.
     pub asked_at_ms: Option<i64>,
     /// When the exchange began: the prompt, or for a reply that came without one its first turn.
@@ -101,7 +99,6 @@ impl Exchange {
             state: ExchangeState::Completed,
             model: None,
             usage: Usage::default(),
-            pace: Pace::default(),
             asked_at_ms,
             started_at_ms: asked_at_ms,
             ended_at_ms: None,
@@ -147,9 +144,6 @@ impl Exchange {
             self.model.clone_from(&turn.model);
         }
         self.usage += turn.usage;
-        if let Some(pace) = turn.pace() {
-            self.pace += pace;
-        }
         if !turn.thinking.trim().is_empty() {
             self.steps.push(Step::Thought(turn.thinking.clone()));
         }
@@ -241,15 +235,13 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
     out
 }
 
-/// Everything the exchanges wrote and read, and how fast they wrote it.
-pub fn totals<'a>(exchanges: impl IntoIterator<Item = &'a Exchange>) -> (Usage, Pace) {
+/// Everything the exchanges read and wrote.
+pub fn totals<'a>(exchanges: impl IntoIterator<Item = &'a Exchange>) -> Usage {
     let mut usage = Usage::default();
-    let mut pace = Pace::default();
     for exchange in exchanges {
         usage += exchange.usage;
-        pace += exchange.pace;
     }
-    (usage, pace)
+    usage
 }
 
 /// Whether a transcript that had `count` exchanges, the last in state `last`, moved on to where a

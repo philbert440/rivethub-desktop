@@ -41,12 +41,6 @@ pub struct Turn {
 }
 
 impl Turn {
-    /// How fast this turn wrote its output, when the harness timed it.
-    pub fn pace(&self) -> Option<Pace> {
-        let ms = self.ended_at_ms? - self.started_at_ms?;
-        Pace::of(self.usage.output, u64::try_from(ms).ok()?)
-    }
-
     fn assistant() -> Self {
         Self {
             role: Role::Assistant,
@@ -201,7 +195,8 @@ pub enum SessionEvent {
     ApprovalResolved {
         request_id: String,
     },
-    TurnComplete,
+    /// The turn ended, with the tokens it used when the harness reported them.
+    TurnComplete(Option<Usage>),
     Activity(Activity),
     Error(String),
 }
@@ -214,9 +209,20 @@ pub struct SessionView {
     context: Option<ContextUsage>,
     activity: Activity,
     error: Option<String>,
+    paced: Pace,
 }
 
 impl SessionView {
+    /// A turn streamed here wrote at this pace.
+    pub fn paced(&mut self, pace: Pace) {
+        self.paced += pace;
+    }
+
+    /// How fast the turns streamed here wrote, all told.
+    pub fn pace(&self) -> Pace {
+        self.paced
+    }
+
     pub fn apply(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::Snapshot { mut turns, context } => {
@@ -265,7 +271,7 @@ impl SessionView {
             SessionEvent::ApprovalResolved { request_id } => {
                 self.approvals.retain(|pending| pending.request_id != request_id);
             }
-            SessionEvent::TurnComplete => {
+            SessionEvent::TurnComplete(_) => {
                 if let Some(turn) = self.live.take() {
                     self.turns.push(turn);
                 }
@@ -427,7 +433,7 @@ mod tests {
     fn snapshot_after_turn_complete_never_duplicates_the_turn() {
         let mut view = SessionView::default();
         view.apply(SessionEvent::AssistantText("Done.".into()));
-        view.apply(SessionEvent::TurnComplete);
+        view.apply(SessionEvent::TurnComplete(None));
         assert_eq!(view.turns().len(), 1);
         let turns = vec![said(Role::User, "go"), said(Role::Assistant, "Done.")];
         view.apply(SessionEvent::Snapshot {
@@ -471,7 +477,7 @@ mod tests {
             input: ToolInput::Ask(vec![question]),
         });
         view.apply(SessionEvent::AssistantText("Pick one.".into()));
-        view.apply(SessionEvent::TurnComplete);
+        view.apply(SessionEvent::TurnComplete(None));
         assert!(view.open_questions().is_some());
         let mut turns = view.turns().to_vec();
         turns.push(said(Role::User, "Which"));

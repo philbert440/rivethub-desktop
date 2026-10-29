@@ -1101,11 +1101,12 @@ impl SessionPane {
         )
     }
 
-    /// The session so far, beside Send: how fast replies came, what they wrote, and how much of
-    /// what they read came from cache.
-    fn session_stats(&self) -> Option<impl IntoElement> {
-        let (usage, pace) = totals(self.exchanges.iter().map(|view| &view.exchange));
-        let parts: Vec<String> = pace
+    /// The session so far, beside Send: how fast the replies streamed here came, what the session
+    /// wrote, and how much of what it read came from cache.
+    fn session_stats(&self, view: &SessionView) -> Option<impl IntoElement> {
+        let usage = totals(self.exchanges.iter().map(|view| &view.exchange));
+        let parts: Vec<String> = view
+            .pace()
             .tokens_per_second()
             .map(|rate| format!("{rate} tok/s"))
             .into_iter()
@@ -1255,7 +1256,7 @@ impl SessionPane {
                     .when(self.takes_images, |row| row.child(Self::attach_button(cx)))
                     .children(self.switch_chips(cx))
                     .child(div().flex_1())
-                    .children(self.session_stats())
+                    .children(self.session_stats(view))
                     .child(self.send_button(view.busy(), cx)),
             )
             .into_any_element()

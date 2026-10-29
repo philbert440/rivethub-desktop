@@ -328,8 +328,8 @@ fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> 
     .child(chevron(open))
 }
 
-/// When the reply finished, the model behind it, and the tokens it read and wrote and how fast,
-/// shown when the pointer is over the exchange.
+/// When the reply finished, the model behind it, and the tokens it read and wrote, shown when the
+/// pointer is over the exchange.
 fn meta(exchange: &Exchange) -> Option<String> {
     let usage = exchange.usage;
     let parts: Vec<String> = exchange
@@ -338,12 +338,6 @@ fn meta(exchange: &Exchange) -> Option<String> {
         .into_iter()
         .chain(exchange.model.iter().cloned())
         .chain((usage.output > 0).then(|| format!("{} out", tokens(usage.output))))
-        .chain(
-            exchange
-                .pace
-                .tokens_per_second()
-                .map(|rate| format!("{rate} tok/s")),
-        )
         .chain((usage.input > 0).then(|| format!("{} in", tokens(usage.input))))
         .chain(
             usage
