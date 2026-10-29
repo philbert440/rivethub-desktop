@@ -13,7 +13,8 @@ pub struct Topic {
     pub name: String,
     pub parent: Option<TopicId>,
     pub last_active_ms: Option<i64>,
-    pub created_ms: i64,
+    /// When the topic itself last changed: created, renamed, moved, closed or reopened.
+    pub updated_ms: i64,
     pub closed_ms: Option<i64>,
 }
 
@@ -206,7 +207,7 @@ pub fn board<'a>(
         let newest = sessions.first().map_or(0, |session| session.updated_at_ms);
         let active_ms = newest
             .max(topic.last_active_ms.unwrap_or(0))
-            .max(topic.created_ms);
+            .max(topic.updated_ms);
         sessions.retain(|session| !in_history(session, marks));
         let card = Card {
             topic,
@@ -292,7 +293,7 @@ mod tests {
             name: slug.into(),
             parent: parent.map(TopicId::new),
             last_active_ms: None,
-            created_ms: 0,
+            updated_ms: 0,
             closed_ms: None,
         }
     }
@@ -342,9 +343,9 @@ mod tests {
     }
 
     #[test]
-    fn a_new_topic_counts_as_active_from_its_creation() {
+    fn a_topic_counts_as_active_from_its_last_change() {
         let mut fresh = topic("fresh", None);
-        fresh.created_ms = WINDOWS.now_ms - HOUR;
+        fresh.updated_ms = WINDOWS.now_ms - HOUR;
         let topics = [fresh, topic("old", None)];
         let placements = Placements::new();
         let board = board(&topics, &[], &placements, &HistoryMarks::new(), WINDOWS);

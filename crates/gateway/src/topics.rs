@@ -16,7 +16,7 @@ fn topic(record: TopicRecord, last_active_ms: Option<i64>) -> Topic {
         name: record.name,
         parent: record.parent.map(TopicId::new),
         last_active_ms,
-        created_ms: record.created_at.timestamp_millis(),
+        updated_ms: record.updated_at.timestamp_millis(),
         closed_ms: record.closed_at.map(|at| at.timestamp_millis()),
     }
 }
