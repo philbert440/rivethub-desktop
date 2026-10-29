@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gateway::{Endpoint, Gateway, GatewayError, Identity};
-use model::HarnessId;
 use model::agents::{Agent, Roster};
 use model::harness::HarnessOffer;
 use model::prefs::Preferences;
@@ -25,6 +24,7 @@ use model::preview::Previews;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
 use model::session::{Described, SessionSummary};
+use model::{HarnessId, TopicId};
 use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 
@@ -364,17 +364,22 @@ impl Hub {
         .await
     }
 
-    /// Starts a harness on `node`, or on this client's own node when it is `None`.
+    /// Starts a harness on `node`, or on this client's own node when it is `None`, in `topic` and
+    /// working in `cwd` when given.
     pub async fn start_session(
         &self,
         node: Option<String>,
         harness: HarnessId,
         model: Option<String>,
+        topic: Option<TopicId>,
+        cwd: Option<String>,
     ) -> Result<SessionSummary, GatewayError> {
         let hub = self.clone();
         self.on_runtime(async move {
             let gateway = hub.gateway_for(node.as_deref()).await?;
-            let mut summary = gateway.start_session(&harness, model.as_deref()).await?;
+            let mut summary = gateway
+                .start_session(&harness, model.as_deref(), topic.as_ref(), cwd.as_deref())
+                .await?;
             summary.node = node;
             Ok(summary)
         })

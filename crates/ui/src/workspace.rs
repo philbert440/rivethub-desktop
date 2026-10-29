@@ -23,7 +23,8 @@ use model::preview::Previews;
 use model::session::SessionSummary;
 use model::shelf::Shelf;
 use model::topics::{
-    Activity, Atlas, Board, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows, in_history,
+    Activity, Atlas, Board, Directory, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows,
+    in_history,
 };
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
@@ -886,10 +887,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.failed = None;
+        let (topic, node, cwd) = self.start_place(&launch, node);
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let started = hub.start_session(node, harness, model).await;
+            let started = hub.start_session(node, harness, model, topic, cwd).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| this.started(started, launch, window, cx))
                     .ok();
@@ -897,6 +899,27 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Where a session launched into a topic starts: filed in the topic, so rh hands it the topic's
+    /// startup memory, and in the topic's working directory (its own or the nearest above it), on
+    /// that directory's node when the directory is local to one.
+    fn start_place(
+        &self,
+        launch: &Launch,
+        node: Option<String>,
+    ) -> (Option<TopicId>, Option<String>, Option<String>) {
+        let Launch::In(topic) = launch else {
+            return (None, node, None);
+        };
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        match atlas.directory(topic) {
+            Some(Directory::Local { node, path }) => {
+                (Some(topic.clone()), Some(node.clone()), Some(path.clone()))
+            }
+            Some(Directory::Shared { path }) => (Some(topic.clone()), node, Some(path.clone())),
+            None => (Some(topic.clone()), node, None),
+        }
     }
 
     fn start_with(

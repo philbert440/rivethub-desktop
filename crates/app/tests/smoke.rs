@@ -38,7 +38,7 @@ fn endpoint() -> Endpoint {
 async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub
-        .start_session(None, HarnessId::new("claude-code"), None)
+        .start_session(None, HarnessId::new("claude-code"), None, None, None)
         .await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
@@ -70,7 +70,7 @@ async fn a_turn_streams_back_into_the_session_view() -> Result<(), Box<dyn std::
 async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub
-        .start_session(None, HarnessId::new("claude-code"), None)
+        .start_session(None, HarnessId::new("claude-code"), None, None, None)
         .await?;
     let terminal = hub.open_terminal(
         &summary,
@@ -118,7 +118,7 @@ async fn a_session_terminal_draws_the_harness_tui() -> Result<(), Box<dyn std::e
 async fn a_message_sent_mid_turn_waits_in_the_queue() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub
-        .start_session(None, HarnessId::new("claude-code"), None)
+        .start_session(None, HarnessId::new("claude-code"), None, None, None)
         .await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();
@@ -229,7 +229,7 @@ async fn the_workspace_feed_notices_a_new_turn() -> Result<(), Box<dyn std::erro
     let mut changes = feed.changes();
     tokio::time::timeout(Duration::from_secs(10), changes.changed()).await??;
     let summary = hub
-        .start_session(None, HarnessId::new("claude-code"), None)
+        .start_session(None, HarnessId::new("claude-code"), None, None, None)
         .await?;
     let session = hub.open_session(&summary);
     session.send(Prompt::new("Reply with exactly the word: noticed"));
@@ -284,7 +284,7 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
 async fn a_command_tool_call_arrives_typed_with_its_output() -> Result<(), Box<dyn std::error::Error>> {
     let hub = hub()?;
     let summary = hub
-        .start_session(None, HarnessId::new("claude-code"), None)
+        .start_session(None, HarnessId::new("claude-code"), None, None, None)
         .await?;
     let session = hub.open_session(&summary);
     let mut revisions = session.revisions();

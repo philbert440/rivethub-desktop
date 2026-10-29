@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use model::prompt::{Attachment, Prompt};
-use model::{HarnessId, SessionId, session::SessionSummary};
+use model::{HarnessId, SessionId, TopicId, session::SessionSummary};
 use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +66,10 @@ struct CreateSession<'a> {
     agent_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    topic_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
 }
 
 impl Gateway {
@@ -161,15 +165,21 @@ impl Gateway {
         Ok(translate::hits(found))
     }
 
+    /// Starts a harness, in `topic` when there is one (rh files the session there and hands it the
+    /// topic's startup memory) and working in `cwd` when given.
     pub async fn start_session(
         &self,
         harness: &HarnessId,
         model: Option<&str>,
+        topic: Option<&TopicId>,
+        cwd: Option<&str>,
     ) -> Result<SessionSummary, GatewayError> {
         self.create_session(CreateSession {
             harness: Some(harness.as_str()),
             agent_id: None,
             model,
+            topic_id: topic.map(TopicId::as_str),
+            cwd,
         })
         .await
     }
@@ -179,6 +189,8 @@ impl Gateway {
             harness: None,
             agent_id: Some(agent_id),
             model: None,
+            topic_id: None,
+            cwd: None,
         })
         .await
     }

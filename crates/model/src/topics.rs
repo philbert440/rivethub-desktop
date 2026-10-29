@@ -167,6 +167,13 @@ impl<'a> Atlas<'a> {
         lineage
     }
 
+    /// Where sessions in the topic work: its own directory, else the nearest one above it.
+    pub fn directory(&self, topic: &'a TopicId) -> Option<&'a Directory> {
+        self.lineage(topic)
+            .into_iter()
+            .find_map(|id| self.topics.get(id).and_then(|known| known.directory.as_ref()))
+    }
+
     /// How many levels the topic's subtree spans, the topic itself being one.
     pub fn height(&self, topic: &TopicId) -> usize {
         self.height_below(topic, MAX_DEPTH)
@@ -515,6 +522,30 @@ mod tests {
         assert_eq!(natives(&board.recent[0].sessions), ["lead", "live"]);
         assert_eq!(board.recent[0].history, 1);
         assert_eq!(natives(&board.uncategorized), ["loose"]);
+    }
+
+    #[test]
+    fn a_subtopic_works_in_its_own_directory_or_the_nearest_one_above() {
+        let mut root = topic("root", None);
+        root.directory = Some(Directory::Shared {
+            path: "/shared/root".into(),
+        });
+        let mut own = topic("own", Some("root"));
+        own.directory = Some(Directory::Local {
+            node: "ct115".into(),
+            path: "/work/own".into(),
+        });
+        let topics = [root, own, topic("plain", Some("root")), topic("loose", None)];
+        let placements = Placements::new();
+        let atlas = Atlas::new(&topics, &[], &placements);
+        let path = |index: usize| match atlas.directory(&topics[index].id) {
+            Some(Directory::Local { path, .. } | Directory::Shared { path }) => Some(path.as_str()),
+            None => None,
+        };
+        assert_eq!(
+            [path(1), path(2), path(3)],
+            [Some("/work/own"), Some("/shared/root"), None]
+        );
     }
 
     #[test]
