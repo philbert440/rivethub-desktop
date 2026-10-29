@@ -247,6 +247,9 @@ impl SessionView {
             }
             SessionEvent::AssistantText(text) => {
                 let turn = self.live_turn();
+                if !turn.ends_with_text && !turn.tools.is_empty() && !turn.text.is_empty() {
+                    turn.text.push_str("\n\n");
+                }
                 turn.text.push_str(&text);
                 turn.ends_with_text = true;
             }
@@ -255,7 +258,9 @@ impl SessionView {
                 if let ToolInput::Todos(todos) = &input {
                     self.plan.revise(todos);
                 }
-                self.live_turn().tools.push(ToolCall {
+                let turn = self.live_turn();
+                turn.ends_with_text = false;
+                turn.tools.push(ToolCall {
                     id: Some(id),
                     name,
                     state: ToolState::Running,
@@ -525,6 +530,22 @@ mod tests {
         });
         assert_eq!(reopened.plan().done(), 1);
         assert!(reopened.plan().finished());
+    }
+
+    #[test]
+    fn text_after_tools_starts_a_paragraph_as_the_transcript_joins_it() {
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::AssistantText("Starting.".into()));
+        view.apply(SessionEvent::ToolStarted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            input: ToolInput::Unknown,
+        });
+        view.apply(SessionEvent::AssistantText("One.".into()));
+        assert_eq!(
+            view.live().map(|turn| turn.text.as_str()),
+            Some("Starting.\n\nOne.")
+        );
     }
 
     #[test]
