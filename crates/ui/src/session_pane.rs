@@ -854,7 +854,7 @@ impl SessionPane {
             .child(
                 footer
                     .children(self.questions.read(cx).waiting().then(|| self.questions.clone()))
-                    .children(self.queue_dock())
+                    .children(self.queue_dock(cx))
                     .child(
                         self.approval_card(&view)
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
@@ -1047,7 +1047,26 @@ impl SessionPane {
         )
     }
 
-    fn queue_dock(&self) -> Option<AnyElement> {
+    /// Puts a queued prompt back in the composer, after any draft, with its images.
+    fn edit_queued(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.handle.take_queued(index) else {
+            return;
+        };
+        self.composer.update(cx, |composer, cx| {
+            let draft = composer.text().trim_end().to_owned();
+            let text = if draft.is_empty() {
+                prompt.text.clone()
+            } else {
+                format!("{draft}\n{}", prompt.text)
+            };
+            composer.set_text(&text, cx);
+        });
+        self.attachments.extend(prompt.attachments);
+        window.focus(&self.composer.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn queue_dock(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let queued = self.handle.queued();
         if queued.is_empty() {
             return None;
@@ -1087,6 +1106,15 @@ impl SessionPane {
                         )
                         .children(
                             images.map(|images| div().text_xs().text_color(Theme::ink_dim()).child(images)),
+                        )
+                        .child(
+                            div()
+                                .id(("edit-queued", index))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.edit_queued(index, window, cx);
+                                }))
+                                .child(crate::brand::icon("icons/rename.svg", 13., Theme::ink_dim())),
                         )
                         .child(
                             div()

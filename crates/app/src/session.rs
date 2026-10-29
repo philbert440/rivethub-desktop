@@ -67,6 +67,11 @@ impl SessionHandle {
         let _ = self.commands.try_send(Command::Unqueue(index));
     }
 
+    /// Takes a queued prompt back out of the queue, to change before it goes.
+    pub fn take_queued(&self, index: usize) -> Option<Prompt> {
+        self.queue.write().remove(index)
+    }
+
     pub fn decide(&self, request_id: String, decision: Decision) {
         let _ = self.commands.try_send(Command::Decide { request_id, decision });
     }
