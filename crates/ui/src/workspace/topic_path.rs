@@ -3,7 +3,7 @@ use gpui::{
     prelude::*, px,
 };
 use model::TopicId;
-use model::topics::{Atlas, Topic};
+use model::topics::{Atlas, MAX_LEVELS, Topic};
 
 use super::Workspace;
 use super::topic_edit::{DraggedTopic, Pick};
@@ -20,6 +20,7 @@ impl Workspace {
         let mut path = atlas.lineage(step);
         path.reverse();
         let last = path.len().saturating_sub(1);
+        let deeper = path.len() < MAX_LEVELS;
         let mut steps = div().flex().flex_wrap().items_center().gap_1().text_sm();
         for (index, id) in path.into_iter().enumerate() {
             if index > 0 {
@@ -49,34 +50,43 @@ impl Workspace {
             .flex_col()
             .gap_3()
             .child(steps)
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .children(pills)
-                    .child(
-                        div()
-                            .id("add-subtopic")
-                            .h(px(34.))
-                            .px_4()
-                            .rounded(px(17.))
-                            .border_1()
-                            .border_dashed()
-                            .border_color(Theme::line())
-                            .flex()
-                            .items_center()
-                            .cursor_pointer()
-                            .text_sm()
-                            .text_color(Theme::ink_dim())
-                            .hover(|pill| pill.bg(Theme::card()))
-                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                                this.choose(Pick::Child(parent.clone()), event.position(), window, cx);
-                            }))
-                            .child("+ Subtopic"),
-                    ),
-            )
+            .when(deeper || !pills.is_empty(), |path| {
+                path.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .children(pills)
+                        .when(deeper, |row| {
+                            row.child(
+                                div()
+                                    .id("add-subtopic")
+                                    .h(px(34.))
+                                    .px_4()
+                                    .rounded(px(17.))
+                                    .border_1()
+                                    .border_dashed()
+                                    .border_color(Theme::line())
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(Theme::ink_dim())
+                                    .hover(|pill| pill.bg(Theme::card()))
+                                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                        this.choose(
+                                            Pick::Child(parent.clone()),
+                                            event.position(),
+                                            window,
+                                            cx,
+                                        );
+                                    }))
+                                    .child("+ Subtopic"),
+                            )
+                        }),
+                )
+            })
             .into_any_element()
     }
 
