@@ -1,22 +1,67 @@
-//! The card above the composer while an agent waits on an ask-user question. Picking an answer sends
-//! it as the session's next turn, as the old app did; typing in the composer instead answers in your
-//! own words.
+//! The card above the composer while an agent waits on an ask-user question. It steps through the
+//! questions one at a time; each takes a pick, several picks, or an answer in your own words, and
+//! the answers go to the agent as the session's next turn.
 
 use app::SessionHandle;
 use gpui::{
-    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
-    div, prelude::*, px,
+    AnyElement, ClickEvent, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Task, Window, div, prelude::*, px,
 };
 use model::prompt::Prompt;
 use model::tools::{Question, answer};
 
+use crate::input::{Submitted, TextInput};
 use crate::theme::Theme;
 
 struct Asked {
     tool: Option<String>,
     questions: Vec<Question>,
     picked: Vec<Vec<String>>,
+    written: Vec<Entity<TextInput>>,
+    at: usize,
     answered: bool,
+    _written: Vec<Subscription>,
+}
+
+impl Asked {
+    fn lone_pick(&self) -> bool {
+        matches!(self.questions.as_slice(), [question] if !question.multi_select)
+    }
+
+    fn last(&self) -> bool {
+        self.at + 1 >= self.questions.len()
+    }
+
+    /// Each question's answer: the options picked, then anything written in your own words.
+    fn answers(&self, cx: &Context<QuestionCard>) -> Vec<Vec<String>> {
+        self.picked
+            .iter()
+            .zip(&self.written)
+            .map(|(picked, written)| {
+                let own = written.read(cx).text().trim().to_owned();
+                picked
+                    .iter()
+                    .cloned()
+                    .chain((!own.is_empty()).then_some(own))
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+/// The options an agent recommends, picked before you choose: the first for a one-pick question,
+/// all of them for a pick-several one.
+fn recommended(question: &Question) -> Vec<String> {
+    let mut marked = question
+        .options
+        .iter()
+        .filter(|option| option.recommended())
+        .map(|option| option.label.clone());
+    if question.multi_select {
+        marked.collect()
+    } else {
+        marked.next().into_iter().collect()
+    }
 }
 
 pub struct QuestionCard {
@@ -48,7 +93,7 @@ impl QuestionCard {
         self.asked.as_ref().is_some_and(|asked| !asked.answered)
     }
 
-    /// Follows the session's open question, keeping your picks while it stays the same one.
+    /// Follows the session's open question, keeping your answers while it stays the same one.
     fn sync(&mut self, cx: &mut Context<Self>) {
         let shared = self.handle.view();
         let view = shared.read();
@@ -61,105 +106,219 @@ impl QuestionCard {
         if same {
             return;
         }
-        self.asked = open.map(|(tool, questions)| Asked {
-            tool: tool.id.clone(),
-            questions: questions.to_vec(),
-            picked: vec![Vec::new(); questions.len()],
-            answered: false,
+        self.asked = open.map(|(tool, questions)| {
+            let written: Vec<Entity<TextInput>> = questions
+                .iter()
+                .map(|_| cx.new(|cx| TextInput::new("Or answer in your own words", cx)))
+                .collect();
+            let subscriptions = written
+                .iter()
+                .flat_map(|input| {
+                    [
+                        cx.observe(input, |_, _, cx| cx.notify()),
+                        cx.subscribe(input, |this, input, Submitted(text), cx| {
+                            input.update(cx, |input, cx| input.set_text(text, cx));
+                            this.next(cx);
+                        }),
+                    ]
+                })
+                .collect();
+            Asked {
+                tool: tool.id.clone(),
+                questions: questions.to_vec(),
+                picked: questions.iter().map(recommended).collect(),
+                written,
+                at: 0,
+                answered: false,
+                _written: subscriptions,
+            }
         });
         cx.notify();
     }
 
     fn send(&mut self, cx: &mut Context<Self>) {
-        let Some(asked) = self.asked.as_mut().filter(|asked| !asked.answered) else {
+        let Some(asked) = self.asked.as_ref().filter(|asked| !asked.answered) else {
             return;
         };
-        let text = answer(&asked.questions, &asked.picked);
+        let text = answer(&asked.questions, &asked.answers(cx));
         if text.is_empty() {
             return;
         }
-        asked.answered = true;
+        if let Some(asked) = self.asked.as_mut() {
+            asked.answered = true;
+        }
         self.handle.answer(Prompt::new(text));
         cx.notify();
     }
 
-    fn pick(&mut self, question: usize, label: &str, cx: &mut Context<Self>) {
+    /// On to the next question, or the answers go once the last is reached.
+    fn next(&mut self, cx: &mut Context<Self>) {
         let Some(asked) = self.asked.as_mut().filter(|asked| !asked.answered) else {
             return;
         };
-        let (Some(asked_question), Some(picked)) =
-            (asked.questions.get(question), asked.picked.get_mut(question))
-        else {
-            return;
-        };
-        let multi = asked_question.multi_select;
-        let one_click = asked.questions.len() == 1 && !multi;
-        if let Some(at) = picked.iter().position(|chosen| chosen == label) {
-            picked.remove(at);
-        } else {
-            if !multi {
-                picked.clear();
-            }
-            picked.push(label.to_owned());
-        }
-        if one_click {
+        if asked.last() {
             self.send(cx);
         } else {
+            asked.at += 1;
             cx.notify();
         }
     }
 
-    fn question(asked: &Asked, index: usize, question: &Question, cx: &mut Context<Self>) -> AnyElement {
-        let picked = asked.picked.get(index);
-        let options = question.options.iter().enumerate().map(|(option, choice)| {
-            let selected = picked.is_some_and(|picked| picked.contains(&choice.label));
-            let label = choice.label.clone();
-            div()
-                .id(("ask-option", option))
-                .px_3()
-                .py(px(6.))
-                .rounded(px(12.))
-                .border_1()
-                .cursor_pointer()
-                .flex()
-                .flex_col()
-                .map(|row| {
-                    if selected {
-                        row.bg(Theme::selected())
-                            .border_color(Theme::accent())
-                            .text_color(Theme::on_selected())
-                    } else {
-                        row.border_color(Theme::line())
-                            .text_color(Theme::ink())
-                            .hover(|row| row.bg(Theme::raised()))
-                    }
-                })
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.pick(index, &label, cx)))
-                .child(choice.label.clone())
-                .children(
-                    choice
-                        .description
-                        .clone()
-                        .map(|description| div().text_xs().text_color(Theme::ink_dim()).child(description)),
-                )
-        });
-        let title = question.question.clone().or_else(|| question.header.clone());
+    fn back(&mut self, cx: &mut Context<Self>) {
+        if let Some(asked) = self.asked.as_mut() {
+            asked.at = asked.at.saturating_sub(1);
+            cx.notify();
+        }
+    }
+
+    /// Leaves the shown question unanswered and moves on.
+    fn skip(&mut self, cx: &mut Context<Self>) {
+        let Some(asked) = self.asked.as_mut().filter(|asked| !asked.answered) else {
+            return;
+        };
+        if let Some(picked) = asked.picked.get_mut(asked.at) {
+            picked.clear();
+        }
+        if let Some(written) = asked.written.get(asked.at).cloned() {
+            written.update(cx, |input, cx| input.set_text("", cx));
+        }
+        self.next(cx);
+    }
+
+    /// A pick on a one-pick question answers it: a lone question goes at once, and one of several
+    /// moves on to the next.
+    fn pick(&mut self, label: &str, cx: &mut Context<Self>) {
+        let Some(asked) = self.asked.as_mut().filter(|asked| !asked.answered) else {
+            return;
+        };
+        let at = asked.at;
+        let (Some(question), Some(picked)) = (asked.questions.get(at), asked.picked.get_mut(at)) else {
+            return;
+        };
+        let multi = question.multi_select;
+        if let Some(chosen) = picked.iter().position(|chosen| chosen == label) {
+            picked.remove(chosen);
+            cx.notify();
+            return;
+        }
+        if !multi {
+            picked.clear();
+        }
+        picked.push(label.to_owned());
+        if multi {
+            cx.notify();
+        } else if asked.lone_pick() {
+            self.send(cx);
+        } else if asked.last() {
+            cx.notify();
+        } else {
+            self.next(cx);
+        }
+    }
+
+    fn option(
+        index: usize,
+        label: &str,
+        description: Option<&str>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let picked = label.to_owned();
         div()
-            .id(("ask-question", index))
+            .id(("ask-option", index))
+            .px_3()
+            .py(px(6.))
+            .rounded(px(12.))
+            .border_1()
+            .cursor_pointer()
             .flex()
             .flex_col()
-            .gap(px(6.))
-            .children(title.map(|title| div().text_color(Theme::ink()).child(title)))
-            .when(question.multi_select, |block| {
-                block.child(
-                    div()
-                        .text_xs()
-                        .text_color(Theme::ink_dim())
-                        .child("Select all that apply"),
+            .map(|row| {
+                if selected {
+                    row.bg(Theme::selected())
+                        .border_color(Theme::accent())
+                        .text_color(Theme::on_selected())
+                } else {
+                    row.border_color(Theme::line())
+                        .text_color(Theme::ink())
+                        .hover(|row| row.bg(Theme::raised()))
+                }
+            })
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.pick(&picked, cx)))
+            .child(label.to_owned())
+            .children(description.map(|description| {
+                div()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(description.to_owned())
+            }))
+            .into_any_element()
+    }
+
+    fn link(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .cursor_pointer()
+            .text_sm()
+            .text_color(Theme::ink_dim())
+            .hover(|link| link.text_color(Theme::ink()))
+            .child(label)
+    }
+
+    fn footer(asked: &Asked, ready: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let label = if asked.last() {
+            if asked.questions.len() == 1 {
+                "Send answer"
+            } else {
+                "Send answers"
+            }
+        } else {
+            "Next"
+        };
+        let shown = !asked.lone_pick() || ready;
+        div()
+            .flex()
+            .items_center()
+            .gap_4()
+            .when(asked.at > 0, |row| {
+                row.child(
+                    Self::link("ask-back", "Back")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.back(cx))),
                 )
             })
-            .children(options)
-            .into_any_element()
+            .child(div().flex_1())
+            .when(asked.questions.len() > 1, |row| {
+                row.child(
+                    Self::link("ask-skip", "Skip")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skip(cx))),
+                )
+            })
+            .when(shown, |row| {
+                row.child(
+                    div()
+                        .id("ask-next")
+                        .h(px(34.))
+                        .px_4()
+                        .rounded(px(17.))
+                        .flex()
+                        .items_center()
+                        .map(|button| {
+                            if ready || !asked.last() {
+                                button
+                                    .cursor_pointer()
+                                    .bg(Theme::accent())
+                                    .text_color(Theme::on_accent())
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.next(cx)))
+                            } else {
+                                button
+                                    .border_1()
+                                    .border_color(Theme::line())
+                                    .text_color(Theme::ink_dim())
+                            }
+                        })
+                        .child(label),
+                )
+            })
     }
 }
 
@@ -168,20 +327,30 @@ impl Render for QuestionCard {
         let Some(asked) = self.asked.as_ref().filter(|asked| !asked.answered) else {
             return div();
         };
-        let one_click =
-            asked.questions.len() == 1 && asked.questions.iter().all(|question| !question.multi_select);
-        let ready = asked.picked.iter().any(|picked| !picked.is_empty());
-        let questions: Vec<AnyElement> = asked
-            .questions
+        let (Some(question), Some(picked), Some(written)) = (
+            asked.questions.get(asked.at),
+            asked.picked.get(asked.at),
+            asked.written.get(asked.at).cloned(),
+        ) else {
+            return div();
+        };
+        let ready = asked.answers(cx).iter().any(|answer| !answer.is_empty());
+        let options: Vec<AnyElement> = question
+            .options
             .iter()
             .enumerate()
-            .map(|(index, question)| Self::question(asked, index, question, cx))
+            .map(|(index, option)| {
+                let selected = picked.contains(&option.label);
+                Self::option(index, &option.label, option.description.as_deref(), selected, cx)
+            })
             .collect();
         let heading: SharedString = if asked.questions.len() == 1 {
             "Waiting for your answer".into()
         } else {
-            format!("Waiting for {} answers", asked.questions.len()).into()
+            format!("Question {} of {}", asked.at + 1, asked.questions.len()).into()
         };
+        let title = question.question.clone().or_else(|| question.header.clone());
+        let footer = Self::footer(asked, ready, cx);
         div()
             .w_full()
             .p_5()
@@ -193,41 +362,33 @@ impl Render for QuestionCard {
             .child(div().text_xs().text_color(Theme::accent()).child(heading))
             .child(
                 div()
-                    .id("ask-questions")
+                    .id(("ask-question", asked.at))
                     .max_h(window.viewport_size().height * 0.5)
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap_3()
-                    .children(questions),
-            )
-            .when(!one_click, |card| {
-                card.child(
-                    div().flex().justify_end().child(
+                    .gap(px(6.))
+                    .children(title.map(|title| div().text_color(Theme::ink()).child(title)))
+                    .when(question.multi_select, |block| {
+                        block.child(
+                            div()
+                                .text_xs()
+                                .text_color(Theme::ink_dim())
+                                .child("Select all that apply"),
+                        )
+                    })
+                    .children(options)
+                    .child(
                         div()
-                            .id("ask-send")
-                            .h(px(34.))
-                            .px_4()
-                            .rounded(px(17.))
-                            .flex()
-                            .items_center()
-                            .map(|button| {
-                                if ready {
-                                    button
-                                        .cursor_pointer()
-                                        .bg(Theme::accent())
-                                        .text_color(Theme::on_accent())
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.send(cx)))
-                                } else {
-                                    button
-                                        .border_1()
-                                        .border_color(Theme::line())
-                                        .text_color(Theme::ink_dim())
-                                }
-                            })
-                            .child("Send answers"),
+                            .mt_1()
+                            .px_3()
+                            .py(px(8.))
+                            .rounded(px(12.))
+                            .border_1()
+                            .border_color(Theme::line())
+                            .child(written),
                     ),
-                )
-            })
+            )
+            .child(footer)
     }
 }

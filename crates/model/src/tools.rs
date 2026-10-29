@@ -47,6 +47,13 @@ pub struct QuestionOption {
     pub description: Option<String>,
 }
 
+impl QuestionOption {
+    /// Whether the agent suggests this option, as it marks one by ending its label "(Recommended)".
+    pub fn recommended(&self) -> bool {
+        self.label.trim_end().ends_with("(Recommended)")
+    }
+}
+
 /// The next turn that answers `questions` with the labels picked for each, in order. A lone question
 /// is answered with its labels; several are each prefixed with their header so the agent can match
 /// them up, and unanswered ones are left out.
@@ -265,6 +272,16 @@ mod tests {
             ),
             "Auth: JWT\nCache: Redis"
         );
+    }
+
+    #[test]
+    fn an_option_is_recommended_only_by_its_closing_mark() {
+        let option = |label: &str| QuestionOption {
+            label: label.to_owned(),
+            description: None,
+        };
+        assert!(option("Postgres (Recommended) ").recommended());
+        assert!(!option("(Recommended) is not Postgres").recommended());
     }
 
     fn line(change: Change, text: &str) -> DiffLine {
