@@ -9,7 +9,7 @@ use model::wiki::{Page, loose, readable, section, without_decisions};
 use super::{MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
 use crate::menu::{Menu, MenuEvent, OpenMenu};
-use crate::text::{ago, now_ms};
+use crate::text::{ago, ago_phrase, now_ms};
 use crate::theme::Theme;
 
 const LIST_WIDTH: f32 = 300.;
@@ -389,7 +389,7 @@ impl MemoryPage {
                         .child(
                             div()
                                 .text_color(Theme::ink_dim())
-                                .child(format!("updated {} ago", ago(now_ms(), read.page.updated_ms))),
+                                .child(format!("updated {}", ago_phrase(now_ms(), read.page.updated_ms))),
                         ),
                 )
                 .children(self.sessions_panel(cx))

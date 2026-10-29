@@ -71,6 +71,15 @@ pub fn ago(now_ms: i64, at_ms: i64) -> String {
     }
 }
 
+/// `ago` for a sentence, such as "just now" or "5m ago".
+pub fn ago_phrase(now_ms: i64, at_ms: i64) -> String {
+    if now_ms - at_ms < 60_000 {
+        "just now".to_owned()
+    } else {
+        format!("{} ago", ago(now_ms, at_ms))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::one_line;

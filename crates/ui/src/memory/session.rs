@@ -12,7 +12,7 @@ use model::session::SessionSummary;
 use super::sessions::link_button;
 use super::{Focus, MemoryEvent, MemoryPage};
 use crate::markdown_view;
-use crate::text::{ago, clock, now_ms};
+use crate::text::{ago_phrase, clock, now_ms};
 use crate::theme::Theme;
 
 const COLUMN: f32 = 860.;
@@ -56,12 +56,12 @@ fn vector_ink(vector: Vector) -> Hsla {
     }
 }
 
-/// The non-zero counts, such as "30 from you · 50 tool calls".
-fn counts(parts: &[(u32, &str)]) -> String {
+/// The non-zero counts, each with its one-or-many label, such as "1 reply · 50 tool calls".
+fn counts(parts: &[(u32, &str, &str)]) -> String {
     parts
         .iter()
-        .filter(|(count, _)| *count > 0)
-        .map(|(count, label)| format!("{count} {label}"))
+        .filter(|(count, ..)| *count > 0)
+        .map(|(count, one, many)| format!("{count} {}", if *count == 1 { one } else { many }))
         .collect::<Vec<_>>()
         .join(" · ")
 }
@@ -236,7 +236,7 @@ impl MemoryPage {
                                 div()
                                     .text_xs()
                                     .text_color(Theme::ink_dim())
-                                    .child(format!("active {} ago", ago(now_ms(), session.updated_at_ms))),
+                                    .child(format!("active {}", ago_phrase(now_ms(), session.updated_at_ms))),
                             ),
                     ),
             )
@@ -272,12 +272,13 @@ impl MemoryPage {
         let embedded_summaries = u32::try_from(memory.embedded_summaries()).unwrap_or(u32::MAX);
         let kinds = |kind| u32::try_from(memory.summaries_of(kind)).unwrap_or(u32::MAX);
         let mut embedding = counts(&[
-            (tally.pending, "messages waiting"),
-            (tally.failed, "messages failed"),
-            (tally.skipped, "not embeddable"),
+            (tally.pending, "message waiting", "messages waiting"),
+            (tally.failed, "message failed", "messages failed"),
+            (tally.skipped, "not embeddable", "not embeddable"),
         ]);
         if summaries > 0 {
-            let summed = format!("{embedded_summaries} of {summaries} summaries");
+            let noun = if summaries == 1 { "summary" } else { "summaries" };
+            let summed = format!("{embedded_summaries} of {summaries} {noun}");
             embedding = if embedding.is_empty() {
                 summed
             } else {
@@ -291,10 +292,10 @@ impl MemoryPage {
                 "Messages",
                 tally.total.to_string(),
                 counts(&[
-                    (tally.user, "from you"),
-                    (tally.assistant, "replies"),
-                    (tally.tool, "tool calls"),
-                    (tally.system, "system"),
+                    (tally.user, "from you", "from you"),
+                    (tally.assistant, "reply", "replies"),
+                    (tally.tool, "tool call", "tool calls"),
+                    (tally.system, "system", "system"),
                 ]),
             ))
             .child(Self::tile(
@@ -306,9 +307,9 @@ impl MemoryPage {
                 "Summaries",
                 summaries.to_string(),
                 counts(&[
-                    (kinds(SummaryKind::Root), "root"),
-                    (kinds(SummaryKind::Branch), "branches"),
-                    (kinds(SummaryKind::Leaf), "leaves"),
+                    (kinds(SummaryKind::Root), "root", "roots"),
+                    (kinds(SummaryKind::Branch), "branch", "branches"),
+                    (kinds(SummaryKind::Leaf), "leaf", "leaves"),
                 ]),
             ))
     }
@@ -401,12 +402,11 @@ impl MemoryPage {
                     .gap_2()
                     .child(badge(summary.kind.label(), Theme::ink().into()))
                     .child(badge(summary.vector.label(), vector_ink(summary.vector)))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(counts(&[(summary.messages, "messages")])),
-                    )
+                    .child(div().text_xs().text_color(Theme::ink_dim()).child(counts(&[(
+                        summary.messages,
+                        "message",
+                        "messages",
+                    )])))
                     .child(div().flex_1())
                     .child(div().text_xs().text_color(Theme::ink_dim()).child(span(summary))),
             )
