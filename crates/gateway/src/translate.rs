@@ -1,5 +1,6 @@
 use model::{
     HarnessId, NativeSessionId, SessionId,
+    plan::{Plan, Step, StepStatus},
     session::{
         Activity, Approval, ContextUsage, Role, SessionEvent, SessionStatus, SessionSummary, ToolCall,
         ToolState, Turn,
@@ -334,6 +335,22 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     }
 }
 
+fn plan(entries: Vec<wire::harness::PlanEntry>) -> Plan {
+    Plan {
+        steps: entries
+            .into_iter()
+            .map(|entry| Step {
+                content: entry.content,
+                status: match entry.status {
+                    wire::harness::PlanStatus::Pending => StepStatus::Pending,
+                    wire::harness::PlanStatus::InProgress => StepStatus::InProgress,
+                    wire::harness::PlanStatus::Completed => StepStatus::Completed,
+                },
+            })
+            .collect(),
+    }
+}
+
 /// What a turn reports as it ends. rh counts cache reads and writes in its prompt tokens.
 fn reported(raw: &wire::stream::LlmUsage) -> Usage {
     Usage {
@@ -451,6 +468,7 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
             reason,
         }),
         HarnessEvent::ApprovalResolved { request_id, .. } => SessionEvent::ApprovalResolved { request_id },
+        HarnessEvent::Plan { entries, .. } => SessionEvent::Plan(plan(entries)),
         HarnessEvent::TurnComplete { usage, .. } => SessionEvent::TurnComplete(usage.as_ref().map(reported)),
         HarnessEvent::Error { message, .. } => SessionEvent::Error(message),
         HarnessEvent::Transcript {

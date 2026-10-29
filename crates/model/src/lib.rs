@@ -12,6 +12,7 @@ pub mod memory;
 pub mod mesh;
 pub mod nav;
 pub mod notice;
+pub mod plan;
 pub mod prefs;
 pub mod prompt;
 pub mod search;

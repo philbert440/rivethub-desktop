@@ -21,6 +21,7 @@ use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
 
+mod plan;
 mod switch;
 
 use switch::Picker;
@@ -854,6 +855,7 @@ impl SessionPane {
             .child(
                 footer
                     .children(self.questions.read(cx).waiting().then(|| self.questions.clone()))
+                    .children(self.plan_panel(&view, cx))
                     .children(self.queue_dock(cx))
                     .child(
                         self.approval_card(&view)
@@ -921,13 +923,14 @@ impl SessionPane {
         if let Fold::Tool(exchange, step, tool) = fold {
             self.fetch_output(exchange, step, tool, cx);
         }
-        let index = match fold {
+        let row = match fold {
             Fold::Exchange(index)
             | Fold::Group(index, _)
             | Fold::Thought(index, _)
-            | Fold::Tool(index, _, _) => index,
+            | Fold::Tool(index, _, _) => Some(index),
+            Fold::Plan => None,
         };
-        if index < self.turns.item_count() {
+        if let Some(index) = row.filter(|index| *index < self.turns.item_count()) {
             self.turns.splice(index..index + 1, 1);
         }
         cx.notify();

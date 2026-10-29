@@ -1,4 +1,5 @@
 use crate::SessionId;
+use crate::plan::Plan;
 use crate::prompt::{Prompt, SentFile};
 use crate::tools::{Question, ToolInput, ToolOutput};
 use crate::usage::{Pace, Usage};
@@ -195,6 +196,8 @@ pub enum SessionEvent {
     ApprovalResolved {
         request_id: String,
     },
+    /// The agent's to-do list, whole, each time it changes.
+    Plan(Plan),
     /// The turn ended, with the tokens it used when the harness reported them.
     TurnComplete(Option<Usage>),
     Activity(Activity),
@@ -210,6 +213,7 @@ pub struct SessionView {
     activity: Activity,
     error: Option<String>,
     paced: Pace,
+    plan: Plan,
 }
 
 impl SessionView {
@@ -221,6 +225,11 @@ impl SessionView {
     /// How fast the turns streamed here wrote, all told.
     pub fn pace(&self) -> Pace {
         self.paced
+    }
+
+    /// The to-do list the agent last sent while streaming here.
+    pub fn plan(&self) -> &Plan {
+        &self.plan
     }
 
     pub fn apply(&mut self, event: SessionEvent) {
@@ -277,6 +286,7 @@ impl SessionView {
                 }
                 self.activity = Activity::Idle;
             }
+            SessionEvent::Plan(plan) => self.plan = plan,
             SessionEvent::Activity(activity) => self.activity = activity,
             SessionEvent::Error(message) => self.error = Some(message),
         }

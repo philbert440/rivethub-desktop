@@ -67,6 +67,8 @@ pub enum Fold {
     Group(usize, usize),
     Thought(usize, usize),
     Tool(usize, usize, usize),
+    /// The agent's to-do list above the composer.
+    Plan,
 }
 
 #[derive(Debug, Clone, Default)]
