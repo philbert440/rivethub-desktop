@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use app::Hub;
 use gpui::{
-    Context, Div, Entity, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Window, div, img, prelude::*, px,
+    Context, Div, Entity, Focusable, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Window, div, prelude::*, px,
 };
 use model::notice::NoticeKind;
 use model::{Page, SessionId};
@@ -11,11 +11,12 @@ use model::{Page, SessionId};
 use crate::memory::{MemoryEvent, MemoryPage};
 use crate::settings::SettingsPage;
 use crate::text::one_line;
+use crate::tip::Tip;
 use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
 use crate::{brand, theme::Theme};
 
-const OPEN_WIDTH: f32 = 208.;
-const RAIL_WIDTH: f32 = 56.;
+const OPEN_WIDTH: f32 = 224.;
+const RAIL_WIDTH: f32 = 48.;
 
 /// The window's root: the left sidebar and whichever page it has selected.
 pub struct Shell {
@@ -169,19 +170,19 @@ impl Shell {
         };
         div()
             .id(label)
-            .h(px(44.))
             .flex_none()
             .flex()
             .items_center()
-            .gap_3()
-            .rounded(px(22.))
+            .py(px(8.))
+            .rounded_full()
             .cursor_pointer()
+            .font_weight(FontWeight::MEDIUM)
             .text_color(ink)
             .map(|item| {
                 if self.sidebar_open {
-                    item.px(px(12.))
+                    item.px(px(16.)).gap(px(12.))
                 } else {
-                    item.w(px(44.)).justify_center()
+                    item.justify_center().tooltip(Tip::text(label))
                 }
             })
             .map(|item| {
@@ -194,45 +195,71 @@ impl Shell {
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                 this.show(page, window, cx);
             }))
-            .child(brand::icon(icon, 20., ink))
+            .child(brand::icon(icon, 18., ink))
             .when(self.sidebar_open, |item| item.child(label))
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let open = self.sidebar_open;
-        let mark = div()
+    /// The wordmark open and its `rh` folded down: either one is the sidebar's toggle.
+    fn mark(open: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let (accent, dim) = if open { ("rivet", "hub") } else { ("r", "h") };
+        div()
             .id("toggle-sidebar")
             .flex()
-            .items_center()
-            .gap_2()
             .cursor_pointer()
+            .text_xl()
+            .font_weight(FontWeight::BOLD)
+            .tooltip(Tip::text(if open {
+                "Collapse sidebar"
+            } else {
+                "Expand sidebar"
+            }))
             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                 this.sidebar_open = !this.sidebar_open;
                 cx.notify();
             }))
-            .child(img(brand::rh()).size(px(32.)))
-            .when(open, |mark| {
-                mark.child(div().text_base().text_color(Theme::ink()).child("RivetHub"))
-            });
+            .child(div().text_color(Theme::accent()).child(accent))
+            .child(div().text_color(Theme::ink_dim()).child(dim))
+    }
+
+    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let open = self.sidebar_open;
+        let inset = px(if open { 8. } else { 4. });
         div()
             .w(px(if open { OPEN_WIDTH } else { RAIL_WIDTH }))
             .flex_none()
             .flex()
             .flex_col()
-            .gap_1()
-            .pt_3()
-            .pb_3()
             .bg(Theme::window())
-            .map(|bar| if open { bar.px_3() } else { bar.items_center() })
-            .child(if open {
-                div().flex().items_center().justify_between().pb_3().child(mark)
-            } else {
-                div().flex().flex_col().items_center().gap_2().pb_3().child(mark)
-            })
-            .child(self.nav_item(Page::Workspace, "icons/message-square.svg", "Workspace", cx))
-            .child(self.nav_item(Page::Memory, "icons/library.svg", "Memory", cx))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .py(px(16.))
+                    .map(|head| {
+                        if open {
+                            head.px(px(16.))
+                        } else {
+                            head.justify_center()
+                        }
+                    })
+                    .child(Self::mark(open, cx)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px(inset)
+                    .child(self.nav_item(Page::Workspace, "icons/message-square.svg", "Workspace", cx))
+                    .child(self.nav_item(Page::Memory, "icons/library.svg", "Memory", cx)),
+            )
             .child(div().flex_1())
-            .child(self.nav_item(Page::Settings, "icons/settings.svg", "Settings", cx))
+            .child(div().flex().flex_col().pb_1().px(inset).child(self.nav_item(
+                Page::Settings,
+                "icons/settings.svg",
+                "Settings",
+                cx,
+            )))
     }
 }
 
