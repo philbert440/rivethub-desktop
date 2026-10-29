@@ -8,6 +8,7 @@ use gpui::{
 use model::markdown::Block;
 use model::memory::{SessionMemory, Summary, SummaryKind, Vector};
 use model::session::SessionSummary;
+use model::topics::FiledBy;
 
 use super::sessions::link_button;
 use super::{Focus, MemoryEvent, MemoryPage};
@@ -207,6 +208,28 @@ impl MemoryPage {
                 }))
                 .child(format!("in {}", topic.name))
         });
+        let undo = (topic.is_some() && self.listed.filed_by.get(&session.id) == Some(&FiledBy::Categorizer))
+            .then(|| {
+                let unfiled = session.id.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child("by categorizer ·")
+                    .child(
+                        div()
+                            .id("memory-session-undo")
+                            .cursor_pointer()
+                            .text_color(Theme::accent())
+                            .hover(|link| link.text_color(Theme::ink()))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.unfile(unfiled.clone(), cx);
+                            }))
+                            .child("Undo"),
+                    )
+            });
         div()
             .flex()
             .items_start()
@@ -235,6 +258,7 @@ impl MemoryPage {
                                     .map(|node| badge(node, Theme::ink_dim().into())),
                             )
                             .children(topic)
+                            .children(undo)
                             .child(
                                 div()
                                     .text_xs()
@@ -252,7 +276,24 @@ impl MemoryPage {
             )
     }
 
-    fn tile(label: &'static str, value: String, detail: String) -> impl IntoElement {
+    /// Takes a session the categorizer filed back out of its topic; rh keeps it as a correction.
+    fn unfile(&mut self, session: model::SessionId, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let undone = hub.unplace(session).await;
+            this.update(cx, |this, cx| {
+                match undone {
+                    Ok(()) => cx.emit(MemoryEvent::Refiled),
+                    Err(err) => this.problem = Some(format!("undoing it failed: {err}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn tile(label: &'static str, value: String, detail: String) -> impl IntoElement {
         div()
             .flex_1()
             .min_w_0()

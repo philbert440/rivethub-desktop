@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::TopicId;
 use crate::markdown::Block;
 
-/// A wiki page. A root topic owns one, and its subtopics are sections on it.
+/// A wiki page. A root topic owns one, and its subtopics are sections on it; an entity owns its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub slug: String,
@@ -12,6 +12,18 @@ pub struct Page {
     pub tags: Vec<String>,
     pub updated_ms: i64,
     pub markdown: String,
+    /// What the page says is true now, on its own, for editing.
+    pub current_state: String,
+    pub article: Option<String>,
+    /// When each summary that cited the page was written, where it says.
+    pub cited_ms: Vec<i64>,
+}
+
+/// What a person changes on a page: its current state, its article, or both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageEdit {
+    pub current_state: Option<String>,
+    pub article: Option<String>,
 }
 
 /// A page as the wiki index lists it.

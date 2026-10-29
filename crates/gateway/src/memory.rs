@@ -1,12 +1,12 @@
-use model::memory::{Found, Period, SessionMemory, TagProposal, TermProposal, Verdict};
-use model::wiki::{Listing, Page};
+use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
+use model::wiki::{Listing, Page, PageEdit};
 use model::{SessionId, TopicId};
 use wire::gateway::memory::{
-    MemorySearchResponse, MemorySummaryDagResponse, MemoryTagsDecideRequest, PendingTagListResult,
-    TagDecisionResult, TagEntryPair, TagTaxonomyDecideRequest, TagTaxonomyListResult,
+    MemorySearchResponse, MemoryStatsResponse, MemorySummaryDagResponse, MemoryTagsDecideRequest,
+    PendingTagListResult, TagDecisionResult, TagEntryPair, TagTaxonomyDecideRequest, TagTaxonomyListResult,
 };
 use wire::gateway::topics::TopicPage;
-use wire::gateway::wiki::{WikiPageResponse, WikiTopicList};
+use wire::gateway::wiki::{WikiPageEdit, WikiPageResponse, WikiTopicList};
 
 use crate::{Gateway, GatewayError, translate};
 
@@ -48,6 +48,31 @@ impl Gateway {
         let url = self.api_url(&["api", "wiki", slug])?;
         let page: WikiPageResponse = Self::read_json(self.http.get(url).send().await)?.await?;
         Ok(translate::page(page))
+    }
+
+    /// Replaces what the edit names on a topic or entity page, and answers the page as it is now.
+    pub async fn edit_page(&self, slug: &str, edit: PageEdit) -> Result<Page, GatewayError> {
+        let url = self.api_url(&["api", "wiki", slug])?;
+        let body = WikiPageEdit {
+            current_state: edit.current_state,
+            article: edit.article,
+        };
+        let page: WikiPageResponse = Self::read_json(self.http.put(url).json(&body).send().await)?.await?;
+        Ok(translate::page(page))
+    }
+
+    pub async fn memory_stats(&self) -> Result<Stats, GatewayError> {
+        let url = self.api_url(&["api", "memory", "stats"])?;
+        let stats: MemoryStatsResponse = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(Stats {
+            conversations: stats.conversations,
+            messages: stats.messages,
+            tool_calls: stats.tool_calls,
+            summaries: stats.summaries,
+            embedded_messages: stats.embedded_messages,
+            embed_queue: stats.embed_queue_depth,
+            failed_embeddings: stats.failed_embeddings,
+        })
     }
 
     pub async fn wiki_pages(&self, query: &str) -> Result<Vec<Listing>, GatewayError> {

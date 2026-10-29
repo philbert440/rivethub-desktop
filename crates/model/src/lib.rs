@@ -2,6 +2,7 @@ pub mod agents;
 pub mod attention;
 pub mod chat;
 pub mod decisions;
+pub mod entities;
 pub mod harness;
 pub mod health;
 pub mod history;

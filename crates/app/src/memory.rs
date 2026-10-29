@@ -1,8 +1,8 @@
 use gateway::GatewayError;
-use model::SessionId;
-use model::memory::{Found, Period, SessionMemory, TagProposal, TermProposal, Verdict};
+use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
 use model::topics::Topic;
-use model::wiki::{Listing, Page};
+use model::wiki::{Listing, Page, PageEdit};
+use model::{SessionId, TopicId};
 
 use crate::Hub;
 
@@ -66,6 +66,24 @@ impl Hub {
             })
         })
         .await
+    }
+
+    pub async fn edit_page(&self, slug: String, edit: PageEdit) -> Result<Page, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.edit_page(&slug, edit).await })
+            .await
+    }
+
+    pub async fn memory_stats(&self) -> Result<Stats, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.memory_stats().await }).await
+    }
+
+    /// The page a topic or entity owns, if the wiki has written one.
+    pub async fn topic_page(&self, topic: TopicId) -> Result<Option<Page>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.topic_page(&topic).await })
+            .await
     }
 
     pub async fn wiki_pages(&self, query: String) -> Result<Vec<Listing>, GatewayError> {

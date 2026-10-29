@@ -1,12 +1,15 @@
 use model::decisions::Decision;
+use model::entities::{Catalog, Entity};
 use model::preview::{StartupPart, StartupPreview};
-use model::topics::{Directory, HistoryMarks, Suggestion, Topic};
+use model::topics::{
+    Directory, FiledBy, FiledConversation, FiledSession, HistoryMarks, Suggestion, Topic, TopicFiling,
+};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
-    DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
-    PlacementRequest, SessionHistoryList, SessionHistoryMark, StartupContext, TopicCreateRequest,
-    TopicDecision, TopicDecisionList, TopicDirectory, TopicList, TopicMergeRequest, TopicRecord,
-    TopicSessionList, TopicUpdate,
+    ConversationPlacementReply, DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded,
+    DecisionUpdate, PlacedBy, PlacementReply, PlacementRequest, SessionHistoryList, SessionHistoryMark,
+    StartupContext, TopicCreateRequest, TopicDecision, TopicDecisionList, TopicDirectory, TopicKind,
+    TopicList, TopicMergeRequest, TopicRecord, TopicSessionList, TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -34,6 +37,13 @@ fn listed(list: TopicList) -> Vec<Topic> {
         .collect()
 }
 
+fn filed_by(by: PlacedBy) -> FiledBy {
+    match by {
+        PlacedBy::You => FiledBy::You,
+        PlacedBy::Categorizer => FiledBy::Categorizer,
+    }
+}
+
 impl Gateway {
     pub(crate) fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url, GatewayError> {
         let mut url = reqwest::Url::parse(&self.base_url)
@@ -55,21 +65,82 @@ impl Gateway {
         Ok(listed(Self::read_json(self.http.get(url).send().await)?.await?))
     }
 
-    pub async fn topic_sessions(&self, topic: &TopicId) -> Result<Vec<SessionId>, GatewayError> {
+    pub async fn topic_sessions(&self, topic: &TopicId) -> Result<TopicFiling, GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str(), "sessions"])?;
         let list: TopicSessionList = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(TopicFiling {
+            sessions: list
+                .sessions
+                .into_iter()
+                .map(|placed| FiledSession {
+                    session: translate::session(&placed.placement.session_id),
+                    title: placed.title,
+                    last_active_ms: placed.last_active.map(|at| at.timestamp_millis()),
+                    by: filed_by(placed.placement.by),
+                })
+                .collect(),
+            conversations: list
+                .conversations
+                .into_iter()
+                .map(|filed| FiledConversation {
+                    id: filed.placement.conversation_id,
+                    topic: TopicId::new(filed.placement.topic_id),
+                    title: filed.title,
+                    channel: filed.channel,
+                    last_active_ms: filed.last_active.map(|at| at.timestamp_millis()),
+                    by: filed_by(filed.placement.by),
+                })
+                .collect(),
+        })
+    }
+
+    /// The entity types and every entity filed under them.
+    pub async fn catalog(&self) -> Result<Catalog, GatewayError> {
+        let (types, entities) =
+            futures::future::try_join(self.of_kind("type"), self.of_kind("entity")).await?;
+        Ok(Catalog {
+            types: types.into_iter().map(|(kind, _)| kind).collect(),
+            entities: entities
+                .into_iter()
+                .map(|(topic, aliases)| Entity { topic, aliases })
+                .collect(),
+        })
+    }
+
+    async fn of_kind(&self, kind: &str) -> Result<Vec<(Topic, Vec<String>)>, GatewayError> {
+        let mut url = self.api_url(&["api", "topics"])?;
+        url.query_pairs_mut().append_pair("kind", kind);
+        let list: TopicList = Self::read_json(self.http.get(url).send().await)?.await?;
         Ok(list
-            .sessions
-            .iter()
-            .map(|placed| translate::session(&placed.placement.session_id))
+            .topics
+            .into_iter()
+            .map(|summary| {
+                let aliases = summary.topic.aliases.clone();
+                (topic(summary.topic, None), aliases)
+            })
             .collect())
     }
 
     /// Creates a topic, under `parent` when given. rh's refusals (a name taken, too deep) come back
     /// as `Conflict` carrying rh's own message.
     pub async fn create_topic(&self, name: &str, parent: Option<&TopicId>) -> Result<Topic, GatewayError> {
+        self.create(TopicKind::Work, name, parent).await
+    }
+
+    /// Creates an entity type, under `parent` when given.
+    pub async fn create_type(&self, name: &str, parent: Option<&TopicId>) -> Result<Topic, GatewayError> {
+        self.create(TopicKind::Type, name, parent).await
+    }
+
+    async fn create(
+        &self,
+        kind: TopicKind,
+        name: &str,
+        parent: Option<&TopicId>,
+    ) -> Result<Topic, GatewayError> {
         let url = self.api_url(&["api", "topics"])?;
         let body = TopicCreateRequest {
+            kind,
             name: name.to_owned(),
             aliases: Vec::new(),
             parent: parent.map(|parent| parent.as_str().to_owned()),
@@ -117,8 +188,27 @@ impl Gateway {
         .await
     }
 
-    /// Moves a topic under `parent`, or to the top level when there is none. rh nests one level
-    /// deep, so a subtopic can't take subtopics and a topic with subtopics can't move under another.
+    /// Replaces the other names a topic or entity goes by.
+    pub async fn set_aliases(&self, topic: &TopicId, aliases: Vec<String>) -> Result<(), GatewayError> {
+        self.update_topic(
+            topic,
+            TopicUpdate {
+                aliases: Some(aliases),
+                ..TopicUpdate::default()
+            },
+        )
+        .await
+    }
+
+    /// Takes a conversation back out of its topic.
+    pub async fn unfile_conversation(&self, conversation: &str) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "conversations", conversation, "placement"])?;
+        let _: ConversationPlacementReply = Self::read_json(self.http.delete(url).send().await)?.await?;
+        Ok(())
+    }
+
+    /// Moves a topic under `parent`, or to the top level when there is none, within the four
+    /// levels rh allows; an entity moves only under a type.
     pub async fn move_topic(&self, topic: &TopicId, parent: Option<&TopicId>) -> Result<(), GatewayError> {
         self.update_topic(
             topic,
@@ -281,8 +371,8 @@ impl Gateway {
         }
     }
 
-    /// Deletes a topic; its sessions go back to Uncategorized. rh refuses category topics and topics
-    /// with subtopics, and that refusal comes back as `Conflict` carrying rh's own message.
+    /// Deletes a topic, type or entity; a topic's sessions go back to Uncategorized. rh refuses one
+    /// that still has subtopics, and that refusal comes back as `Conflict` carrying rh's own message.
     pub async fn delete_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str()])?;
         let reply = self.http.delete(url).send().await.map_err(GatewayError::Http)?;

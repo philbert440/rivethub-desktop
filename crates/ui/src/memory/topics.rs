@@ -219,7 +219,7 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    fn row(
+    pub(super) fn row(
         id: (&'static str, usize),
         label: String,
         depth: usize,

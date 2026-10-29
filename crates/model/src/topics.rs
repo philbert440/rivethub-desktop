@@ -42,12 +42,70 @@ pub type Placements = HashMap<SessionId, TopicId>;
 /// When each session was marked as history.
 pub type HistoryMarks = HashMap<SessionId, i64>;
 
+/// Who filed a session or conversation in its topic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FiledBy {
+    You,
+    Categorizer,
+}
+
+/// A conversation filed in a topic that is no harness session, such as a bot chat, a voice call or
+/// an import; it opens in Memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiledConversation {
+    pub id: String,
+    pub topic: TopicId,
+    pub title: Option<String>,
+    pub channel: String,
+    pub last_active_ms: Option<i64>,
+    pub by: FiledBy,
+}
+
+/// A placed session as rh names it, and who filed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiledSession {
+    pub session: SessionId,
+    pub title: Option<String>,
+    pub last_active_ms: Option<i64>,
+    pub by: FiledBy,
+}
+
+impl FiledSession {
+    /// The session as far as rh remembers it, for a session no node lists any more.
+    pub fn summary(&self) -> SessionSummary {
+        SessionSummary {
+            id: self.session.clone(),
+            title: self.title.clone(),
+            status: crate::session::SessionStatus::Idle,
+            model: None,
+            effort: None,
+            cwd: None,
+            updated_at_ms: self.last_active_ms.unwrap_or_default(),
+            parent: None,
+            node: None,
+            blocked: false,
+        }
+    }
+}
+
+/// What rh has filed in one topic: sessions, and conversations that are no harness session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TopicFiling {
+    pub sessions: Vec<FiledSession>,
+    pub conversations: Vec<FiledConversation>,
+}
+
 /// The hub's topics, where its sessions are placed, and which of them are marked as history.
 #[derive(Debug, Clone, Default)]
 pub struct Filing {
     pub topics: Vec<Topic>,
     pub placements: Placements,
     pub marks: HistoryMarks,
+    /// Who filed each placed session.
+    pub filed_by: HashMap<SessionId, FiledBy>,
+    /// The placed sessions as rh remembers them, for those no node lists any more.
+    pub remembered: Vec<SessionSummary>,
+    pub conversations: Vec<FiledConversation>,
 }
 
 /// Marked as history, and not active since: it stays out of its topic's active sessions and out of
@@ -122,6 +180,16 @@ impl<'a> Atlas<'a> {
             sessions: sessions.iter().map(|session| (&session.id, session)).collect(),
             placements,
         }
+    }
+
+    /// Adds the placed sessions rh remembers, for those no node lists any more; a listed session
+    /// keeps its listing.
+    #[must_use]
+    pub fn remembering(mut self, remembered: &'a [SessionSummary]) -> Self {
+        for session in remembered {
+            self.sessions.entry(&session.id).or_insert(session);
+        }
+        self
     }
 
     pub fn topic_of(&self, session: &SessionSummary) -> Option<&'a TopicId> {

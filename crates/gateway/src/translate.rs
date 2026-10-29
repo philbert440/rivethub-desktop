@@ -218,6 +218,13 @@ pub fn page(raw: wire::gateway::wiki::WikiPageResponse) -> model::wiki::Page {
         tags: raw.tags,
         updated_ms: raw.updated_at.timestamp_millis(),
         markdown: raw.markdown,
+        current_state: raw.current_state,
+        article: raw.article,
+        cited_ms: raw
+            .citations
+            .iter()
+            .filter_map(|citation| citation.date.map(|date| date.timestamp_millis()))
+            .collect(),
     }
 }
 
