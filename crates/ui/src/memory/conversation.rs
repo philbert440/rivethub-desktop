@@ -5,12 +5,21 @@ use super::{Focus, MemoryEvent, MemoryPage};
 use crate::text::{ago_phrase, now_ms};
 use crate::theme::Theme;
 
+/// A conversation Memory shows, and whether it is still filed where it was.
+pub(super) struct Remembered {
+    conversation: FiledConversation,
+    filed: bool,
+}
+
 impl MemoryPage {
     /// Shows a filed conversation that is no harness session: what it is and where it's filed.
     pub(super) fn open_conversation(&mut self, conversation: FiledConversation, cx: &mut Context<Self>) {
         self.viewing = None;
         self.problem = None;
-        self.remembering = Some(conversation);
+        self.remembering = Some(Remembered {
+            conversation,
+            filed: true,
+        });
         cx.notify();
     }
 
@@ -22,7 +31,7 @@ impl MemoryPage {
                 match undone {
                     Ok(()) => {
                         if let Some(remembering) = this.remembering.as_mut() {
-                            remembering.by = FiledBy::You;
+                            remembering.filed = false;
                         }
                         this.problem = Some("Taken out of its topic.".into());
                         cx.emit(MemoryEvent::Refiled);
@@ -37,7 +46,7 @@ impl MemoryPage {
     }
 
     pub(super) fn conversation_page(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(conversation) = &self.remembering else {
+        let Some(Remembered { conversation, filed }) = &self.remembering else {
             return div().into_any_element();
         };
         let title = conversation
@@ -49,6 +58,7 @@ impl MemoryPage {
             .listed
             .topics
             .iter()
+            .filter(|_| *filed)
             .find(|known| known.id == conversation.topic)
             .map(|topic| {
                 let focus = topic.id.clone();
@@ -66,7 +76,7 @@ impl MemoryPage {
                     }))
                     .child(format!("in {}", topic.name))
             });
-        let undo = (conversation.by == FiledBy::Categorizer).then(|| {
+        let undo = (*filed && conversation.by == FiledBy::Categorizer).then(|| {
             let id = conversation.id.clone();
             div()
                 .flex()

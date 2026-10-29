@@ -99,6 +99,8 @@ pub struct Workspace {
     filed_by: HashMap<SessionId, FiledBy>,
     /// Placed sessions as rh remembers them, so a topic's History reaches past what nodes list.
     remembered: Vec<SessionSummary>,
+    /// The listed sessions, then the remembered ones no node lists, for the board and topic screen.
+    filed_sessions: Vec<SessionSummary>,
     conversations: Vec<FiledConversation>,
     screen: TopicScreen,
     naming: Option<new_topic::Naming>,
@@ -206,6 +208,7 @@ impl Workspace {
             marks: HistoryMarks::new(),
             filed_by: HashMap::new(),
             remembered: Vec::new(),
+            filed_sessions: Vec::new(),
             conversations: Vec::new(),
             screen: TopicScreen::default(),
             naming: None,
@@ -308,6 +311,7 @@ impl Workspace {
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
+        self.refile_sessions();
         self.publish(cx);
         if let Some(pane) = &self.pane {
             let open = pane.read(cx).session_id().clone();
@@ -378,7 +382,7 @@ impl Workspace {
         };
         model::topics::board(
             &self.topics,
-            &self.sessions,
+            &self.filed_sessions,
             &self.placements,
             &self.marks,
             &self.live(),
@@ -409,7 +413,7 @@ impl Workspace {
             marks: &self.marks,
         };
         Shelf::of(
-            &Atlas::new(&self.topics, &self.sessions, &self.placements).remembering(&self.remembered),
+            &Atlas::new(&self.topics, &self.filed_sessions, &self.placements),
             step,
             &activity,
         )
@@ -555,6 +559,7 @@ impl Workspace {
         if let Some(known) = self.sessions.iter_mut().find(|known| known.id == renamed.id) {
             known.title.clone_from(&renamed.title);
         }
+        self.refile_sessions();
         self.publish(cx);
         if let Some(pane) = self
             .pane
@@ -672,6 +677,26 @@ impl Workspace {
             .max()
             .unwrap_or(0);
         topic.is_closed(newest)
+    }
+
+    /// Rebuilds the sessions the board and topic screen show: the listed ones, then the placed ones
+    /// rh remembers that no node lists any more.
+    fn refile_sessions(&mut self) {
+        let listed: HashSet<&SessionId> = self.sessions.iter().map(|session| &session.id).collect();
+        let remembered = self
+            .remembered
+            .iter()
+            .filter(|session| !listed.contains(&session.id));
+        self.filed_sessions = self.sessions.iter().chain(remembered).cloned().collect();
+    }
+
+    /// How many conversations that are no harness session are filed under the topic or below it.
+    pub(super) fn conversations_within(&self, topic: &TopicId) -> usize {
+        let atlas = Atlas::new(&self.topics, &[], &self.placements);
+        self.conversations
+            .iter()
+            .filter(|conversation| atlas.lineage(&conversation.topic).contains(&topic))
+            .count()
     }
 
     /// Something was filed or unfiled elsewhere, such as from Memory: list topics again.
@@ -992,6 +1017,7 @@ impl Workspace {
                     Launch::Uncategorized => {}
                 }
                 self.sessions.push(summary.clone());
+                self.refile_sessions();
                 self.open(summary, window, cx);
             }
             Err(err) => {

@@ -182,16 +182,6 @@ impl<'a> Atlas<'a> {
         }
     }
 
-    /// Adds the placed sessions rh remembers, for those no node lists any more; a listed session
-    /// keeps its listing.
-    #[must_use]
-    pub fn remembering(mut self, remembered: &'a [SessionSummary]) -> Self {
-        for session in remembered {
-            self.sessions.entry(&session.id).or_insert(session);
-        }
-        self
-    }
-
     pub fn topic_of(&self, session: &SessionSummary) -> Option<&'a TopicId> {
         let mut current = session;
         for _ in 0..MAX_DEPTH {

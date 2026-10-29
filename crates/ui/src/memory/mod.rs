@@ -115,7 +115,7 @@ pub struct MemoryPage {
     browse: entities::Browse,
     entity_find: Entity<TextInput>,
     viewing: Option<session::Viewing>,
-    remembering: Option<FiledConversation>,
+    remembering: Option<conversation::Remembered>,
     listed: Arc<Listed>,
     all_sessions: bool,
     shown: bool,
