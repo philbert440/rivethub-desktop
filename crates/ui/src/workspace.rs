@@ -248,11 +248,7 @@ impl Workspace {
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
-        cx.emit(Arc::new(Listed {
-            sessions: self.sessions.clone(),
-            topics: self.topics.clone(),
-            placements: self.placements.clone(),
-        }));
+        self.publish(cx);
         if let Some(pane) = &self.pane {
             let open = pane.read(cx).session_id().clone();
             if let Some(latest) = self.sessions.iter().find(|session| session.id == open).cloned() {
@@ -403,10 +399,20 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Tells whoever follows the workspace, Memory among them, what it lists now.
+    fn publish(&self, cx: &mut Context<Self>) {
+        cx.emit(Arc::new(Listed {
+            sessions: self.sessions.clone(),
+            topics: self.topics.clone(),
+            placements: self.placements.clone(),
+        }));
+    }
+
     fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
         if let Some(known) = self.sessions.iter_mut().find(|known| known.id == renamed.id) {
             known.title.clone_from(&renamed.title);
         }
+        self.publish(cx);
         if let Some(pane) = self
             .pane
             .clone()
