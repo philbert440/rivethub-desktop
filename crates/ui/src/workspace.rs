@@ -30,7 +30,7 @@ use crate::{brand, shell, theme::Theme};
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
-const FORMING_MS: i64 = 24 * HOUR_MS;
+const UNCATEGORIZED_MS: i64 = 24 * HOUR_MS;
 const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
 
 type Loaded = (
@@ -39,7 +39,7 @@ type Loaded = (
 );
 
 enum Launch {
-    Forming,
+    Uncategorized,
     In(TopicId),
     New(String),
 }
@@ -74,7 +74,8 @@ pub struct Workspace {
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
     folded: HashSet<SessionId>,
-    forming_open: bool,
+    uncategorized_open: bool,
+    uncategorized_folded: bool,
     problem: Option<String>,
     /// Why the last thing the person asked for failed; reloads keep it, their next request clears it.
     failed: Option<String>,
@@ -161,7 +162,8 @@ impl Workspace {
             suggestions: HashMap::new(),
             subagents: HashMap::new(),
             folded: HashSet::new(),
-            forming_open: false,
+            uncategorized_open: false,
+            uncategorized_folded: false,
             problem: None,
             failed: None,
             pane: None,
@@ -276,18 +278,18 @@ impl Workspace {
     }
 
     fn load_suggestions(&self, cx: &mut Context<Self>) {
-        let forming: Vec<SessionId> = self
+        let uncategorized: Vec<SessionId> = self
             .board()
-            .forming
+            .uncategorized
             .iter()
             .map(|session| session.id.clone())
             .collect();
-        if forming.is_empty() {
+        if uncategorized.is_empty() {
             return;
         }
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let found = hub.suggestions(forming).await;
+            let found = hub.suggestions(uncategorized).await;
             this.update(cx, |this, cx| {
                 if let Ok(found) = found {
                     this.suggestions = found;
@@ -312,7 +314,7 @@ impl Workspace {
     fn board(&self) -> Board<'_> {
         let windows = Windows {
             now_ms: now_ms(),
-            forming_ms: FORMING_MS,
+            uncategorized_ms: UNCATEGORIZED_MS,
             recent_ms: RECENT_MS,
         };
         model::topics::board(&self.topics, &self.sessions, &self.placements, windows)
@@ -474,7 +476,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A deleted topic's sessions are back in Forming; leave the topic if it was open.
+    /// A deleted topic's sessions are back in Uncategorized; leave the topic if it was open.
     pub fn topic_deleted(&mut self, topic: &TopicId, window: &mut Window, cx: &mut Context<Self>) {
         match &mut self.altitude {
             Altitude::Topic(open) if open == topic => {
@@ -677,7 +679,7 @@ impl Workspace {
                 return;
             };
             let launch = match target {
-                Target::Forming => Launch::Forming,
+                Target::Uncategorized => Launch::Uncategorized,
                 Target::In(topic) => Launch::In(topic.clone()),
                 Target::New(name) => Launch::New(name.clone()),
             };
@@ -723,7 +725,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.start_agent(agent, topic.map_or(Launch::Forming, Launch::In), window, cx);
+        self.start_agent(agent, topic.map_or(Launch::Uncategorized, Launch::In), window, cx);
     }
 
     fn start_agent(
@@ -759,7 +761,7 @@ impl Workspace {
                 match launch {
                     Launch::In(topic) => self.place(summary.id.clone(), topic, cx),
                     Launch::New(name) => self.place_in_new(summary.id.clone(), name, cx),
-                    Launch::Forming => {}
+                    Launch::Uncategorized => {}
                 }
                 self.sessions.push(summary.clone());
                 self.open(summary, window, cx);
@@ -852,9 +854,10 @@ impl Workspace {
                         this.leave_to(Altitude::Topic(topic.clone()), window, cx);
                     }))
             }
-            None => Self::crumb("crumb-forming", "Forming".into(), false).on_click(cx.listener(
+            None => Self::crumb("crumb-uncategorized", "Uncategorized".into(), false).on_click(cx.listener(
                 |this, _: &gpui::ClickEvent, window, cx| {
-                    this.forming_open = true;
+                    this.uncategorized_open = true;
+                    this.uncategorized_folded = false;
                     this.leave_to(Altitude::Everything, window, cx);
                 },
             )),

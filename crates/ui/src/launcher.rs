@@ -33,7 +33,7 @@ pub enum Choice {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Forming,
+    Uncategorized,
     In(TopicId),
     New(String),
 }
@@ -82,7 +82,7 @@ impl Launcher {
             let target = match event {
                 PickerEvent::Chose(topic) => Target::In(topic.clone()),
                 PickerEvent::Create(name) => Target::New(name.clone()),
-                PickerEvent::NoTopic => Target::Forming,
+                PickerEvent::NoTopic => Target::Uncategorized,
                 PickerEvent::Dismissed => {
                     cx.emit(LauncherEvent::Dismissed);
                     return;

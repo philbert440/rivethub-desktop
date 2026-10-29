@@ -13,13 +13,13 @@ use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
 
 const CARD_SESSIONS: usize = 3;
-const FORMING_SHOWN: usize = 6;
+const UNCATEGORIZED_SHOWN: usize = 6;
 const TILE_WIDTH: f32 = 300.;
 
 impl Workspace {
     pub(super) fn everything(&self, cx: &mut Context<Self>) -> AnyElement {
         let board = self.board();
-        if board.forming.is_empty() && board.recent.is_empty() {
+        if board.uncategorized.is_empty() && board.recent.is_empty() {
             let line = self
                 .problems()
                 .unwrap_or_else(|| "Start a session and it will find its topic.".into());
@@ -48,51 +48,8 @@ impl Workspace {
                 self.problems()
                     .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
             )
-            .when(!board.forming.is_empty(), |page| {
-                page.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(Self::lane_title(
-                            "FORMING",
-                            format!("{} sessions without a topic yet", board.forming.len()),
-                        ))
-                        .child(
-                            div().flex().flex_wrap().gap_3().children(
-                                board
-                                    .forming
-                                    .iter()
-                                    .take(if self.forming_open {
-                                        usize::MAX
-                                    } else {
-                                        FORMING_SHOWN
-                                    })
-                                    .enumerate()
-                                    .map(|(index, session)| self.forming_tile(index, session, now, cx)),
-                            ),
-                        )
-                        .when(board.forming.len() > FORMING_SHOWN, |lane| {
-                            let label = if self.forming_open {
-                                "Show fewer".to_owned()
-                            } else {
-                                format!("Show all {}", board.forming.len())
-                            };
-                            lane.child(
-                                div()
-                                    .id("forming-more")
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .cursor_pointer()
-                                    .hover(|more| more.text_color(Theme::ink()))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.forming_open = !this.forming_open;
-                                        cx.notify();
-                                    }))
-                                    .child(label),
-                            )
-                        }),
-                )
+            .when(!board.uncategorized.is_empty(), |page| {
+                page.child(self.uncategorized_lane(&board.uncategorized, now, cx))
             })
             .when(!board.recent.is_empty(), |page| {
                 page.child(
@@ -113,6 +70,81 @@ impl Workspace {
                 )
             })
             .into_any_element()
+    }
+
+    fn uncategorized_lane(
+        &self,
+        sessions: &[&SessionSummary],
+        now: i64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let count = sessions.len();
+        let noun = if count == 1 { "session" } else { "sessions" };
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.uncategorized_title(format!("{count} {noun} without a topic yet"), cx))
+            .when(!self.uncategorized_folded, |lane| {
+                lane.child(
+                    div().flex().flex_wrap().gap_3().children(
+                        sessions
+                            .iter()
+                            .take(if self.uncategorized_open {
+                                usize::MAX
+                            } else {
+                                UNCATEGORIZED_SHOWN
+                            })
+                            .enumerate()
+                            .map(|(index, session)| self.uncategorized_tile(index, session, now, cx)),
+                    ),
+                )
+            })
+            .when(
+                !self.uncategorized_folded && count > UNCATEGORIZED_SHOWN,
+                |lane| {
+                    let label = if self.uncategorized_open {
+                        "Show fewer".to_owned()
+                    } else {
+                        format!("Show all {count}")
+                    };
+                    lane.child(
+                        div()
+                            .id("uncategorized-more")
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .cursor_pointer()
+                            .hover(|more| more.text_color(Theme::ink()))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.uncategorized_open = !this.uncategorized_open;
+                                cx.notify();
+                            }))
+                            .child(label),
+                    )
+                },
+            )
+            .into_any_element()
+    }
+
+    /// The Uncategorized lane's title, which folds the lane to just itself.
+    fn uncategorized_title(&self, note: String, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("uncategorized-title")
+            .flex()
+            .gap_2()
+            .items_baseline()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.uncategorized_folded = !this.uncategorized_folded;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .w(px(12.))
+                    .text_color(Theme::ink_dim())
+                    .child(if self.uncategorized_folded { "▸" } else { "▾" }),
+            )
+            .child(Self::lane_title("UNCATEGORIZED", note))
     }
 
     fn lane_title(title: &'static str, note: String) -> impl IntoElement {
@@ -243,7 +275,7 @@ impl Workspace {
         )
     }
 
-    fn forming_tile(
+    fn uncategorized_tile(
         &self,
         index: usize,
         session: &SessionSummary,
@@ -259,7 +291,7 @@ impl Workspace {
             .filter(|placing| placing.session == session.id)
             .map(|placing| placing.picker.clone());
         div()
-            .id(("forming", index))
+            .id(("uncategorized", index))
             .w(px(TILE_WIDTH))
             .p_4()
             .rounded(px(16.))

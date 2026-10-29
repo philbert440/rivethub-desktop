@@ -136,7 +136,7 @@ impl Menu {
             .child(
                 div()
                     .text_color(Theme::ink_dim())
-                    .child("Delete this topic? Its sessions go back to Forming."),
+                    .child("Delete this topic? Its sessions go back to Uncategorized."),
             )
             .children(
                 self.problem

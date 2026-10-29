@@ -164,7 +164,7 @@ impl Gateway {
         }
     }
 
-    /// Deletes a topic; its sessions go back to Forming. rh refuses category topics and topics
+    /// Deletes a topic; its sessions go back to Uncategorized. rh refuses category topics and topics
     /// with child topics, and that refusal comes back as `Conflict` carrying rh's own message.
     pub async fn delete_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str()])?;

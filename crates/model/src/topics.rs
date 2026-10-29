@@ -34,14 +34,14 @@ pub struct Card<'a> {
 pub struct Board<'a> {
     pub recent: Vec<Card<'a>>,
     pub past: Vec<Card<'a>>,
-    pub forming: Vec<&'a SessionSummary>,
+    pub uncategorized: Vec<&'a SessionSummary>,
     pub history: Vec<&'a SessionSummary>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Windows {
     pub now_ms: i64,
-    pub forming_ms: i64,
+    pub uncategorized_ms: i64,
     pub recent_ms: i64,
 }
 
@@ -163,11 +163,11 @@ pub fn board<'a>(
             }
         } else {
             let origin = atlas.origin(session);
-            let young = windows.now_ms - origin.updated_at_ms <= windows.forming_ms;
+            let young = windows.now_ms - origin.updated_at_ms <= windows.uncategorized_ms;
             if !young {
                 board.history.push(session);
             } else if origin.id == session.id {
-                board.forming.push(session);
+                board.uncategorized.push(session);
             }
         }
     }
@@ -190,7 +190,7 @@ pub fn board<'a>(
     board.recent.sort_by_key(|card| Reverse(card.active_ms));
     board.past.sort_by_key(|card| Reverse(card.active_ms));
     board
-        .forming
+        .uncategorized
         .sort_by_key(|session| Reverse(session.updated_at_ms));
     board
         .history
@@ -229,7 +229,7 @@ mod tests {
     const HOUR: i64 = 60 * 60 * 1000;
     const WINDOWS: Windows = Windows {
         now_ms: 100 * HOUR,
-        forming_ms: 24 * HOUR,
+        uncategorized_ms: 24 * HOUR,
         recent_ms: 72 * HOUR,
     };
 
@@ -299,7 +299,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["mesh"]
         );
-        assert!(board.forming.is_empty() && board.history.is_empty());
+        assert!(board.uncategorized.is_empty() && board.history.is_empty());
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn unplaced_sessions_are_forming_while_young_then_history() {
+    fn unplaced_sessions_are_uncategorized_while_young_then_history() {
         let sessions = [
             session("fresh", 3, None),
             session("stale", 30, None),
@@ -329,7 +329,7 @@ mod tests {
         ];
         let placements = Placements::new();
         let board = board(&[], &sessions, &placements, WINDOWS);
-        assert_eq!(natives(&board.forming), ["fresh"]);
+        assert_eq!(natives(&board.uncategorized), ["fresh"]);
         assert_eq!(natives(&board.history), ["stale", "old-child"]);
     }
 

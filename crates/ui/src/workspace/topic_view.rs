@@ -294,7 +294,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Takes the session out of this topic, back to Forming or History.
+    /// Takes the session out of this topic, back to Uncategorized or History.
     fn unplace_button(row: usize, session: SessionId, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id(("topic-unplace", row))
