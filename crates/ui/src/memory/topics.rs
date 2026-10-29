@@ -90,6 +90,7 @@ impl MemoryPage {
         if !same_page {
             self.decisions = None;
             self.deciding = None;
+            self.all_sessions = false;
         }
         if let Some(root) = root.clone() {
             self.load_decisions(root, cx);
@@ -360,10 +361,13 @@ impl MemoryPage {
                     window,
                 );
                 head.child(
-                    div()
-                        .text_2xl()
-                        .text_color(Theme::ink())
-                        .child(read.page.title.clone()),
+                    self.beside_workspace_button(
+                        div()
+                            .text_2xl()
+                            .text_color(Theme::ink())
+                            .child(read.page.title.clone()),
+                        cx,
+                    ),
                 )
                 .child(
                     div()
@@ -388,6 +392,7 @@ impl MemoryPage {
                                 .child(format!("updated {} ago", ago(now_ms(), read.page.updated_ms))),
                         ),
                 )
+                .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx))
                 .when(read.blocks.is_empty(), |head| {
                     head.child(
@@ -400,10 +405,14 @@ impl MemoryPage {
             }
             (Some(Opened::Topic(_)), None) if self.library.is_some() => head
                 .child(
-                    div()
-                        .text_color(Theme::ink_dim())
-                        .child("Memory hasn't started this topic's page yet."),
+                    self.beside_workspace_button(
+                        div()
+                            .text_color(Theme::ink_dim())
+                            .child("Memory hasn't started this topic's page yet."),
+                        cx,
+                    ),
                 )
+                .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx)),
             (Some(_), None) => head.child(div().text_color(Theme::ink_dim()).child("Loading…")),
             (None, None) => head.child(

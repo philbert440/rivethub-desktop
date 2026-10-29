@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use app::Hub;
 use gpui::{
     Context, Div, Entity, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
@@ -9,7 +11,7 @@ use model::{Page, SessionId};
 use crate::memory::{MemoryEvent, MemoryPage};
 use crate::settings::SettingsPage;
 use crate::text::one_line;
-use crate::workspace::{Attention, TopicDeleted, ViewInMemory, Workspace};
+use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
 use crate::{brand, theme::Theme};
 
 const OPEN_WIDTH: f32 = 208.;
@@ -23,7 +25,7 @@ pub struct Shell {
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
-    _routes: [Subscription; 4],
+    _routes: [Subscription; 5],
 }
 
 impl Shell {
@@ -41,6 +43,10 @@ impl Shell {
             this.memory
                 .update(cx, |memory, cx| memory.topic_deleted(topic, cx));
         });
+        let listed = cx.subscribe(&workspace, |this, _, listed: &Arc<Listed>, cx| {
+            this.memory
+                .update(cx, |memory, cx| memory.listed(Arc::clone(listed), cx));
+        });
         let from_memory = cx.subscribe_in(
             &memory,
             window,
@@ -49,6 +55,12 @@ impl Shell {
                     if !this.open_listed(session, window, cx) {
                         memory.update(cx, MemoryPage::unlisted);
                     }
+                }
+                MemoryEvent::OpenTopic(topic) => {
+                    this.workspace.update(cx, |workspace, cx| {
+                        workspace.open_topic(topic.clone(), window, cx);
+                    });
+                    this.turn_to(Page::Workspace, cx);
                 }
                 MemoryEvent::TopicDeleted(topic) => {
                     this.workspace
@@ -70,7 +82,7 @@ impl Shell {
             workspace,
             memory,
             settings,
-            _routes: [to_memory, deleted_in_workspace, from_memory, notices],
+            _routes: [to_memory, deleted_in_workspace, listed, from_memory, notices],
         }
     }
 
@@ -79,8 +91,7 @@ impl Shell {
             .workspace
             .update(cx, |workspace, cx| workspace.open_listed(session, window, cx));
         if opened {
-            self.page = Page::Workspace;
-            cx.notify();
+            self.turn_to(Page::Workspace, cx);
         }
         opened
     }
@@ -124,12 +135,19 @@ impl Shell {
         if page == self.page {
             return;
         }
-        self.page = page;
+        self.turn_to(page, cx);
         match page {
             Page::Workspace => window.focus(&self.workspace.focus_handle(cx), cx),
             Page::Memory => window.focus(&self.memory.focus_handle(cx), cx),
             Page::Settings => {}
         }
+    }
+
+    /// Selects the page without moving focus, for routes that focus something on it themselves.
+    fn turn_to(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.page = page;
+        self.memory
+            .update(cx, |memory, cx| memory.set_shown(page == Page::Memory, cx));
         cx.notify();
     }
 

@@ -1,8 +1,11 @@
 mod ask;
 mod decisions;
 mod session;
+mod sessions;
 mod tidy;
 mod topics;
+
+use std::sync::Arc;
 
 use app::{Hub, Library, Tidy};
 use gpui::{
@@ -21,6 +24,7 @@ use crate::input::{Submitted, TextInput};
 use crate::menu::OpenMenu;
 use crate::shell;
 use crate::theme::Theme;
+use crate::workspace::Listed;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Tab {
@@ -59,6 +63,7 @@ pub enum Focus {
 
 pub enum MemoryEvent {
     OpenSession(SessionId),
+    OpenTopic(TopicId),
     TopicDeleted(TopicId),
 }
 
@@ -93,6 +98,9 @@ pub struct MemoryPage {
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
     viewing: Option<session::Viewing>,
+    listed: Arc<Listed>,
+    all_sessions: bool,
+    shown: bool,
     menu: Option<OpenMenu>,
     _submitted: [Subscription; 2],
 }
@@ -138,6 +146,9 @@ impl MemoryPage {
             page_scroll: ScrollHandle::new(),
             tidy: None,
             viewing: None,
+            listed: Arc::default(),
+            all_sessions: false,
+            shown: false,
             menu: None,
             _submitted: [asked, found],
         };
@@ -152,6 +163,27 @@ impl MemoryPage {
                 self.open_topic(topic, cx);
             }
             Focus::Session(session) => self.open_session(*session, cx),
+        }
+    }
+
+    /// The workspace's latest listing, which keeps the topic index and an open session's name current.
+    pub fn listed(&mut self, listed: Arc<Listed>, cx: &mut Context<Self>) {
+        if let Some(library) = self.library.as_mut() {
+            library.topics.clone_from(&listed.topics);
+        }
+        if let Some(viewing) = self.viewing.as_mut() {
+            viewing.relist(&listed.sessions);
+        }
+        self.listed = listed;
+        cx.notify();
+    }
+
+    /// Whether the shell is showing Memory; coming back to it refreshes the open session's page.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        let back = shown && !self.shown;
+        self.shown = shown;
+        if back {
+            self.refresh_session(cx);
         }
     }
 

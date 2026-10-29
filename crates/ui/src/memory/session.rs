@@ -1,13 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Hsla, IntoElement, ParentElement, Styled, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, Hsla, IntoElement, ParentElement, Styled, Task, Window, div, prelude::*,
+    px,
 };
 use model::markdown::Block;
 use model::memory::{SessionMemory, Summary, SummaryKind, Vector};
 use model::session::SessionSummary;
 
-use super::{MemoryEvent, MemoryPage};
+use super::sessions::link_button;
+use super::{Focus, MemoryEvent, MemoryPage};
 use crate::markdown_view;
 use crate::text::{ago, clock, now_ms};
 use crate::theme::Theme;
@@ -15,6 +18,7 @@ use crate::theme::Theme;
 const COLUMN: f32 = 860.;
 const INDENT: f32 = 24.;
 const CLAMP: usize = 3;
+const REFRESH: Duration = Duration::from_secs(10);
 
 /// The session Memory is showing, with its summaries parsed once they load.
 pub(super) struct Viewing {
@@ -22,6 +26,16 @@ pub(super) struct Viewing {
     memory: Option<SessionMemory>,
     blocks: HashMap<String, Vec<Block>>,
     expanded: HashSet<String>,
+    _refresh: Task<()>,
+}
+
+impl Viewing {
+    /// Takes the session's latest listing, such as a new title.
+    pub(super) fn relist(&mut self, sessions: &[SessionSummary]) {
+        if let Some(latest) = sessions.iter().find(|known| known.id == self.session.id) {
+            self.session.clone_from(latest);
+        }
+    }
 }
 
 fn badge(text: impl Into<String>, ink: Hsla) -> impl IntoElement {
@@ -61,38 +75,64 @@ fn span(summary: &Summary) -> String {
 }
 
 impl MemoryPage {
+    /// Shows the session's page, kept current while Memory is on screen.
     pub(super) fn open_session(&mut self, session: SessionSummary, cx: &mut Context<Self>) {
         self.problem = None;
-        let id = session.id.clone();
+        let refresh = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(REFRESH).await;
+                let refreshed = this.update(cx, |this, cx| {
+                    if this.shown {
+                        this.refresh_session(cx);
+                    }
+                });
+                if refreshed.is_err() {
+                    break;
+                }
+            }
+        });
         self.viewing = Some(Viewing {
             session,
             memory: None,
             blocks: HashMap::new(),
             expanded: HashSet::new(),
+            _refresh: refresh,
         });
+        self.load_session(cx);
+        cx.notify();
+    }
+
+    /// Reloads the open session's page once its first load has landed.
+    pub(super) fn refresh_session(&self, cx: &mut Context<Self>) {
+        if self
+            .viewing
+            .as_ref()
+            .is_some_and(|viewing| viewing.memory.is_some())
+        {
+            self.load_session(cx);
+        }
+    }
+
+    fn load_session(&self, cx: &mut Context<Self>) {
+        let Some(id) = self.viewing.as_ref().map(|viewing| viewing.session.id.clone()) else {
+            return;
+        };
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let memory = hub.session_memory(id.clone()).await;
             this.update(cx, |this, cx| {
-                if this
-                    .viewing
-                    .as_ref()
-                    .is_none_or(|viewing| viewing.session.id != id)
-                {
+                let Some(viewing) = this.viewing.as_mut().filter(|viewing| viewing.session.id == id) else {
                     return;
-                }
+                };
                 match memory {
+                    Ok(memory) if viewing.memory.as_ref() == Some(&memory) => {}
                     Ok(memory) => {
-                        if let Some(viewing) = this.viewing.as_mut() {
-                            viewing.blocks = memory
-                                .summaries
-                                .iter()
-                                .map(|summary| {
-                                    (summary.id.clone(), model::markdown::parse(summary.text.trim()))
-                                })
-                                .collect();
-                            viewing.memory = Some(memory);
-                        }
+                        viewing.blocks = memory
+                            .summaries
+                            .iter()
+                            .map(|summary| (summary.id.clone(), model::markdown::parse(summary.text.trim())))
+                            .collect();
+                        viewing.memory = Some(memory);
                         cx.notify();
                     }
                     Err(err) => this.failed(&err, cx),
@@ -101,7 +141,6 @@ impl MemoryPage {
             .ok();
         })
         .detach();
-        cx.notify();
     }
 
     pub(super) fn session_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -136,7 +175,7 @@ impl MemoryPage {
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(Self::session_head(&viewing.session, cx))
+                    .child(self.session_head(&viewing.session, cx))
                     .children(
                         self.problem
                             .clone()
@@ -147,8 +186,24 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    fn session_head(session: &SessionSummary, cx: &mut Context<Self>) -> impl IntoElement {
+    fn session_head(&self, session: &SessionSummary, cx: &mut Context<Self>) -> impl IntoElement {
         let open = session.id.clone();
+        let topic = self.topic_of(session).map(|topic| {
+            let focus = topic.id.clone();
+            div()
+                .id("memory-session-topic")
+                .px_2()
+                .rounded(px(9.))
+                .bg(Theme::surface())
+                .cursor_pointer()
+                .text_xs()
+                .text_color(Theme::accent())
+                .hover(|chip| chip.bg(Theme::card()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.focus(Focus::Topic(focus.clone()), cx);
+                }))
+                .child(format!("in {}", topic.name))
+        });
         div()
             .flex()
             .items_start()
@@ -176,6 +231,7 @@ impl MemoryPage {
                                     .clone()
                                     .map(|node| badge(node, Theme::ink_dim().into())),
                             )
+                            .children(topic)
                             .child(
                                 div()
                                     .text_xs()
@@ -185,24 +241,11 @@ impl MemoryPage {
                     ),
             )
             .child(
-                div()
-                    .id("memory-open-session")
-                    .flex_none()
-                    .h(px(32.))
-                    .px_4()
-                    .rounded(px(16.))
-                    .border_1()
-                    .border_color(Theme::accent())
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(Theme::accent())
-                    .hover(|button| button.bg(Theme::card()))
-                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                link_button("memory-open-session", "Open session").on_click(cx.listener(
+                    move |_, _: &ClickEvent, _, cx| {
                         cx.emit(MemoryEvent::OpenSession(open.clone()));
-                    }))
-                    .child("Open session"),
+                    },
+                )),
             )
     }
 

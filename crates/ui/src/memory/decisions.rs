@@ -84,7 +84,7 @@ impl MemoryPage {
     }
 
     /// The root topic of the open topic page.
-    fn opened_root(&self) -> Option<TopicId> {
+    pub(super) fn opened_root(&self) -> Option<TopicId> {
         let super::Opened::Topic(topic) = self.opened.as_ref()? else {
             return None;
         };

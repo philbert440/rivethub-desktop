@@ -4,6 +4,7 @@ use gpui::{
 };
 use model::memory::{Found, Period, Source};
 use model::search::{Snippet, snippet};
+use model::session::SessionSummary;
 
 use super::{MemoryEvent, MemoryPage};
 use crate::brand;
@@ -149,16 +150,22 @@ impl MemoryPage {
                     .child(div().text_color(Theme::ink()).child(format!("“{asked}”")))
                     .child(div().text_xs().text_color(Theme::ink_dim()).child(note)),
             )
-            .children(
-                found
-                    .iter()
-                    .enumerate()
-                    .map(|(index, hit)| Self::hit(index, hit, asked, now, cx)),
-            )
+            .children(found.iter().enumerate().map(|(index, hit)| {
+                let known = hit.session.as_ref().and_then(|id| self.known_session(id));
+                Self::hit(index, hit, known, asked, now, cx)
+            }))
             .into_any_element()
     }
 
-    fn hit(index: usize, hit: &Found, asked: &str, now: i64, cx: &mut Context<Self>) -> AnyElement {
+    /// A hit from a listed session names it, and clicking it opens that session's page here.
+    fn hit(
+        index: usize,
+        hit: &Found,
+        known: Option<&SessionSummary>,
+        asked: &str,
+        now: i64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let shown = snippet(&hit.text, asked);
         let kind = match hit.source {
             Source::Message => "Message",
@@ -174,6 +181,7 @@ impl MemoryPage {
                 .child(text)
         };
         div()
+            .id(("memory-hit", index))
             .px_4()
             .py_3()
             .rounded(px(16.))
@@ -181,6 +189,13 @@ impl MemoryPage {
             .flex()
             .flex_col()
             .gap_2()
+            .when_some(known.cloned(), |card, session| {
+                card.cursor_pointer()
+                    .hover(|card| card.bg(Theme::raised()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.open_session(session.clone(), cx);
+                    }))
+            })
             .child(
                 div()
                     .flex()
@@ -192,8 +207,17 @@ impl MemoryPage {
                             .as_ref()
                             .map(|session| badge(session.harness().display_name().to_owned())),
                     )
+                    .children(known.map(|session| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(Theme::ink())
+                            .child(session.name())
+                    }))
                     .child(
                         div()
+                            .flex_none()
                             .text_xs()
                             .text_color(Theme::ink_dim())
                             .child(ago(now, hit.at_ms)),
@@ -211,6 +235,7 @@ impl MemoryPage {
                             .text_color(Theme::accent())
                             .hover(|link| link.bg(Theme::selected()))
                             .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
                                 cx.emit(MemoryEvent::OpenSession(session.clone()));
                             }))
                             .child("Open session")

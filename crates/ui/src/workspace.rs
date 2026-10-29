@@ -2,6 +2,7 @@ mod everything;
 mod topic_view;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use app::Hub;
 use gateway::GatewayError;
@@ -49,6 +50,14 @@ pub struct ViewInMemory(pub Focus);
 /// Tells the shell a topic was deleted here, so other pages can let go of it.
 pub struct TopicDeleted(pub TopicId);
 
+/// What the workspace listed last, so Memory can name sessions and topics without listing them again.
+#[derive(Debug, Default)]
+pub struct Listed {
+    pub sessions: Vec<SessionSummary>,
+    pub topics: Vec<Topic>,
+    pub placements: Placements,
+}
+
 struct Placing {
     session: SessionId,
     picker: Entity<TopicPicker>,
@@ -91,6 +100,7 @@ pub struct Attention {
 impl EventEmitter<ViewInMemory> for Workspace {}
 impl EventEmitter<Attention> for Workspace {}
 impl EventEmitter<TopicDeleted> for Workspace {}
+impl EventEmitter<Arc<Listed>> for Workspace {}
 
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -238,6 +248,11 @@ impl Workspace {
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
+        cx.emit(Arc::new(Listed {
+            sessions: self.sessions.clone(),
+            topics: self.topics.clone(),
+            placements: self.placements.clone(),
+        }));
         if let Some(pane) = &self.pane {
             let open = pane.read(cx).session_id().clone();
             if let Some(latest) = self.sessions.iter().find(|session| session.id == open).cloned() {
@@ -498,7 +513,7 @@ impl Workspace {
         )
     }
 
-    fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
         self.pane = None;
         self.placing = None;
         self.altitude = Altitude::Topic(topic);
@@ -810,11 +825,14 @@ impl Workspace {
                     .topic(&topic)
                     .map_or_else(|| topic.as_str().to_owned(), |known| known.name.clone());
                 let here = session.is_none();
-                Self::crumb("crumb-topic", name.into(), here).on_click(cx.listener(
-                    move |this, _: &gpui::ClickEvent, window, cx| {
+                Self::crumb("crumb-topic", name.into(), here)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        Self::on_right_click(Focus::Topic(topic.clone()), cx),
+                    )
+                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                         this.leave_to(Altitude::Topic(topic.clone()), window, cx);
-                    },
-                ))
+                    }))
             }
             None => Self::crumb("crumb-forming", "Forming".into(), false).on_click(cx.listener(
                 |this, _: &gpui::ClickEvent, window, cx| {
@@ -825,14 +843,19 @@ impl Workspace {
         };
         bar = bar.child(separator()).child(topic_crumb);
         if let Some(session) = session {
-            let title = self
-                .sessions
-                .iter()
-                .find(|known| known.id == session)
-                .map_or_else(|| "Untitled".into(), |known| one_line(known.title.as_deref()));
+            let known = self.sessions.iter().find(|known| known.id == session);
+            let title = known.map_or_else(|| "Untitled".into(), |known| one_line(known.title.as_deref()));
             bar = bar
                 .child(separator())
-                .child(Self::crumb("crumb-session", title, true));
+                .child(Self::crumb("crumb-session", title, true).when_some(
+                    known.cloned(),
+                    |crumb, known| {
+                        crumb.on_mouse_down(
+                            MouseButton::Right,
+                            Self::on_right_click(Focus::Session(Box::new(known)), cx),
+                        )
+                    },
+                ));
         }
         bar
     }
