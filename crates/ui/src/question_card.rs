@@ -265,7 +265,14 @@ impl QuestionCard {
             .child(label)
     }
 
-    fn footer(asked: &Asked, ready: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Back, Skip, and Next or Send. Skip on the last question needs another answered, since the
+    /// answers can't go out empty.
+    fn footer(asked: &Asked, answers: &[Vec<String>], cx: &mut Context<Self>) -> impl IntoElement {
+        let ready = answers.iter().any(|answer| !answer.is_empty());
+        let others = answers
+            .iter()
+            .enumerate()
+            .any(|(index, answer)| index != asked.at && !answer.is_empty());
         let label = if asked.last() {
             if asked.questions.len() == 1 {
                 "Send answer"
@@ -287,7 +294,7 @@ impl QuestionCard {
                 )
             })
             .child(div().flex_1())
-            .when(asked.questions.len() > 1, |row| {
+            .when(asked.questions.len() > 1 && (!asked.last() || others), |row| {
                 row.child(
                     Self::link("ask-skip", "Skip")
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skip(cx))),
@@ -334,7 +341,7 @@ impl Render for QuestionCard {
         ) else {
             return div();
         };
-        let ready = asked.answers(cx).iter().any(|answer| !answer.is_empty());
+        let answers = asked.answers(cx);
         let options: Vec<AnyElement> = question
             .options
             .iter()
@@ -350,7 +357,7 @@ impl Render for QuestionCard {
             format!("Question {} of {}", asked.at + 1, asked.questions.len()).into()
         };
         let title = question.question.clone().or_else(|| question.header.clone());
-        let footer = Self::footer(asked, ready, cx);
+        let footer = Self::footer(asked, &answers, cx);
         div()
             .w_full()
             .p_5()
