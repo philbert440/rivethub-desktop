@@ -4,8 +4,8 @@
 
 use app::SessionHandle;
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, Entity, Focusable, IntoElement, ParentElement, Render, SharedString,
+    Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use model::prompt::Prompt;
 use model::tools::{Question, answer};
@@ -20,6 +20,8 @@ struct Asked {
     written: Vec<Entity<TextInput>>,
     at: usize,
     answered: bool,
+    /// Enter in an answer's own words moved on, so the next question's box takes the typing.
+    refocus: bool,
     _written: Vec<Subscription>,
 }
 
@@ -119,6 +121,9 @@ impl QuestionCard {
                         cx.subscribe(input, |this, input, Submitted(text), cx| {
                             input.update(cx, |input, cx| input.set_text(text, cx));
                             this.next(cx);
+                            if let Some(asked) = this.asked.as_mut().filter(|asked| !asked.answered) {
+                                asked.refocus = true;
+                            }
                         }),
                     ]
                 })
@@ -130,6 +135,7 @@ impl QuestionCard {
                 written,
                 at: 0,
                 answered: false,
+                refocus: false,
                 _written: subscriptions,
             }
         });
@@ -331,6 +337,13 @@ impl QuestionCard {
 
 impl Render for QuestionCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(asked) = self.asked.as_mut().filter(|asked| asked.refocus) {
+            asked.refocus = false;
+            if let Some(written) = asked.written.get(asked.at) {
+                let handle = written.focus_handle(cx);
+                window.defer(cx, move |window, cx| window.focus(&handle, cx));
+            }
+        }
         let Some(asked) = self.asked.as_ref().filter(|asked| !asked.answered) else {
             return div();
         };
