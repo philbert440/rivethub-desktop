@@ -432,7 +432,12 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
     let unanswered =
         !working && exchange.prompt.is_some() && exchange.answer.trim().is_empty() && !exchange.has_process();
     if unanswered {
-        column = column.child(div().text_sm().text_color(Theme::ink_dim()).child("No reply"));
+        let ended = match exchange.state {
+            ExchangeState::Stopped => "Stopped",
+            ExchangeState::Failed => "Failed",
+            ExchangeState::Working | ExchangeState::Completed => "No reply",
+        };
+        column = column.child(div().text_sm().text_color(Theme::ink_dim()).child(ended));
     }
     if !working {
         column = column.children(actions(exchange, ix));
