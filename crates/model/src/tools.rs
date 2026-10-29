@@ -68,6 +68,7 @@ pub fn answer(questions: &[Question], picked: &[Vec<String>]) -> String {
         .map(|(question, labels)| {
             let labels = labels.join(", ");
             match question.header.as_deref().or(question.question.as_deref()) {
+                Some(prefix) if prefix.ends_with(['?', ':']) => format!("{prefix} {labels}"),
                 Some(prefix) => format!("{prefix}: {labels}"),
                 None => labels,
             }
@@ -271,6 +272,19 @@ mod tests {
                 &[picks(&["JWT"]), picks(&[]), picks(&["Redis"])]
             ),
             "Auth: JWT\nCache: Redis"
+        );
+        let asked_only = |question: &str| Question {
+            question: Some(question.into()),
+            header: None,
+            multi_select: false,
+            options: Vec::new(),
+        };
+        assert_eq!(
+            answer(
+                &[asked_only("Which color?"), asked_only("Size")],
+                &[picks(&["Green"]), picks(&["Large"])]
+            ),
+            "Which color? Green\nSize: Large"
         );
     }
 
