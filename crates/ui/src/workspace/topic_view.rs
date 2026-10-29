@@ -256,7 +256,7 @@ impl Workspace {
                     .flex_none()
                     .text_xs()
                     .text_color(Theme::ink_dim())
-                    .child(session.model.clone().unwrap_or_else(|| "claude".into())),
+                    .child(self.model_name(session)),
             )
             .child(
                 div()

@@ -359,6 +359,18 @@ impl Workspace {
         atlas.topic_of(session).map(|topic| atlas.root(topic).clone())
     }
 
+    /// What a session runs, by the label its node offers for the model, else the model's id, else
+    /// the harness.
+    fn model_name(&self, session: &SessionSummary) -> String {
+        match session.model.as_deref() {
+            Some(model) => self
+                .hub
+                .model_label(session.node.as_deref(), session.id.harness(), model)
+                .unwrap_or_else(|| model.to_owned()),
+            None => session.id.harness().display_name().to_owned(),
+        }
+    }
+
     fn topic(&self, id: &TopicId) -> Option<&Topic> {
         self.topics.iter().find(|topic| &topic.id == id)
     }

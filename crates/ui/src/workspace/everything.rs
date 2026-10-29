@@ -312,7 +312,7 @@ impl Workspace {
                     .gap_2()
                     .text_xs()
                     .text_color(Theme::ink_dim())
-                    .child(session.model.clone().unwrap_or_else(|| "claude".into()))
+                    .child(self.model_name(session))
                     .child(ago(now, session.updated_at_ms))
                     .children(self.subagents.get(&session.id).map(|count| {
                         let noun = if *count == 1 { "subagent" } else { "subagents" };
