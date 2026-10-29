@@ -600,9 +600,13 @@ impl SessionPane {
     }
 
     fn header(&self, view: &SessionView, cx: &mut Context<Self>) -> gpui::Div {
-        let meta = [self.summary.model.as_deref(), self.summary.cwd.as_deref()]
+        let meta = self
+            .summary
+            .model
+            .as_deref()
+            .map(|model| self.model_label(model))
             .into_iter()
-            .flatten()
+            .chain(self.summary.cwd.clone())
             .collect::<Vec<_>>()
             .join(" · ");
         div()

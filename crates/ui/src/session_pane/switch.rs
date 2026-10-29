@@ -44,7 +44,8 @@ impl SessionPane {
         self.picked.effort.as_deref().or(self.summary.effort.as_deref())
     }
 
-    fn model_label(&self, id: &str) -> String {
+    /// The label the harness offers for a model, or its id when the harness doesn't offer it.
+    pub(super) fn model_label(&self, id: &str) -> String {
         self.models
             .iter()
             .find(|choice| choice.id == id)
