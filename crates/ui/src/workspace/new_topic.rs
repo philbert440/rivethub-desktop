@@ -55,7 +55,7 @@ impl Workspace {
             return;
         }
         let hub = self.hub.clone();
-        self.finish_naming(async move { hub.create_topic(name).await.map(drop) }, cx);
+        self.finish_naming(async move { hub.create_topic(name, None).await.map(drop) }, cx);
     }
 
     fn finish_naming(

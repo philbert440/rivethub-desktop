@@ -28,6 +28,8 @@ pub(super) enum Pick {
     MoveInto(TopicId),
     MergeInto(TopicId),
     File(SessionId),
+    /// A new subtopic of this topic, or an existing topic moved under it.
+    Child(TopicId),
 }
 
 /// The floating topic picker, opened where the menu was.
@@ -45,21 +47,29 @@ pub struct DraggedTopic {
 }
 
 impl Workspace {
-    /// Starts renaming the topic in place. A topic with no card on the board is opened first, so
-    /// its name is on screen in the crumb or as a subtopic heading.
+    /// Starts renaming the topic in place: on its card, on the topic screen's path or pills, or in
+    /// the topic screen's heading. A topic shown in none of those is opened first.
     pub(super) fn begin_retitle(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self.topic(&topic).map(|known| known.name.clone()) else {
+        let Some((name, parent)) = self
+            .topic(&topic)
+            .map(|known| (known.name.clone(), known.parent.clone()))
+        else {
             return;
         };
-        let on_board = self.altitude == Altitude::Everything
-            && self.board().recent.iter().any(|card| card.topic.id == topic);
-        if !on_board {
-            let root = Atlas::new(&self.topics, &self.sessions, &self.placements)
-                .root(&topic)
-                .clone();
-            if self.altitude != Altitude::Topic(root.clone()) {
-                self.open_topic(root, window, cx);
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        let shown = match &self.altitude {
+            Altitude::Everything => self.board().recent.iter().any(|card| card.topic.id == topic),
+            Altitude::Topic(root) => {
+                let step = self.step_in(root);
+                atlas.lineage(&step).contains(&&topic) || parent.as_ref() == Some(&step)
             }
+            Altitude::Session { .. } => false,
+        };
+        if !shown {
+            let root = atlas.root(&topic).clone();
+            let step = (root != topic).then(|| topic.clone());
+            self.open_topic(root, window, cx);
+            self.screen.step = step;
         }
         let input = cx.new(|cx| {
             let mut input = TextInput::new("Topic name", cx);
@@ -159,6 +169,19 @@ impl Workspace {
                     .collect(),
             ),
             Pick::File(_) => ("Move to topic".to_owned(), self.topics.clone()),
+            Pick::Child(parent) => (
+                format!("New subtopic of “{}”, or move one here", name(parent)),
+                {
+                    let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+                    self.topics
+                        .iter()
+                        .filter(|child| {
+                            child.parent.as_ref() != Some(parent) && atlas.can_nest(&child.id, parent)
+                        })
+                        .cloned()
+                        .collect()
+                },
+            ),
         };
         let merging = matches!(pick, Pick::MergeInto(_));
         let picker = cx.new(|cx| {
@@ -182,6 +205,12 @@ impl Workspace {
                 }
                 (PickerEvent::Create(name), Pick::File(session)) => {
                     this.place_in_new(session.clone(), name.clone(), cx);
+                }
+                (PickerEvent::Chose(child), Pick::Child(parent)) => {
+                    this.nest(child.clone(), Some(parent.clone()), cx);
+                }
+                (PickerEvent::Create(name), Pick::Child(parent)) => {
+                    this.create_child(name.trim().to_owned(), parent.clone(), cx);
                 }
                 (PickerEvent::Create(_), Pick::MergeInto(_))
                 | (PickerEvent::NoTopic | PickerEvent::Dismissed, _) => {}
@@ -227,11 +256,24 @@ impl Workspace {
         );
     }
 
+    fn create_child(&mut self, name: String, parent: TopicId, cx: &mut Context<Self>) {
+        if name.is_empty() {
+            return;
+        }
+        let hub = self.hub.clone();
+        self.edit_topics(
+            async move { hub.create_topic(name, Some(parent)).await.map(drop) },
+            "adding it failed",
+            |_| {},
+            cx,
+        );
+    }
+
     fn nest_in_new(&mut self, topic: TopicId, name: String, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         self.edit_topics(
             async move {
-                let parent = hub.create_topic(name).await?;
+                let parent = hub.create_topic(name, None).await?;
                 hub.move_topic(topic, Some(parent.id)).await
             },
             "moving it failed",

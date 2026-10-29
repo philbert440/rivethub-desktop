@@ -1,5 +1,6 @@
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, RandomState};
 
 use crate::session::SessionSummary;
 use crate::{SessionId, TopicId};
@@ -19,6 +20,14 @@ pub struct Topic {
     /// When the topic itself last changed: created, renamed, moved, closed or reopened.
     pub updated_ms: i64,
     pub closed_ms: Option<i64>,
+    pub directory: Option<Directory>,
+}
+
+/// Where a topic's sessions work: a path on one node, or a path every node shares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Directory {
+    Local { node: String, path: String },
+    Shared { path: String },
 }
 
 impl Topic {
@@ -49,6 +58,24 @@ pub fn in_history(session: &SessionSummary, marks: &HistoryMarks) -> bool {
         .is_some_and(|marked| session.updated_at_ms <= *marked)
 }
 
+/// What decides whether a session is Active: the time now, how long a quiet session stays Active,
+/// the sessions that are live (running, waiting on you, or open) and the history marks.
+#[derive(Debug, Clone, Copy)]
+pub struct Activity<'a, S = RandomState> {
+    pub now_ms: i64,
+    pub window_ms: i64,
+    pub live: &'a HashSet<SessionId, S>,
+    pub marks: &'a HistoryMarks,
+}
+
+impl<S: BuildHasher> Activity<'_, S> {
+    /// Live, or busy within the window and not marked as history since. Everything else is History.
+    pub fn is_active(&self, session: &SessionSummary) -> bool {
+        self.live.contains(&session.id)
+            || (self.now_ms - session.updated_at_ms <= self.window_ms && !in_history(session, self.marks))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suggestion {
     pub name: String,
@@ -58,7 +85,10 @@ pub struct Suggestion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card<'a> {
     pub topic: &'a Topic,
+    /// Its Active sessions, newest first.
     pub sessions: Vec<&'a SessionSummary>,
+    /// How many of its sessions are History.
+    pub history: usize,
     pub active_ms: i64,
 }
 
@@ -73,7 +103,8 @@ pub struct Board<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct Windows {
     pub now_ms: i64,
-    pub uncategorized_ms: i64,
+    /// How long a quiet session stays Active.
+    pub active_ms: i64,
     pub recent_ms: i64,
 }
 
@@ -155,6 +186,35 @@ impl<'a> Atlas<'a> {
         }
     }
 
+    /// The topic's own subtopics, by name.
+    pub fn children(&self, topic: &TopicId) -> Vec<&'a Topic> {
+        let mut children: Vec<&'a Topic> = self
+            .topics
+            .values()
+            .copied()
+            .filter(|child| child.parent.as_ref() == Some(topic))
+            .collect();
+        children.sort_by_key(|child| (child.name.to_lowercase(), child.id.clone()));
+        children
+    }
+
+    /// The sessions filed anywhere under the topic, its own included, leaving out subagents whose
+    /// parent is under it too: they go with their parent.
+    pub fn sessions_within(&self, topic: &TopicId) -> Vec<&'a SessionSummary> {
+        self.sessions
+            .values()
+            .copied()
+            .filter(|session| {
+                self.within(session, topic)
+                    && !session
+                        .parent
+                        .as_ref()
+                        .and_then(|parent| self.sessions.get(parent))
+                        .is_some_and(|parent| self.within(parent, topic))
+            })
+            .collect()
+    }
+
     /// Whether `topic` can move under `parent`: never under itself or its own subtopics, and never
     /// so that its deepest subtopic would sit below `MAX_LEVELS`.
     pub fn can_nest(&self, topic: &TopicId, parent: &'a TopicId) -> bool {
@@ -221,13 +281,20 @@ pub fn outline(topics: &[Topic]) -> Vec<(usize, &Topic)> {
     rows
 }
 
-pub fn board<'a>(
+pub fn board<'a, S: BuildHasher>(
     topics: &'a [Topic],
     sessions: &'a [SessionSummary],
     placements: &'a Placements,
     marks: &HistoryMarks,
+    live: &HashSet<SessionId, S>,
     windows: Windows,
 ) -> Board<'a> {
+    let activity = Activity {
+        now_ms: windows.now_ms,
+        window_ms: windows.active_ms,
+        live,
+        marks,
+    };
     let atlas = Atlas::new(topics, sessions, placements);
     let mut filed: HashMap<&TopicId, Vec<&SessionSummary>> = HashMap::new();
     let mut board = Board::default();
@@ -238,8 +305,7 @@ pub fn board<'a>(
             }
         } else {
             let origin = atlas.origin(session);
-            let young = windows.now_ms - origin.updated_at_ms <= windows.uncategorized_ms;
-            if !young || in_history(origin, marks) {
+            if !activity.is_active(origin) {
                 board.history.push(session);
             } else if origin.id == session.id {
                 board.uncategorized.push(session);
@@ -253,10 +319,13 @@ pub fn board<'a>(
         let active_ms = newest
             .max(topic.last_active_ms.unwrap_or(0))
             .max(topic.updated_ms);
-        sessions.retain(|session| !in_history(session, marks));
+        let (sessions, history): (Vec<_>, Vec<_>) = sessions
+            .into_iter()
+            .partition(|session| activity.is_active(session));
         let card = Card {
             topic,
             sessions,
+            history: history.len(),
             active_ms,
         };
         if !topic.is_closed(newest) && windows.now_ms - active_ms <= windows.recent_ms {
@@ -308,7 +377,7 @@ mod tests {
     const HOUR: i64 = 60 * 60 * 1000;
     const WINDOWS: Windows = Windows {
         now_ms: 100 * HOUR,
-        uncategorized_ms: 24 * HOUR,
+        active_ms: 24 * HOUR,
         recent_ms: 72 * HOUR,
     };
 
@@ -340,6 +409,7 @@ mod tests {
             last_active_ms: None,
             updated_ms: 0,
             closed_ms: None,
+            directory: None,
         }
     }
 
@@ -372,7 +442,14 @@ mod tests {
             (id("chat"), TopicId::new("desktop-chat")),
             (id("certs"), TopicId::new("mesh")),
         ]);
-        let board = board(&topics, &sessions, &placements, &HistoryMarks::new(), WINDOWS);
+        let board = board(
+            &topics,
+            &sessions,
+            &placements,
+            &HistoryMarks::new(),
+            &HashSet::new(),
+            WINDOWS,
+        );
         assert_eq!(board.recent.len(), 1);
         assert_eq!(board.recent[0].topic.slug, "desktop");
         assert_eq!(natives(&board.recent[0].sessions), ["lead", "chat"]);
@@ -413,12 +490,47 @@ mod tests {
     }
 
     #[test]
+    fn a_live_session_is_active_however_quiet_and_a_card_counts_its_history() {
+        let topics = [topic("desk", None)];
+        let sessions = [
+            session("lead", 2, None),
+            session("old", 30, None),
+            session("live", 30, None),
+            session("loose", 40, None),
+        ];
+        let placements = Placements::from([
+            (id("lead"), TopicId::new("desk")),
+            (id("old"), TopicId::new("desk")),
+            (id("live"), TopicId::new("desk")),
+        ]);
+        let live = HashSet::from([id("live"), id("loose")]);
+        let board = board(
+            &topics,
+            &sessions,
+            &placements,
+            &HistoryMarks::new(),
+            &live,
+            WINDOWS,
+        );
+        assert_eq!(natives(&board.recent[0].sessions), ["lead", "live"]);
+        assert_eq!(board.recent[0].history, 1);
+        assert_eq!(natives(&board.uncategorized), ["loose"]);
+    }
+
+    #[test]
     fn a_topic_counts_as_active_from_its_last_change() {
         let mut fresh = topic("fresh", None);
         fresh.updated_ms = WINDOWS.now_ms - HOUR;
         let topics = [fresh, topic("old", None)];
         let placements = Placements::new();
-        let board = board(&topics, &[], &placements, &HistoryMarks::new(), WINDOWS);
+        let board = board(
+            &topics,
+            &[],
+            &placements,
+            &HistoryMarks::new(),
+            &HashSet::new(),
+            WINDOWS,
+        );
         assert_eq!(slugs(&board.recent), ["fresh"]);
         assert_eq!(slugs(&board.past), ["old"]);
     }
@@ -431,11 +543,11 @@ mod tests {
         let placements = Placements::from([(id("lead"), TopicId::new("desktop"))]);
         let marks = HistoryMarks::new();
         let quiet = [session("lead", 3, None)];
-        let closed = board(&topics, &quiet, &placements, &marks, WINDOWS);
+        let closed = board(&topics, &quiet, &placements, &marks, &HashSet::new(), WINDOWS);
         assert_eq!(slugs(&closed.recent), Vec::<&str>::new());
         assert_eq!(slugs(&closed.past), ["desktop"]);
         let busy = [session("lead", 1, None)];
-        let reopened = board(&topics, &busy, &placements, &marks, WINDOWS);
+        let reopened = board(&topics, &busy, &placements, &marks, &HashSet::new(), WINDOWS);
         assert_eq!(slugs(&reopened.recent), ["desktop"]);
     }
 
@@ -457,7 +569,7 @@ mod tests {
             session("loose", 2, None),
             session("back", 2, None),
         ];
-        let board = board(&topics, &sessions, &placements, &marks, WINDOWS);
+        let board = board(&topics, &sessions, &placements, &marks, &HashSet::new(), WINDOWS);
         assert_eq!(natives(&board.recent[0].sessions), ["lead"]);
         assert_eq!(natives(&board.uncategorized), ["back"]);
         assert_eq!(natives(&board.history), ["loose"]);
@@ -471,7 +583,14 @@ mod tests {
             (id("lead"), TopicId::new("desktop")),
             (id("detour"), TopicId::new("mesh")),
         ]);
-        let board = board(&topics, &sessions, &placements, &HistoryMarks::new(), WINDOWS);
+        let board = board(
+            &topics,
+            &sessions,
+            &placements,
+            &HistoryMarks::new(),
+            &HashSet::new(),
+            WINDOWS,
+        );
         let mesh = board
             .recent
             .iter()
@@ -489,7 +608,14 @@ mod tests {
             session("old-child", 30, Some("stale")),
         ];
         let placements = Placements::new();
-        let board = board(&[], &sessions, &placements, &HistoryMarks::new(), WINDOWS);
+        let board = board(
+            &[],
+            &sessions,
+            &placements,
+            &HistoryMarks::new(),
+            &HashSet::new(),
+            WINDOWS,
+        );
         assert_eq!(natives(&board.uncategorized), ["fresh"]);
         assert_eq!(natives(&board.history), ["stale", "old-child"]);
     }

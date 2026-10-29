@@ -125,16 +125,17 @@ impl Hub {
     pub async fn place_in_new(&self, session: SessionId, name: String) -> Result<Topic, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
-            let topic = gateway.create_topic(&name).await?;
+            let topic = gateway.create_topic(&name, None).await?;
             gateway.place(&session, &topic.id).await?;
             Ok(topic)
         })
         .await
     }
 
-    pub async fn create_topic(&self, name: String) -> Result<Topic, GatewayError> {
+    /// Creates a topic, under `parent` when given.
+    pub async fn create_topic(&self, name: String, parent: Option<TopicId>) -> Result<Topic, GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.create_topic(&name).await })
+        self.on_runtime(async move { gateway.create_topic(&name, parent.as_ref()).await })
             .await
     }
 

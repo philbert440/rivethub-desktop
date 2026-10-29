@@ -235,10 +235,11 @@ impl Workspace {
                     })
                     .when(waiting > 0, |row| row.child(Self::needs_you_chip())),
             )
-            .child(match self.counts(card.sessions.iter().copied()) {
-                Some(counts) => counts.child(format!("\u{a0}·\u{a0}{active}")),
-                None => div().text_xs().text_color(Theme::ink_dim()).child(active),
-            })
+            .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
+                "{} active · {} in history · {active}",
+                card.sessions.len(),
+                card.history
+            )))
             .children(card.sessions.iter().take(CARD_SESSIONS).map(|session| {
                 div()
                     .flex()

@@ -1,6 +1,8 @@
 mod everything;
 mod new_topic;
 mod topic_edit;
+mod topic_path;
+mod topic_rows;
 mod topic_view;
 
 pub use topic_edit::CancelRetitle;
@@ -18,7 +20,10 @@ use gpui::{
 use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
 use model::session::SessionSummary;
-use model::topics::{Atlas, Board, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows, in_history};
+use model::shelf::Shelf;
+use model::topics::{
+    Activity, Atlas, Board, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows, in_history,
+};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::agent_editor::{AgentEditor, AgentEditorEvent};
@@ -35,7 +40,8 @@ use topic_edit::Pick;
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
-const UNCATEGORIZED_MS: i64 = 24 * HOUR_MS;
+/// How long a quiet session stays Active.
+const ACTIVE_MS: i64 = 24 * HOUR_MS;
 const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
 
 type Loaded = (
@@ -63,6 +69,15 @@ pub struct Listed {
     pub placements: Placements,
 }
 
+/// Where the topic screen stands in the open topic.
+#[derive(Debug, Default)]
+struct TopicScreen {
+    /// The subtopic stepped into, if any.
+    step: Option<TopicId>,
+    /// Whether History lists all its sessions rather than its newest few.
+    all_history: bool,
+}
+
 struct Placing {
     session: SessionId,
     picker: Entity<TopicPicker>,
@@ -77,13 +92,12 @@ pub struct Workspace {
     topics: Vec<Topic>,
     placements: Placements,
     marks: HistoryMarks,
-    history_open: HashSet<TopicId>,
+    screen: TopicScreen,
     naming: Option<new_topic::Naming>,
     retitling: Option<topic_edit::Retitling>,
     choosing: Option<topic_edit::Choosing>,
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
-    folded: HashSet<SessionId>,
     uncategorized_open: bool,
     uncategorized_folded: bool,
     problem: Option<String>,
@@ -170,13 +184,12 @@ impl Workspace {
             topics: Vec::new(),
             placements: Placements::new(),
             marks: HistoryMarks::new(),
-            history_open: HashSet::new(),
+            screen: TopicScreen::default(),
             naming: None,
             retitling: None,
             choosing: None,
             suggestions: HashMap::new(),
             subagents: HashMap::new(),
-            folded: HashSet::new(),
             uncategorized_open: false,
             uncategorized_folded: false,
             problem: None,
@@ -330,7 +343,7 @@ impl Workspace {
     fn board(&self) -> Board<'_> {
         let windows = Windows {
             now_ms: now_ms(),
-            uncategorized_ms: UNCATEGORIZED_MS,
+            active_ms: ACTIVE_MS,
             recent_ms: RECENT_MS,
         };
         model::topics::board(
@@ -338,8 +351,48 @@ impl Workspace {
             &self.sessions,
             &self.placements,
             &self.marks,
+            &self.live(),
             windows,
         )
+    }
+
+    /// The sessions that are live: running, waiting on you, or open in the pane.
+    fn live(&self) -> HashSet<SessionId> {
+        self.sessions
+            .iter()
+            .filter(|session| {
+                self.feed.is_active(session)
+                    || self.feed.needs_you(session)
+                    || self.on_screen() == Some(&session.id)
+            })
+            .map(|session| session.id.clone())
+            .collect()
+    }
+
+    /// The open topic's sessions at `step`, Active then History.
+    fn shelf(&self, step: &TopicId) -> Shelf<'_> {
+        let live = self.live();
+        let activity = Activity {
+            now_ms: now_ms(),
+            window_ms: ACTIVE_MS,
+            live: &live,
+            marks: &self.marks,
+        };
+        Shelf::of(
+            &Atlas::new(&self.topics, &self.sessions, &self.placements),
+            step,
+            &activity,
+        )
+    }
+
+    /// The part of the open topic the topic screen shows: the subtopic stepped into, else the topic.
+    fn step_in(&self, root: &TopicId) -> TopicId {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        self.screen
+            .step
+            .as_ref()
+            .filter(|step| atlas.lineage(step).contains(&root))
+            .map_or_else(|| root.clone(), Clone::clone)
     }
 
     fn sync_panel(&self, cx: &mut Context<Self>) {
@@ -362,7 +415,7 @@ impl Workspace {
             .map(|card| PastTopic {
                 id: card.topic.id.clone(),
                 name: card.topic.name.clone(),
-                sessions: card.sessions.len(),
+                sessions: card.sessions.len() + card.history,
                 active_ms: card.active_ms,
             })
             .collect();
@@ -615,6 +668,7 @@ impl Workspace {
     pub fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
         self.pane = None;
         self.placing = None;
+        self.screen = TopicScreen::default();
         self.retitling = None;
         self.altitude = Altitude::Topic(topic);
         window.focus(&self.focus, cx);
@@ -743,8 +797,8 @@ impl Workspace {
 
     fn launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let preset = match &self.altitude {
-            Altitude::Topic(topic) => self
-                .topic(topic)
+            Altitude::Topic(root) => self
+                .topic(&self.step_in(root))
                 .map(|known| (known.id.clone(), known.name.clone())),
             _ => None,
         };
@@ -874,6 +928,13 @@ impl Workspace {
     fn leave_to(&mut self, altitude: Altitude, window: &mut Window, cx: &mut Context<Self>) {
         if altitude == self.altitude {
             return;
+        }
+        let back_to_its_topic = matches!(
+            (&self.altitude, &altitude),
+            (Altitude::Session { topic: Some(from), .. }, Altitude::Topic(to)) if from == to
+        );
+        if !matches!(altitude, Altitude::Session { .. }) && !back_to_its_topic {
+            self.screen = TopicScreen::default();
         }
         self.altitude = altitude;
         self.retitling = None;
@@ -1006,38 +1067,6 @@ impl Workspace {
         } else {
             Theme::ink_dim()
         }
-    }
-
-    /// "2 active · 1 waiting on you · 3 idle", leaving out zero counts; `None` when all are zero.
-    fn counts<'a>(&self, sessions: impl IntoIterator<Item = &'a SessionSummary>) -> Option<gpui::Div> {
-        let (mut active, mut waiting, mut idle) = (0_usize, 0_usize, 0_usize);
-        for session in sessions {
-            if self.feed.needs_you(session) {
-                waiting += 1;
-            } else if self.feed.is_active(session) {
-                active += 1;
-            } else {
-                idle += 1;
-            }
-        }
-        let parts = [
-            (active, format!("{active} active"), Theme::ink_dim()),
-            (waiting, format!("{waiting} waiting on you"), Theme::warn()),
-            (idle, format!("{idle} idle"), Theme::ink_dim()),
-        ];
-        let mut line = div().flex().text_xs().text_color(Theme::ink_dim());
-        let mut any = false;
-        for (count, label, color) in parts {
-            if count == 0 {
-                continue;
-            }
-            if any {
-                line = line.child("\u{a0}·\u{a0}");
-            }
-            line = line.child(div().text_color(color).child(label));
-            any = true;
-        }
-        any.then_some(line)
     }
 
     fn needs_you_chip() -> impl IntoElement {

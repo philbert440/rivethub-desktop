@@ -1,10 +1,11 @@
 use model::decisions::Decision;
-use model::topics::{HistoryMarks, Suggestion, Topic};
+use model::topics::{Directory, HistoryMarks, Suggestion, Topic};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
     PlacementRequest, SessionHistoryList, SessionHistoryMark, TopicCreateRequest, TopicDecision,
-    TopicDecisionList, TopicList, TopicMergeRequest, TopicRecord, TopicSessionList, TopicUpdate,
+    TopicDecisionList, TopicDirectory, TopicList, TopicMergeRequest, TopicRecord, TopicSessionList,
+    TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -18,6 +19,10 @@ fn topic(record: TopicRecord, last_active_ms: Option<i64>) -> Topic {
         last_active_ms,
         updated_ms: record.updated_at.timestamp_millis(),
         closed_ms: record.closed_at.map(|at| at.timestamp_millis()),
+        directory: record.directory.map(|directory| match directory {
+            TopicDirectory::Local { node, path } => Directory::Local { node, path },
+            TopicDirectory::Shared { path } => Directory::Shared { path },
+        }),
     }
 }
 
@@ -59,15 +64,17 @@ impl Gateway {
             .collect())
     }
 
-    pub async fn create_topic(&self, name: &str) -> Result<Topic, GatewayError> {
+    /// Creates a topic, under `parent` when given. rh's refusals (a name taken, too deep) come back
+    /// as `Conflict` carrying rh's own message.
+    pub async fn create_topic(&self, name: &str, parent: Option<&TopicId>) -> Result<Topic, GatewayError> {
         let url = self.api_url(&["api", "topics"])?;
         let body = TopicCreateRequest {
             name: name.to_owned(),
             aliases: Vec::new(),
-            parent: None,
+            parent: parent.map(|parent| parent.as_str().to_owned()),
             directory: None,
         };
-        let created: TopicRecord = Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
+        let created: TopicRecord = Self::refusable(self.http.post(url).json(&body).send().await).await?;
         Ok(topic(created, None))
     }
 

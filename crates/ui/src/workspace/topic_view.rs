@@ -1,73 +1,31 @@
-use std::cmp::Reverse;
+use std::collections::HashSet;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, IntoElement, MouseButton, ParentElement, Styled, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ParentElement, Styled, div,
+    prelude::*, px,
 };
+use model::SessionId;
+use model::TopicId;
 use model::session::SessionSummary;
-use model::topics::{Atlas, Topic, in_history};
-use model::{SessionId, TopicId, lineage};
+use model::shelf::Shelf;
+use model::topics::{Directory, Topic};
 
-use super::Workspace;
+use super::{Launch, ViewInMemory, Workspace};
 use crate::brand;
 use crate::memory::Focus;
 use crate::side_panel::{DraggedAgent, DraggedSession};
-use crate::text::{ago, now_ms, one_line};
+use crate::text::{ago_phrase, now_ms, one_line};
 use crate::theme::Theme;
 
-struct Section<'a> {
-    topic: &'a Topic,
-    sessions: Vec<SessionSummary>,
-    history: Vec<SessionSummary>,
-    stubs: Vec<(&'a SessionSummary, Option<&'a Topic>)>,
-}
+/// How many of a step's harnesses get a quick start.
+const QUICK_STARTS: usize = 3;
 
 impl Workspace {
-    fn sections<'a>(&'a self, root: &TopicId) -> Vec<Section<'a>> {
-        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
-        let mut topics: Vec<&Topic> = self
-            .topics
-            .iter()
-            .filter(|topic| atlas.root(&topic.id) == root)
-            .collect();
-        topics.sort_by_key(|topic| (topic.parent.is_some(), topic.name.to_lowercase()));
-        topics
-            .into_iter()
-            .map(|topic| {
-                let mut sessions: Vec<SessionSummary> = self
-                    .sessions
-                    .iter()
-                    .filter(|session| atlas.topic_of(session) == Some(&topic.id))
-                    .cloned()
-                    .collect();
-                sessions
-                    .sort_by_key(|session| (!self.feed.needs_you(session), Reverse(session.updated_at_ms)));
-                let (history, sessions) = sessions
-                    .into_iter()
-                    .partition(|session| in_history(atlas.origin(session), &self.marks));
-                let stubs = self
-                    .sessions
-                    .iter()
-                    .filter(|session| {
-                        let parent = session.parent.as_ref().and_then(|parent| {
-                            self.sessions.iter().find(|candidate| &candidate.id == parent)
-                        });
-                        parent.is_some_and(|parent| atlas.topic_of(parent) == Some(&topic.id))
-                            && atlas.topic_of(session).is_some_and(|own| own != &topic.id)
-                    })
-                    .map(|session| (session, atlas.topic_of(session).and_then(|own| self.topic(own))))
-                    .collect();
-                Section {
-                    topic,
-                    sessions,
-                    history,
-                    stubs,
-                }
-            })
-            .collect()
-    }
-
+    /// The open topic at its current step: its heading, its path and subtopics, what needs you,
+    /// quick starts, and its sessions, Active then History.
     pub(super) fn topic_view(&self, root: &TopicId, cx: &mut Context<Self>) -> AnyElement {
-        if self.topic(root).is_none() {
+        let step_id = self.step_in(root);
+        let Some(step) = self.topic(&step_id) else {
             return div()
                 .size_full()
                 .flex()
@@ -76,13 +34,11 @@ impl Workspace {
                 .text_color(Theme::ink_dim())
                 .child("This topic is gone. Ctrl ↑ goes back to Everything.")
                 .into_any_element();
-        }
+        };
+        let inside = self.shelf(&step_id);
+        let live = self.live();
         let now = now_ms();
-        let sections = self.sections(root);
-        let counts = self.counts(sections.iter().flat_map(|section| &section.sessions));
-        let dropped_session = root.clone();
-        let dropped_agent = root.clone();
-        let mut row = 0_usize;
+        let (dropped_session, dropped_agent) = (step_id.clone(), step_id.clone());
         div()
             .id("topic-view")
             .size_full()
@@ -93,7 +49,7 @@ impl Workspace {
             .gap_5()
             .on_mouse_down(
                 MouseButton::Right,
-                Self::on_right_click(Focus::Topic(root.clone()), cx),
+                Self::on_right_click(Focus::Topic(step_id.clone()), cx),
             )
             .drag_over::<DraggedSession>(|style, _, _, _| style.bg(Theme::selected()))
             .drag_over::<DraggedAgent>(|style, _, _, _| style.bg(Theme::selected()))
@@ -103,299 +59,278 @@ impl Workspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedAgent, window, cx| {
                 this.start_with(dragged.0.clone(), Some(dropped_agent.clone()), window, cx);
             }))
-            .children(counts)
-            .children(
-                sections
-                    .into_iter()
-                    .map(|section| self.section_view(section, root, &mut row, now, cx)),
-            )
-            .child(Self::new_session_bar(cx))
+            .child(self.topic_heading(step, &inside, now, cx))
+            .child(self.topic_path(root, &step_id, cx))
+            .children(self.needs_you_strip(&inside, cx))
+            .child(Self::quick_start(&step_id, &inside, cx))
+            .child(self.active_list(&step_id, &inside, &live, now, cx))
+            .children(self.history_list(&step_id, &inside, now, cx))
             .into_any_element()
     }
 
-    /// A short bar under the list; it starts a session in this topic.
-    fn new_session_bar(cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("topic-new-session")
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py(px(10.))
-            .rounded(px(14.))
-            .border_1()
-            .border_dashed()
-            .border_color(Theme::line())
-            .cursor_pointer()
-            .hover(|bar| bar.bg(Theme::card()))
-            .text_color(Theme::ink_dim())
-            .on_click(cx.listener(Self::start))
-            .child(brand::icon("icons/plus.svg", 16., Theme::ink_dim()))
-            .child("New session")
-    }
-
-    fn section_view(
+    /// The step's name (double-click or the pencil renames it in place), its wiki page in Memory,
+    /// its menu, and a line on where it works and how busy it is.
+    fn topic_heading(
         &self,
-        section: Section<'_>,
-        root: &TopicId,
-        row: &mut usize,
+        step: &Topic,
+        inside: &Shelf<'_>,
         now: i64,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let heading = (section.topic.id != *root).then(|| self.subtopic_heading(section.topic, cx));
-        let rows = lineage::nest(&section.sessions, &self.folded);
-        let empty = rows.is_empty() && section.stubs.is_empty() && section.history.is_empty();
-        let mut lines = Vec::with_capacity(rows.len() + section.stubs.len());
-        for line in &rows {
-            *row += 1;
-            lines.push(self.session_row(*row, line, now, cx));
-        }
-        for (session, elsewhere) in section.stubs {
-            *row += 1;
-            lines.push(Self::stub_row(*row, session, elsewhere, cx));
-        }
-        if !section.history.is_empty() {
-            let open = self.history_open.contains(&section.topic.id);
-            lines.push(Self::history_toggle(
-                *row,
-                section.topic.id.clone(),
-                section.history.len(),
-                open,
-                cx,
-            ));
-            if open {
-                for line in &lineage::nest(&section.history, &self.folded) {
-                    *row += 1;
-                    lines.push(self.session_row(*row, line, now, cx));
-                }
-            }
-        }
+    ) -> impl IntoElement {
+        let (double_clicked, penciled, menu, wiki) =
+            (step.id.clone(), step.id.clone(), step.id.clone(), step.id.clone());
+        let title = match self.retitle_field(&step.id, cx) {
+            Some(field) => div().min_w(px(320.)).child(field).into_any_element(),
+            None => div()
+                .id("topic-title")
+                .text_2xl()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(Theme::ink())
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    if event.click_count() == 2 {
+                        this.begin_retitle(double_clicked.clone(), window, cx);
+                    }
+                }))
+                .child(step.name.clone())
+                .into_any_element(),
+        };
+        let last = inside
+            .active
+            .iter()
+            .chain(&inside.history)
+            .map(|session| session.updated_at_ms)
+            .max();
         div()
             .flex()
             .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_3()
+                    .child(title)
+                    .child(
+                        div()
+                            .id("topic-rename")
+                            .size(px(36.))
+                            .rounded(px(18.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|button| button.bg(Theme::card()))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.begin_retitle(penciled.clone(), window, cx);
+                            }))
+                            .child(brand::icon("icons/rename.svg", 16., Theme::ink_dim())),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Self::outlined("topic-wiki", "Wiki page in Memory ↗").on_click(cx.listener(
+                            move |_, _: &ClickEvent, _, cx| cx.emit(ViewInMemory(Focus::Topic(wiki.clone()))),
+                        )),
+                    )
+                    .child(Self::outlined("topic-menu", "⋯").on_click(cx.listener(
+                        move |this, event: &ClickEvent, window, cx| {
+                            this.open_menu(Focus::Topic(menu.clone()), event.position(), window, cx);
+                        },
+                    ))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x_4()
+                    .gap_y_1()
+                    .text_sm()
+                    .text_color(Theme::ink_dim())
+                    .children(step.directory.as_ref().map(Self::directory))
+                    .child(format!(
+                        "{} sessions · {} active",
+                        inside.len(),
+                        inside.active.len()
+                    ))
+                    .children(last.map(|at| format!("last active {}", ago_phrase(now, at)))),
+            )
+    }
+
+    fn directory(directory: &Directory) -> impl IntoElement {
+        let (path, place) = match directory {
+            Directory::Local { node, path } => (path.clone(), format!("on {node}")),
+            Directory::Shared { path } => (path.clone(), "shared".to_owned()),
+        };
+        div()
+            .flex()
+            .items_center()
             .gap_1()
-            .children(heading)
-            .when(empty, |list| {
-                list.child(
+            .child(
+                div()
+                    .font_family(Theme::MONO)
+                    .text_color(Theme::ink())
+                    .child(path),
+            )
+            .child(place)
+    }
+
+    pub(super) fn outlined(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .h(px(36.))
+            .px_4()
+            .rounded(px(18.))
+            .border_1()
+            .border_color(Theme::line())
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .text_sm()
+            .text_color(Theme::ink())
+            .hover(|button| button.bg(Theme::card()))
+            .child(label)
+    }
+
+    /// The step's sessions waiting on you, each a click from its question.
+    fn needs_you_strip(&self, inside: &Shelf<'_>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let waiting: Vec<&SessionSummary> = inside
+            .active
+            .iter()
+            .copied()
+            .filter(|session| self.feed.needs_you(session))
+            .collect();
+        if waiting.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .px_4()
+                .py_3()
+                .rounded(px(16.))
+                .bg(Theme::warn_container())
+                .border_1()
+                .border_color(Theme::warn_line())
+                .child(
                     div()
                         .text_xs()
-                        .text_color(Theme::ink_dim())
-                        .child("No sessions yet. Drag one here, or an agent to start one."),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(Theme::warn())
+                        .child(format!("NEEDS YOU · {}", waiting.len())),
                 )
-            })
-            .children(lines)
-            .into_any_element()
-    }
-
-    /// A subtopic's heading: right-click for its menu, double-click to rename it, and drop a
-    /// session on it to file the session there.
-    fn subtopic_heading(&self, topic: &Topic, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(field) = self.retitle_field(&topic.id, cx) {
-            return div().pb_1().child(field).into_any_element();
-        }
-        let (renamed, filed) = (topic.id.clone(), topic.id.clone());
-        div()
-            .id(gpui::ElementId::Name(
-                format!("subtopic-{}", topic.id.as_str()).into(),
-            ))
-            .pb_1()
-            .px_1()
-            .rounded(px(8.))
-            .cursor_pointer()
-            .text_xs()
-            .text_color(Theme::ink_dim())
-            .hover(|heading| heading.text_color(Theme::ink()))
-            .drag_over::<DraggedSession>(|style, _, _, _| {
-                style.bg(Theme::selected()).text_color(Theme::on_selected())
-            })
-            .on_drop(cx.listener(move |this, dragged: &DraggedSession, _, cx| {
-                cx.stop_propagation();
-                this.place(dragged.0.id.clone(), filed.clone(), cx);
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                Self::on_right_click(Focus::Topic(topic.id.clone()), cx),
-            )
-            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if event.click_count() == 2 {
-                    this.begin_retitle(renamed.clone(), window, cx);
-                }
-            }))
-            .child(topic.name.to_uppercase())
-            .into_any_element()
-    }
-
-    /// The row that folds a topic's history sessions away, the ones marked as history and not
-    /// active since.
-    fn history_toggle(
-        row: usize,
-        topic: TopicId,
-        count: usize,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        div()
-            .id(("history", row))
-            .mt_1()
-            .px_2()
-            .py(px(6.))
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(10.))
-            .cursor_pointer()
-            .hover(|line| line.bg(Theme::card()))
-            .text_xs()
-            .text_color(Theme::ink_dim())
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if !this.history_open.remove(&topic) {
-                    this.history_open.insert(topic.clone());
-                }
-                cx.notify();
-            }))
-            .child(div().w(px(12.)).child(if open { "▾" } else { "▸" }))
-            .child(format!("History · {count}"))
-            .into_any_element()
-    }
-
-    fn stub_row(
-        row: usize,
-        session: &SessionSummary,
-        elsewhere: Option<&Topic>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let open = session.clone();
-        let place = elsewhere.map_or_else(|| "another topic".to_owned(), |topic| topic.name.clone());
-        div()
-            .id(("stub", row))
-            .pl(px(24.))
-            .py(px(6.))
-            .rounded(px(10.))
-            .cursor_pointer()
-            .hover(|line| line.bg(Theme::card()))
-            .text_xs()
-            .text_color(Theme::ink_dim())
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.open(open.clone(), window, cx);
-            }))
-            .child(format!(
-                "↗ {} · side track in {place}",
-                one_line(session.title.as_deref())
-            ))
-            .into_any_element()
-    }
-
-    fn session_row(&self, row: usize, line: &lineage::Row, now: i64, cx: &mut Context<Self>) -> AnyElement {
-        let session = &line.session;
-        let open = session.clone();
-        let fold = session.id.clone();
-        let waiting = self.feed.needs_you(session);
-        let indent = px(20. * f32::from(u8::try_from(line.depth.min(4)).unwrap_or(4)));
-        div()
-            .id(("topic-session", row))
-            .pl(px(12.) + indent)
-            .pr_3()
-            .py(px(10.))
-            .rounded(px(14.))
-            .bg(if line.depth == 0 {
-                Theme::card()
-            } else {
-                Theme::surface()
-            })
-            .border_1()
-            .border_color(if waiting {
-                Theme::warn_line()
-            } else {
-                Theme::surface()
-            })
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .gap_3()
-            .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
-                cx.new(|_| crate::side_panel::DragGhost(one_line(dragged.0.title.as_deref())))
-            })
-            .on_mouse_down(
-                MouseButton::Right,
-                Self::on_right_click(Focus::Session(Box::new(session.clone())), cx),
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.open(open.clone(), window, cx);
-            }))
-            .when(line.depth > 0, |row| {
-                row.child(div().text_color(Theme::ink_dim()).child("↳"))
-            })
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(8.))
-                    .rounded(px(4.))
-                    .bg(self.dot(session)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .truncate()
-                    .text_color(Theme::ink())
-                    .child(one_line(session.title.as_deref())),
-            )
-            .when(waiting, |row| row.child(Self::needs_you_chip()))
-            .child(
-                div()
-                    .flex_none()
-                    .max_w(px(200.))
-                    .truncate()
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child(self.model_name(session)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(36.))
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child(ago(now, session.updated_at_ms)),
-            )
-            .when(line.children > 0, |item| {
-                item.child(
+                .children(waiting.into_iter().enumerate().map(|(index, session)| {
+                    let open = session.clone();
                     div()
-                        .id(("topic-fold", row))
-                        .flex_none()
-                        .text_color(Theme::ink_dim())
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            if !this.folded.remove(&fold) {
-                                this.folded.insert(fold.clone());
-                            }
-                            cx.stop_propagation();
-                            cx.notify();
-                        }))
-                        .child(if line.collapsed {
-                            format!("▸ {}", line.children)
-                        } else {
-                            "▾".to_owned()
-                        }),
-                )
-            })
-            .when(line.depth == 0, |item| {
-                item.child(Self::unplace_button(row, session.id.clone(), cx))
-            })
-            .into_any_element()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().flex_none().size(px(8.)).rounded(px(4.)).bg(Theme::warn()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .text_color(Theme::ink())
+                                .child(one_line(session.title.as_deref())),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(Theme::ink_dim())
+                                .child(session.id.harness().display_name().to_owned()),
+                        )
+                        .child(
+                            div()
+                                .id(("answer", index))
+                                .h(px(30.))
+                                .px_4()
+                                .rounded(px(15.))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .bg(Theme::warn())
+                                .text_sm()
+                                .text_color(Theme::warn_container())
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.open(open.clone(), window, cx);
+                                }))
+                                .child("Answer"),
+                        )
+                }))
+                .into_any_element(),
+        )
     }
 
-    /// Takes the session out of this topic, back to Uncategorized or History.
-    fn unplace_button(row: usize, session: SessionId, cx: &mut Context<Self>) -> impl IntoElement {
+    /// New session, plus one-click starts in this step for the harnesses its sessions run most,
+    /// each on the node it last ran on.
+    fn quick_start(step: &TopicId, inside: &Shelf<'_>, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id(("topic-unplace", row))
-            .flex_none()
-            .px_1()
-            .rounded(px(6.))
-            .text_color(Theme::ink_dim())
-            .hover(|button| button.bg(Theme::raised()).text_color(Theme::ink()))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                this.unplace(session.clone(), cx);
-            }))
-            .child("✕")
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                div()
+                    .id("topic-new-session")
+                    .h(px(40.))
+                    .px_4()
+                    .rounded(px(20.))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(Theme::line())
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|button| button.bg(Theme::card()))
+                    .text_color(Theme::ink())
+                    .on_click(cx.listener(Self::start))
+                    .child(brand::icon("icons/plus.svg", 16., Theme::ink_dim()))
+                    .child("New session"),
+            )
+            .children(
+                inside
+                    .usual(QUICK_STARTS)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, latest)| {
+                        let (harness, node, topic) =
+                            (latest.id.harness().clone(), latest.node.clone(), step.clone());
+                        let label = format!("{} here", harness.display_name());
+                        div()
+                            .id(("quick-start", index))
+                            .h(px(40.))
+                            .px_4()
+                            .rounded(px(20.))
+                            .bg(Theme::card())
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|button| button.bg(Theme::raised()))
+                            .text_color(Theme::ink())
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.start_session(
+                                    Launch::In(topic.clone()),
+                                    node.clone(),
+                                    harness.clone(),
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .child(label)
+                    }),
+            )
+    }
+
+    /// "now" or "5m" for a live session, "idle 3h" for a quiet Active one.
+    pub(super) fn active_age(now: i64, session: &SessionSummary, live: &HashSet<SessionId>) -> String {
+        let ago = crate::text::ago(now, session.updated_at_ms);
+        if live.contains(&session.id) {
+            ago
+        } else {
+            format!("idle {ago}")
+        }
     }
 }
