@@ -1,5 +1,5 @@
 use crate::SessionId;
-use crate::prompt::SentFile;
+use crate::prompt::{Prompt, SentFile};
 use crate::tools::{Question, ToolInput, ToolOutput};
 use crate::usage::{Pace, Usage};
 
@@ -289,9 +289,30 @@ impl SessionView {
         self.error = None;
     }
 
-    /// A turn went through, so an earlier failure no longer stands.
-    pub fn accepted(&mut self) {
+    /// The harness took `prompt` at `at_ms`: it shows as sent until a transcript that records it
+    /// arrives, and an earlier failure no longer stands.
+    pub fn accepted(&mut self, prompt: &Prompt, at_ms: i64) {
         self.error = None;
+        self.turns.push(Turn {
+            role: Role::User,
+            text: prompt.text.clone(),
+            thinking: String::new(),
+            tools: Vec::new(),
+            ends_with_text: true,
+            model: None,
+            usage: Usage::default(),
+            files: prompt
+                .attachments
+                .iter()
+                .map(|attachment| SentFile {
+                    media_type: attachment.media_type.clone(),
+                    name: Some(attachment.name.clone()),
+                    upload: None,
+                })
+                .collect(),
+            started_at_ms: Some(at_ms),
+            ended_at_ms: Some(at_ms),
+        });
     }
 
     fn live_turn(&mut self) -> &mut Turn {
@@ -373,6 +394,7 @@ impl SessionView {
 #[cfg(test)]
 mod tests {
     use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolState, Turn};
+    use crate::prompt::Prompt;
     use crate::tools::{ToolInput, ToolOutput};
     use crate::usage::Usage;
 
@@ -389,6 +411,24 @@ mod tests {
             started_at_ms: None,
             ended_at_ms: None,
         }
+    }
+
+    #[test]
+    fn a_taken_prompt_shows_until_the_transcript_that_records_it_arrives() {
+        let mut view = SessionView::default();
+        view.accepted(&Prompt::new("hi"), 1);
+        let texts = |view: &SessionView| {
+            view.turns()
+                .iter()
+                .map(|turn| turn.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&view), ["hi"]);
+        view.apply(SessionEvent::Snapshot {
+            turns: vec![said(Role::User, "hi"), said(Role::Assistant, "hello")],
+            context: None,
+        });
+        assert_eq!(texts(&view), ["hi", "hello"]);
     }
 
     #[test]

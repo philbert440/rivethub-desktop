@@ -148,7 +148,7 @@ impl Actor {
         match outcome {
             Ok(()) => {
                 *self.stopwatch.lock() = Stopwatch::default();
-                self.view.write().accepted();
+                self.view.write().accepted(&prompt, epoch_ms());
                 self.changed();
             }
             Err(err) if err.is_turn_in_flight() => {
@@ -247,6 +247,12 @@ impl Actor {
             self.fail(&err.to_string());
         }
     }
+}
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
 }
 
 pub fn spawn(runtime: &Handle, hub: crate::Hub, id: SessionId, node: Option<String>) -> SessionHandle {
