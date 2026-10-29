@@ -239,6 +239,13 @@ impl Workspace {
                 )
                 .children(waiting.into_iter().enumerate().map(|(index, session)| {
                     let open = session.clone();
+                    let harness = session.id.harness().display_name().to_owned();
+                    let asks = match self.previews.get(&session.id) {
+                        Some(preview) if preview.kind.waits() => {
+                            format!("{harness} · {}", Self::preview_line(preview))
+                        }
+                        _ => harness,
+                    };
                     div()
                         .flex()
                         .items_center()
@@ -253,9 +260,12 @@ impl Workspace {
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(Theme::ink_dim())
-                                .child(session.id.harness().display_name().to_owned()),
+                                .flex_none()
+                                .max_w(px(520.))
+                                .truncate()
+                                .text_sm()
+                                .text_color(Theme::ink())
+                                .child(asks),
                         )
                         .child(
                             div()

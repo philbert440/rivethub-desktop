@@ -4,6 +4,7 @@ use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ParentElement, Styled, div,
     prelude::*, px,
 };
+use model::preview::{Preview, PreviewKind};
 use model::session::SessionSummary;
 use model::shelf::Shelf;
 use model::topics::Atlas;
@@ -157,8 +158,8 @@ impl Workspace {
                 Theme::surface()
             })
             .flex()
-            .items_center()
-            .gap_3()
+            .flex_col()
+            .gap_1()
             .cursor_pointer()
             .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
                 cx.new(|_| DragGhost(one_line(dragged.0.title.as_deref())))
@@ -175,7 +176,12 @@ impl Workspace {
         } else {
             row.hover(|row| row.bg(Theme::card()))
         };
-        row.child(self.status_dot(session, active))
+        let preview = active.then(|| self.previews.get(&session.id)).flatten();
+        let line = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(self.status_dot(session, active))
             .child(
                 div()
                     .flex_1()
@@ -221,8 +227,32 @@ impl Workspace {
                         );
                     }))
                     .child("⋯"),
-            )
+            );
+        row.child(line)
+            .children(preview.map(|preview| {
+                div()
+                    .pl(px(21.))
+                    .truncate()
+                    .text_sm()
+                    .text_color(if preview.kind.waits() {
+                        Theme::warn()
+                    } else {
+                        Theme::ink_dim()
+                    })
+                    .child(Self::preview_line(preview))
+            }))
             .into_any_element()
+    }
+
+    /// A preview as the line under a session's title.
+    pub(super) fn preview_line(preview: &Preview) -> String {
+        match preview.kind {
+            PreviewKind::Running | PreviewKind::Said if preview.text.is_empty() => String::new(),
+            PreviewKind::Running => preview.text.clone(),
+            PreviewKind::Asking => format!("Asks: “{}”", preview.text),
+            PreviewKind::Approval => format!("Waiting for approval: {}", preview.text),
+            PreviewKind::Said => format!("“{}”", preview.text),
+        }
     }
 
     fn status_dot(&self, session: &SessionSummary, active: bool) -> impl IntoElement {

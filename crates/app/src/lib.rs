@@ -21,6 +21,7 @@ use model::HarnessId;
 use model::agents::{Agent, Roster};
 use model::harness::HarnessOffer;
 use model::prefs::Preferences;
+use model::preview::Previews;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
 use model::session::{Described, SessionSummary};
@@ -246,6 +247,29 @@ impl Hub {
             gateway.existing_terminal(&id).await.map(|pty| pty.is_some())
         })
         .await
+    }
+
+    /// What each session is doing now, or last said, asked of the node each one lives on. A node
+    /// that can't preview (an older rh, or out of reach) just has no previews.
+    pub async fn previews(&self, sessions: Vec<SessionSummary>) -> Previews {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let mut by_node: HashMap<Option<String>, Vec<model::SessionId>> = HashMap::new();
+            for session in sessions {
+                by_node.entry(session.node).or_default().push(session.id);
+            }
+            let asked = futures::future::join_all(by_node.into_iter().map(|(node, ids)| {
+                let hub = hub.clone();
+                async move {
+                    let gateway = hub.gateway_for(node.as_deref()).await.ok()?;
+                    gateway.previews(&ids).await.ok()
+                }
+            }))
+            .await;
+            Ok(asked.into_iter().flatten().flatten().collect())
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Every session every reachable node lists, across all of its harnesses, newest first.

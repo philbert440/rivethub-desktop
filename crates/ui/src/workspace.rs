@@ -19,6 +19,7 @@ use gpui::{
 };
 use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
+use model::preview::Previews;
 use model::session::SessionSummary;
 use model::shelf::Shelf;
 use model::topics::{
@@ -115,6 +116,7 @@ pub struct Workspace {
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     rail: Entity<TopicRail>,
+    previews: Previews,
     _rail_events: Subscription,
     _feed: [gpui::Task<()>; 2],
 }
@@ -217,6 +219,7 @@ impl Workspace {
             feed,
             _panel_events: panel_events,
             rail,
+            previews: Previews::new(),
             _rail_events: rail_events,
             _feed: [refresh, repaint],
         };
@@ -305,7 +308,7 @@ impl Workspace {
             *self.subagents.entry(parent).or_default() += 1;
         }
         self.sync_panel(cx);
-        self.sync_rail(cx);
+        self.sync_step(cx);
         self.load_suggestions(cx);
         cx.notify();
     }
@@ -410,21 +413,32 @@ impl Workspace {
             .map_or_else(|| root.clone(), Clone::clone)
     }
 
-    /// Points the rail at the open topic's current step and its sessions, newest first.
-    pub(super) fn sync_rail(&self, cx: &mut Context<Self>) {
+    /// Points the rail at the open topic's current step and its sessions, newest first, and asks
+    /// what the step's Active sessions are doing now.
+    pub(super) fn sync_step(&self, cx: &mut Context<Self>) {
         let Altitude::Topic(root) = &self.altitude else {
             return;
         };
         let step = self.step_in(root);
         let inside = self.shelf(&step);
-        let mut sessions: Vec<SessionSummary> = inside
-            .active
+        let active: Vec<SessionSummary> = inside.active.iter().map(|session| (*session).clone()).collect();
+        let mut sessions: Vec<SessionSummary> = active
             .iter()
-            .chain(&inside.history)
-            .map(|session| (*session).clone())
+            .cloned()
+            .chain(inside.history.iter().map(|session| (*session).clone()))
             .collect();
         sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
         self.rail.update(cx, |rail, cx| rail.show(step, sessions, cx));
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let previews = hub.previews(active).await;
+            this.update(cx, |this, cx| {
+                this.previews = previews;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn sync_panel(&self, cx: &mut Context<Self>) {
@@ -703,7 +717,7 @@ impl Workspace {
         self.screen = TopicScreen::default();
         self.retitling = None;
         self.altitude = Altitude::Topic(topic);
-        self.sync_rail(cx);
+        self.sync_step(cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -976,7 +990,7 @@ impl Workspace {
             self.placing = None;
             self.load(cx);
         }
-        self.sync_rail(cx);
+        self.sync_step(cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }

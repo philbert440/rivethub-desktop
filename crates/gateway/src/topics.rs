@@ -1,11 +1,12 @@
 use model::decisions::Decision;
+use model::preview::{StartupPart, StartupPreview};
 use model::topics::{Directory, HistoryMarks, Suggestion, Topic};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
-    PlacementRequest, SessionHistoryList, SessionHistoryMark, TopicCreateRequest, TopicDecision,
-    TopicDecisionList, TopicDirectory, TopicList, TopicMergeRequest, TopicRecord, TopicSessionList,
-    TopicUpdate,
+    PlacementRequest, SessionHistoryList, SessionHistoryMark, StartupContext, TopicCreateRequest,
+    TopicDecision, TopicDecisionList, TopicDirectory, TopicList, TopicMergeRequest, TopicRecord,
+    TopicSessionList, TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -191,6 +192,24 @@ impl Gateway {
         Self::check(self.http.delete(url).send().await.map_err(GatewayError::Http)?)
             .await
             .map(drop)
+    }
+
+    /// What a session started in the topic right now would be told; rh answers 503 when startup
+    /// memory isn't set up on the node.
+    pub async fn topic_startup(&self, topic: &TopicId) -> Result<StartupPreview, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "startup"])?;
+        let context: StartupContext = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(StartupPreview {
+            sections: context
+                .sections
+                .into_iter()
+                .map(|section| StartupPart {
+                    title: section.title,
+                    text: section.text,
+                })
+                .collect(),
+            tokens: context.tokens,
+        })
     }
 
     /// The topic's own decisions, oldest first.

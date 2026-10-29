@@ -2,6 +2,7 @@ mod chat;
 mod error;
 mod events;
 mod memory;
+mod previews;
 mod terminal;
 mod tls;
 mod tool_input;

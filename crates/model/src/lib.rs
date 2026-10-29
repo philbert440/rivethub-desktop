@@ -14,6 +14,7 @@ pub mod nav;
 pub mod notice;
 pub mod plan;
 pub mod prefs;
+pub mod preview;
 pub mod prompt;
 pub mod search;
 pub mod session;

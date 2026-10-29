@@ -5,6 +5,7 @@ use gpui::{
     Render, Styled, Subscription, Window, actions, div, prelude::*, px,
 };
 use model::decisions::{Decision, text};
+use model::preview::StartupPreview;
 use model::session::SessionSummary;
 use model::{SessionId, TopicId};
 
@@ -48,6 +49,8 @@ pub struct TopicRail {
     adding: Option<Adding>,
     watched: Vec<(SessionId, i64)>,
     caught: Vec<Caught>,
+    startup: Option<StartupPreview>,
+    startup_open: bool,
 }
 
 impl EventEmitter<RailEvent> for TopicRail {}
@@ -62,6 +65,8 @@ impl TopicRail {
             adding: None,
             watched: Vec::new(),
             caught: Vec::new(),
+            startup: None,
+            startup_open: false,
         }
     }
 
@@ -75,6 +80,9 @@ impl TopicRail {
             self.adding = None;
             self.caught.clear();
             self.watched.clear();
+            self.startup = None;
+            self.startup_open = false;
+            self.load_startup(topic.clone(), cx);
             self.load_decisions(topic, cx);
         }
         let newest: Vec<SessionSummary> = sessions.into_iter().take(CAUGHT_SESSIONS).collect();
@@ -86,6 +94,23 @@ impl TopicRail {
             self.watched = watched;
             self.load_catch_up(newest, cx);
         }
+    }
+
+    /// What a session started in the topic would be told. A node without startup memory, or with
+    /// an older rh, has nothing to preview, and the card stays away.
+    fn load_startup(&self, topic: TopicId, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = hub.topic_startup(topic.clone()).await;
+            this.update(cx, |this, cx| {
+                if this.topic.as_ref() == Some(&topic) {
+                    this.startup = loaded.ok().filter(|startup| !startup.sections.is_empty());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn load_decisions(&self, topic: TopicId, cx: &mut Context<Self>) {
@@ -373,6 +398,72 @@ impl TopicRail {
     }
 }
 
+impl TopicRail {
+    /// NEW SESSIONS HERE GET: the sections startup memory would hand a session started in the
+    /// topic now, and on request the text itself.
+    fn startup_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let startup = self.startup.as_ref()?;
+        let open = self.startup_open;
+        Some(
+            Self::card()
+                .bg(Theme::surface())
+                .border_1()
+                .border_color(Theme::line())
+                .child(Self::label("NEW SESSIONS HERE GET".into()))
+                .children(startup.sections.iter().map(|section| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(Theme::ink())
+                                .child(section.title.clone()),
+                        )
+                        .when(open, |part| {
+                            part.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(Theme::ink_dim())
+                                    .child(section.text.clone()),
+                            )
+                        })
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(Theme::ink_dim())
+                                .child(format!("about {} tokens", startup.tokens)),
+                        )
+                        .child(
+                            Self::pill(
+                                "startup-open",
+                                if open {
+                                    "Hide what's sent"
+                                } else {
+                                    "Show what's sent"
+                                },
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.startup_open = !this.startup_open;
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
 impl Render for TopicRail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -382,5 +473,6 @@ impl Render for TopicRail {
             .gap_4()
             .child(self.decisions_card(cx))
             .children(self.catch_up_card(cx))
+            .children(self.startup_card(cx))
     }
 }

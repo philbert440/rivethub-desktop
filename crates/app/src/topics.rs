@@ -2,6 +2,7 @@ use gateway::GatewayError;
 use std::collections::HashMap;
 
 use model::decisions::{Decision, Group, on_page};
+use model::preview::StartupPreview;
 use model::topics::{Filing, Suggestion, Topic};
 use model::{SessionId, TopicId};
 
@@ -140,6 +141,13 @@ impl Hub {
     }
 
     /// Creates a topic, under `parent` when given.
+    /// What a session started in the topic right now would be told.
+    pub async fn topic_startup(&self, topic: TopicId) -> Result<StartupPreview, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.topic_startup(&topic).await })
+            .await
+    }
+
     pub async fn create_topic(&self, name: String, parent: Option<TopicId>) -> Result<Topic, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.create_topic(&name, parent.as_ref()).await })
