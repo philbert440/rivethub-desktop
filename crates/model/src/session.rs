@@ -305,6 +305,15 @@ impl SessionView {
         self.error = None;
     }
 
+    /// The running turn took `prompt` as it went: the reply so far stays above it and goes on
+    /// below it.
+    pub fn steered(&mut self, prompt: &Prompt, at_ms: i64) {
+        if let Some(turn) = self.live.take() {
+            self.turns.push(turn);
+        }
+        self.accepted(prompt, at_ms);
+    }
+
     /// The harness took `prompt` at `at_ms`: it shows as sent until a transcript that records it
     /// arrives, and an earlier failure no longer stands.
     pub fn accepted(&mut self, prompt: &Prompt, at_ms: i64) {
@@ -462,6 +471,21 @@ mod tests {
             context: None,
         });
         assert_eq!(texts(&view), ["hi", "hello"]);
+    }
+
+    #[test]
+    fn a_steered_prompt_lands_between_the_reply_so_far_and_the_rest() {
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::AssistantText("Looking".into()));
+        view.steered(&Prompt::new("use ripgrep"), 1);
+        view.apply(SessionEvent::AssistantText("Using rg".into()));
+        let texts: Vec<&str> = view
+            .turns()
+            .iter()
+            .chain(view.live())
+            .map(|turn| turn.text.as_str())
+            .collect();
+        assert_eq!(texts, ["Looking", "use ripgrep", "Using rg"]);
     }
 
     #[test]

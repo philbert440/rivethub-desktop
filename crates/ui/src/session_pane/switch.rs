@@ -46,14 +46,14 @@ impl SessionPane {
 
     /// The label the harness offers for a model, or its id when the harness doesn't offer it.
     pub(super) fn model_label(&self, id: &str) -> String {
-        self.models
+        self.models()
             .iter()
             .find(|choice| choice.id == id)
             .map_or_else(|| id.to_owned(), |choice| choice.label.clone())
     }
 
     fn can_pick_model(&self) -> bool {
-        self.switches.model && !self.models.is_empty()
+        self.switches.model && !self.models().is_empty()
     }
 
     fn toggle_picker(&mut self, picker: Picker, cx: &mut Context<Self>) {
@@ -98,7 +98,7 @@ impl SessionPane {
         let choices: Vec<gpui::AnyElement> = match self.picking? {
             Picker::Model if self.can_pick_model() => {
                 let shown = self.shown_model();
-                self.models
+                self.models()
                     .iter()
                     .enumerate()
                     .map(|(index, choice)| {

@@ -89,9 +89,7 @@ pub fn attachment(raw: wire::gateway::uploads::UploadCreated) -> model::prompt::
     }
 }
 
-pub fn prompt(
-    prompt: &model::prompt::Prompt,
-) -> Result<wire::gateway::sessions::SessionPostRequest, GatewayError> {
+fn attachments(prompt: &model::prompt::Prompt) -> Option<Vec<wire::gateway::agents::UserTurnAttachment>> {
     let attachments = prompt
         .attachments
         .iter()
@@ -101,6 +99,19 @@ pub fn prompt(
             name: Some(attachment.name.clone()),
         })
         .collect::<Vec<_>>();
+    Some(attachments).filter(|list| !list.is_empty())
+}
+
+pub fn steer(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::SessionSteerRequest {
+    wire::gateway::sessions::SessionSteerRequest {
+        text: prompt.text.clone(),
+        attachments: attachments(prompt),
+    }
+}
+
+pub fn prompt(
+    prompt: &model::prompt::Prompt,
+) -> Result<wire::gateway::sessions::SessionPostRequest, GatewayError> {
     let thinking = prompt
         .switch
         .effort
@@ -118,7 +129,7 @@ pub fn prompt(
         agent: None,
         thinking,
         system_prompt: None,
-        attachments: Some(attachments).filter(|list| !list.is_empty()),
+        attachments: attachments(prompt),
         harness: None,
         model: prompt.switch.model.clone(),
         working_dir: None,
@@ -290,6 +301,7 @@ pub fn offer(raw: wire::harness::HarnessOffering) -> model::harness::HarnessOffe
         chat: raw.chat,
         lists_sessions: capabilities.observation.list_sessions,
         takes_images: capabilities.image_attachments.unwrap_or(false),
+        steers: capabilities.control.steering.unwrap_or(false),
         models: capabilities
             .models
             .unwrap_or_default()

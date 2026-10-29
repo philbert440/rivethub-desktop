@@ -19,7 +19,8 @@ enum Command {
     Send(Prompt),
     Answer(Prompt),
     Stop,
-    Unqueue(usize),
+    Steer(Prompt),
+    Unqueue(Prompt),
     Decide { request_id: String, decision: Decision },
 }
 
@@ -63,16 +64,20 @@ impl SessionHandle {
         self.queue.read().iter().cloned().collect()
     }
 
-    pub fn unqueue(&self, index: usize) {
-        let _ = self.commands.try_send(Command::Unqueue(index));
+    pub fn unqueue(&self, prompt: Prompt) {
+        let _ = self.commands.try_send(Command::Unqueue(prompt));
+    }
+
+    /// Hands a queued prompt to the turn that is running; with none running it goes as the next
+    /// turn.
+    pub fn steer(&self, prompt: Prompt) {
+        let _ = self.commands.try_send(Command::Steer(prompt));
     }
 
     /// Takes a queued prompt back out of the queue, to change before it goes; one already sent is
     /// gone.
     pub fn take_queued(&self, prompt: &Prompt) -> Option<Prompt> {
-        let mut queue = self.queue.write();
-        let at = queue.iter().position(|queued| queued == prompt)?;
-        queue.remove(at)
+        take(&self.queue, prompt)
     }
 
     pub fn decide(&self, request_id: String, decision: Decision) {
@@ -170,6 +175,35 @@ impl Actor {
         }
     }
 
+    async fn steer(&self, prompt: Prompt) -> Result<(), gateway::GatewayError> {
+        let Some(prompt) = take(&self.queue, &prompt) else {
+            return Ok(());
+        };
+        self.changed();
+        let steered = match self.gateway().await {
+            Ok(gateway) => gateway.steer(&self.id, &prompt).await,
+            Err(err) => Err(err),
+        };
+        match steered {
+            Ok(true) => {
+                self.view.write().steered(&prompt, epoch_ms());
+                self.changed();
+                Ok(())
+            }
+            Ok(false) => {
+                self.queue.write().push_front(prompt);
+                self.changed();
+                self.drain().await;
+                Ok(())
+            }
+            Err(err) => {
+                self.queue.write().push_front(prompt);
+                self.changed();
+                Err(err)
+            }
+        }
+    }
+
     fn fail(&self, message: &str) {
         self.view.write().apply(SessionEvent::Error(message.to_owned()));
         self.changed();
@@ -240,8 +274,9 @@ impl Actor {
                     Ok(())
                 }
             }
-            Command::Unqueue(index) => {
-                self.queue.write().remove(index);
+            Command::Steer(prompt) => self.steer(prompt).await,
+            Command::Unqueue(prompt) => {
+                take(&self.queue, &prompt);
                 self.changed();
                 Ok(())
             }
@@ -258,6 +293,13 @@ impl Actor {
             self.fail(&err.to_string());
         }
     }
+}
+
+/// Takes `prompt` out of the queue where it sits now; one already sent is gone.
+fn take(queue: &RwLock<VecDeque<Prompt>>, prompt: &Prompt) -> Option<Prompt> {
+    let mut queue = queue.write();
+    let at = queue.iter().position(|queued| queued == prompt)?;
+    queue.remove(at)
 }
 
 fn epoch_ms() -> i64 {

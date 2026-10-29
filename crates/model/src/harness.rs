@@ -2,11 +2,17 @@ use crate::HarnessId;
 
 /// A harness a node offers, as `GET /api/harnesses` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "an offer is a set of things the harness can or can't do"
+)]
 pub struct HarnessOffer {
     pub id: HarnessId,
     pub chat: bool,
     pub lists_sessions: bool,
     pub takes_images: bool,
+    /// It can take a message into a turn that is running.
+    pub steers: bool,
     pub models: Vec<ModelChoice>,
 }
 
@@ -61,6 +67,7 @@ mod tests {
             chat: true,
             lists_sessions: true,
             takes_images: false,
+            steers: false,
             models: models
                 .map(|label| ModelChoice {
                     id: label.to_owned(),

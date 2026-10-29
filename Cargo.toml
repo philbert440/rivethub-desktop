@@ -27,7 +27,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "f22cc5e47a5c3067d6e656022e60a14fd9a6c88d" }
+wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "90cee04fc4bb73b839a043127dda55aeb4865493" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pki-types = "1"

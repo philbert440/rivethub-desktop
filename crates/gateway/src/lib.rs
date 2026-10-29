@@ -201,6 +201,15 @@ impl Gateway {
         }
     }
 
+    /// Hands `prompt` to the turn running in `session`; false when none is running, so it goes as
+    /// a turn instead.
+    pub async fn steer(&self, session: &SessionId, prompt: &Prompt) -> Result<bool, GatewayError> {
+        let url = format!("{}/api/harness-sessions/{session}/steer", self.base_url);
+        let steered: wire::gateway::sessions::SessionSteerResponse =
+            Self::read_json(self.http.post(url).json(&translate::steer(prompt)).send().await)?.await?;
+        Ok(steered.outcome != wire::harness::SteerOutcome::PromptRequired)
+    }
+
     pub async fn upload(
         &self,
         session: &SessionId,

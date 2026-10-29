@@ -9,7 +9,7 @@ use gpui::{
     Window, div, list, prelude::*, px, relative,
 };
 use model::chat::{ExchangeState, arrived, exchanges, totals};
-use model::harness::ModelChoice;
+use model::harness::{HarnessOffer, ModelChoice};
 use model::prompt::{Attachment, Prompt, Switch, image_media_type};
 use model::session::{Decision, SessionSummary, SessionView, Switches};
 use model::usage::tokens;
@@ -71,9 +71,8 @@ pub struct SessionPane {
     hovered_turn: Option<usize>,
     width: Option<Pixels>,
     composer: Entity<TextInput>,
-    takes_images: bool,
+    offer: Option<HarnessOffer>,
     switches: Switches,
-    models: Vec<ModelChoice>,
     picked: Switch,
     picking: Option<Picker>,
     attachments: Vec<Attachment>,
@@ -128,9 +127,8 @@ impl SessionPane {
             hovered_turn: None,
             width: None,
             composer,
-            takes_images: false,
+            offer: None,
             switches: Switches::default(),
-            models: Vec::new(),
             picked: Switch::default(),
             picking: None,
             attachments: Vec::new(),
@@ -156,8 +154,7 @@ impl SessionPane {
             let described = hub.describe(&summary).await;
             this.update(cx, |this, cx| {
                 if let Ok(Some(offer)) = offer {
-                    this.takes_images = offer.takes_images;
-                    this.models = offer.models;
+                    this.offer = Some(offer);
                 }
                 if let Ok(described) = described {
                     this.switches = described.switches;
@@ -220,16 +217,29 @@ impl SessionPane {
         .detach();
     }
 
+    fn takes_images(&self) -> bool {
+        self.offer.as_ref().is_some_and(|offer| offer.takes_images)
+    }
+
+    fn models(&self) -> &[ModelChoice] {
+        self.offer.as_ref().map_or(&[], |offer| offer.models.as_slice())
+    }
+
+    fn steers(&self) -> bool {
+        self.offer.as_ref().is_some_and(|offer| offer.steers)
+    }
+
     /// Clears the last attachment problem, or says why nothing can be attached here.
     fn accepts_attachments(&mut self, cx: &mut Context<Self>) -> bool {
-        self.attach_problem = (!self.takes_images).then(|| {
+        let takes_images = self.takes_images();
+        self.attach_problem = (!takes_images).then(|| {
             format!(
                 "{} doesn't take attachments in this session",
                 self.summary.id.harness().display_name()
             )
         });
         cx.notify();
-        self.takes_images
+        takes_images
     }
 
     /// Files dropped on the chat attach when rh takes them, which today means images only.
@@ -1090,8 +1100,8 @@ impl SessionPane {
                     if queued.len() == 1 { "message" } else { "messages" }
                 )))
                 .children(queued.into_iter().enumerate().map(|(index, prompt)| {
-                    let handle = self.handle.clone();
-                    let queued = prompt.clone();
+                    let (steering, unqueuing) = (self.handle.clone(), self.handle.clone());
+                    let (steered, dropped, queued) = (prompt.clone(), prompt.clone(), prompt.clone());
                     let images = match prompt.attachments.len() {
                         0 => None,
                         1 => Some("1 image".to_owned()),
@@ -1111,6 +1121,17 @@ impl SessionPane {
                         .children(
                             images.map(|images| div().text_xs().text_color(Theme::ink_dim()).child(images)),
                         )
+                        .when(self.steers(), |row| {
+                            row.child(
+                                div()
+                                    .id(("steer-queued", index))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(Theme::accent())
+                                    .on_click(move |_, _, _| steering.steer(steered.clone()))
+                                    .child("Steer"),
+                            )
+                        })
                         .child(
                             div()
                                 .id(("edit-queued", index))
@@ -1125,7 +1146,7 @@ impl SessionPane {
                                 .id(("unqueue", index))
                                 .cursor_pointer()
                                 .text_color(Theme::ink_dim())
-                                .on_click(move |_, _, _| handle.unqueue(index))
+                                .on_click(move |_, _, _| unqueuing.unqueue(dropped.clone()))
                                 .child("×"),
                         )
                 }))
@@ -1285,7 +1306,7 @@ impl SessionPane {
                     .pb_2()
                     .flex()
                     .items_center()
-                    .when(self.takes_images, |row| row.child(Self::attach_button(cx)))
+                    .when(self.takes_images(), |row| row.child(Self::attach_button(cx)))
                     .children(self.switch_chips(cx))
                     .child(div().flex_1())
                     .children(self.session_stats(view))
