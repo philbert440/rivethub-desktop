@@ -12,8 +12,8 @@ use tokio::task::AbortHandle;
 
 use crate::Hub;
 
-const FIRST_RETRY: Duration = Duration::from_millis(500);
-const LAST_RETRY: Duration = Duration::from_secs(15);
+pub(crate) const FIRST_RETRY: Duration = Duration::from_millis(500);
+pub(crate) const LAST_RETRY: Duration = Duration::from_secs(15);
 
 /// A stream: the node it comes from (`None` is this client's own node) and which of its feeds.
 /// Each keeps its own live state, so one reconnecting doesn't wipe what another said.

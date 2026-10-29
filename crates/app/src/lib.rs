@@ -1,6 +1,7 @@
 mod feed;
 mod memory;
 mod notify;
+mod plugins;
 mod prefs;
 mod session;
 mod status;
@@ -9,6 +10,7 @@ mod topics;
 
 pub use feed::WorkspaceFeed;
 pub use memory::{Library, Tidy};
+pub use plugins::{Installed, NodeNotice, PluginWatch};
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
 
