@@ -20,7 +20,7 @@ use std::sync::Arc;
 use model::prompt::{Attachment, Prompt};
 use model::{HarnessId, SessionId, session::SessionSummary};
 use rustls::ClientConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The roles a memory search leaves out, so it finds only what people and agents said.
 const SAID_ONLY: &str = "tool,system";
@@ -43,6 +43,12 @@ pub struct Gateway {
     http: reqwest::Client,
     tls: Arc<ClientConfig>,
     base_url: String,
+}
+
+/// A node's harness list, each entry decoded on its own.
+#[derive(Deserialize)]
+struct Offerings {
+    harnesses: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -81,10 +87,17 @@ impl Gateway {
         Ok(list.sessions.into_iter().map(translate::summary).collect())
     }
 
+    /// A harness this client doesn't know, from an rh newer or older than its own, is left out
+    /// rather than failing the whole node.
     pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
         let url = format!("{}/api/harnesses", self.base_url);
-        let list: wire::harness::HarnessOfferingList = self.get_json(&url).await?;
-        Ok(list.harnesses.into_iter().map(translate::offer).collect())
+        let list: Offerings = self.get_json(&url).await?;
+        Ok(list
+            .harnesses
+            .into_iter()
+            .filter_map(|raw| serde_json::from_value::<wire::harness::HarnessOffering>(raw).ok())
+            .map(translate::offer)
+            .collect())
     }
 
     pub async fn mesh(&self) -> Result<Vec<model::mesh::Node>, GatewayError> {
