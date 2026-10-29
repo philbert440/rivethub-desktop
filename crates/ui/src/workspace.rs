@@ -429,13 +429,20 @@ impl Workspace {
             .chain(inside.history.iter().map(|session| (*session).clone()))
             .collect();
         sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-        self.rail.update(cx, |rail, cx| rail.show(step, sessions, cx));
+        self.rail
+            .update(cx, |rail, cx| rail.show(step.clone(), sessions, cx));
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let previews = hub.previews(active).await;
             this.update(cx, |this, cx| {
-                this.previews = previews;
-                cx.notify();
+                let current = match &this.altitude {
+                    Altitude::Topic(root) => this.step_in(root) == step,
+                    _ => false,
+                };
+                if current {
+                    this.previews = previews;
+                    cx.notify();
+                }
             })
             .ok();
         })
