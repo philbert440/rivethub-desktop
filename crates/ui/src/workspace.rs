@@ -499,7 +499,8 @@ impl Workspace {
         let delete = topic.as_ref().map(|(id, name, ..)| (id.clone(), name.clone()));
         let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
         if let Some((id, _, subtopic, closed)) = topic {
-            menu = menu.editing(id.clone(), subtopic).closing(id, closed);
+            let movable = !self.topics.iter().any(|known| known.parent.as_ref() == Some(&id));
+            menu = menu.editing(id.clone(), subtopic, movable).closing(id, closed);
         }
         if let Some((latest, placed, history)) = session {
             let id = latest.id.clone();
@@ -609,6 +610,7 @@ impl Workspace {
     pub fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
         self.pane = None;
         self.placing = None;
+        self.retitling = None;
         self.altitude = Altitude::Topic(topic);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -869,6 +871,7 @@ impl Workspace {
             return;
         }
         self.altitude = altitude;
+        self.retitling = None;
         if !matches!(self.altitude, Altitude::Session { .. }) {
             self.pane = None;
             self.placing = None;

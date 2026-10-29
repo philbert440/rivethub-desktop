@@ -93,6 +93,7 @@ impl Workspace {
         self.edit_topics(
             async move { hub.rename_topic(topic, name).await },
             "renaming it failed",
+            |_| {},
             cx,
         );
     }
@@ -218,6 +219,7 @@ impl Workspace {
         self.edit_topics(
             async move { hub.move_topic(topic, parent).await },
             "moving it failed",
+            |_| {},
             cx,
         );
     }
@@ -230,27 +232,33 @@ impl Workspace {
                 hub.move_topic(topic, Some(parent.id)).await
             },
             "moving it failed",
+            |_| {},
             cx,
         );
     }
 
     /// Merges the topic into another, and follows it there if it was open.
     fn merge(&mut self, topic: TopicId, into: TopicId, cx: &mut Context<Self>) {
-        if self.altitude == Altitude::Topic(topic.clone()) {
-            self.altitude = Altitude::Topic(into.clone());
-        }
         let hub = self.hub.clone();
+        let (merged, target) = (topic.clone(), into.clone());
         self.edit_topics(
             async move { hub.merge_topic(topic, into).await },
             "merging it failed",
+            move |this| {
+                if this.altitude == Altitude::Topic(merged) {
+                    this.altitude = Altitude::Topic(target);
+                }
+            },
             cx,
         );
     }
 
+    /// Runs a topic change, then `then` once rh has taken it; a refusal shows rh's own words.
     fn edit_topics(
         &mut self,
         work: impl Future<Output = Result<(), GatewayError>> + 'static,
         failure: &'static str,
+        then: impl FnOnce(&mut Self) + 'static,
         cx: &mut Context<Self>,
     ) {
         self.failed = None;
@@ -258,11 +266,10 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let done = work.await;
             this.update(cx, |this, cx| {
-                if let Err(err) = done {
-                    this.failed = Some(match err {
-                        GatewayError::Conflict(message) => message,
-                        err => format!("{failure}: {err}"),
-                    });
+                match done {
+                    Ok(()) => then(this),
+                    Err(GatewayError::Conflict(message)) => this.failed = Some(message),
+                    Err(err) => this.failed = Some(format!("{failure}: {err}")),
                 }
                 this.load(cx);
             })

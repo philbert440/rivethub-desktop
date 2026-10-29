@@ -35,7 +35,7 @@ pub struct Menu {
     delete: Option<(TopicId, String)>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
-    edits: Option<(TopicId, bool)>,
+    edits: Option<(TopicId, bool, bool)>,
     moves: Option<(SessionSummary, bool)>,
     confirming: bool,
     busy: bool,
@@ -87,9 +87,10 @@ impl Menu {
         self
     }
 
-    /// Offers Rename, Move into and Merge into, and Move to top level for a `subtopic`.
-    pub fn editing(mut self, topic: TopicId, subtopic: bool) -> Self {
-        self.edits = Some((topic, subtopic));
+    /// Offers Rename and Merge into; Move into for a topic that can go under another (one with no
+    /// subtopics of its own, since rh nests one level deep); Move to top level for a `subtopic`.
+    pub fn editing(mut self, topic: TopicId, subtopic: bool, movable: bool) -> Self {
+        self.edits = Some((topic, subtopic, movable));
         self
     }
 
@@ -190,24 +191,24 @@ impl Menu {
 
     /// Rename, Move into, Move to top level and Merge into.
     fn topic_edits(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some((topic, subtopic)) = self.edits.clone() else {
+        let Some((topic, subtopic, movable)) = self.edits.clone() else {
             return Vec::new();
         };
         let (renamed, moved, merged, lifted) = (topic.clone(), topic.clone(), topic.clone(), topic);
-        let mut items = vec![
-            Self::emits(
-                "rename-topic",
-                "Rename",
-                move || MenuEvent::Rename(renamed.clone()),
-                cx,
-            ),
-            Self::emits(
+        let mut items = vec![Self::emits(
+            "rename-topic",
+            "Rename",
+            move || MenuEvent::Rename(renamed.clone()),
+            cx,
+        )];
+        if movable {
+            items.push(Self::emits(
                 "move-topic",
                 "Move into…",
                 move || MenuEvent::MoveInto(moved.clone()),
                 cx,
-            ),
-        ];
+            ));
+        }
         if subtopic {
             items.push(
                 Self::item("lift-topic", "Move to top level")
