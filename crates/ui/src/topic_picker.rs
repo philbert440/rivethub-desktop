@@ -25,6 +25,7 @@ pub struct TopicPicker {
     topics: Vec<Topic>,
     no_topic: Option<&'static str>,
     creates: bool,
+    heading: Option<String>,
     _input: [Subscription; 2],
 }
 
@@ -40,8 +41,16 @@ impl TopicPicker {
             topics,
             no_topic,
             creates: true,
+            heading: None,
             _input: [submitted, typed],
         }
+    }
+
+    /// A line above the field saying what the pick is for.
+    #[must_use]
+    pub fn headed(mut self, heading: String) -> Self {
+        self.heading = Some(heading);
+        self
     }
 
     /// Offers only the topics given, with no Create row: for picking an existing topic.
@@ -121,6 +130,14 @@ impl Render for TopicPicker {
             .flex()
             .flex_col()
             .gap_1()
+            .children(self.heading.clone().map(|heading| {
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(heading)
+            }))
             .child(
                 div()
                     .px_3()

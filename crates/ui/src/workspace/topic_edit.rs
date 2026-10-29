@@ -33,7 +33,6 @@ pub(super) enum Pick {
 /// The floating topic picker, opened where the menu was.
 pub(super) struct Choosing {
     picker: Entity<TopicPicker>,
-    heading: String,
     at: Point<Pixels>,
     _events: Subscription,
 }
@@ -159,7 +158,7 @@ impl Workspace {
         };
         let merging = matches!(pick, Pick::MergeInto(_));
         let picker = cx.new(|cx| {
-            let picker = TopicPicker::new(topics, None, cx);
+            let picker = TopicPicker::new(topics, None, cx).headed(heading);
             if merging { picker.without_create() } else { picker }
         });
         let events = cx.subscribe(&picker, move |this, _, event: &PickerEvent, cx| {
@@ -188,7 +187,6 @@ impl Workspace {
         window.focus(&picker.focus_handle(cx), cx);
         self.choosing = Some(Choosing {
             picker,
-            heading,
             at,
             _events: events,
         });
@@ -201,23 +199,11 @@ impl Workspace {
             anchored().position(choosing.at).child(
                 div()
                     .w(px(300.))
-                    .p_2()
-                    .rounded(px(16.))
-                    .bg(Theme::surface())
-                    .border_1()
-                    .border_color(Theme::line())
                     .occlude()
                     .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         this.choosing = None;
                         cx.notify();
                     }))
-                    .child(
-                        div()
-                            .px_2()
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(choosing.heading.clone()),
-                    )
                     .child(choosing.picker.clone()),
             ),
         ))
