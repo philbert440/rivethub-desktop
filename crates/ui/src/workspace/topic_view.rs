@@ -254,6 +254,8 @@ impl Workspace {
             .child(
                 div()
                     .flex_none()
+                    .max_w(px(200.))
+                    .truncate()
                     .text_xs()
                     .text_color(Theme::ink_dim())
                     .child(self.model_name(session)),

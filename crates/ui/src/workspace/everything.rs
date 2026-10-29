@@ -312,11 +312,17 @@ impl Workspace {
                     .gap_2()
                     .text_xs()
                     .text_color(Theme::ink_dim())
-                    .child(self.model_name(session))
-                    .child(ago(now, session.updated_at_ms))
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w(px(150.))
+                            .truncate()
+                            .child(self.model_name(session)),
+                    )
+                    .child(div().flex_none().child(ago(now, session.updated_at_ms)))
                     .children(self.subagents.get(&session.id).map(|count| {
                         let noun = if *count == 1 { "subagent" } else { "subagents" };
-                        format!("↳ {count} {noun}")
+                        div().flex_none().child(format!("↳ {count} {noun}"))
                     }))
                     .child(div().flex_1())
                     .children(self.suggestion_chip(index, session, cx))
