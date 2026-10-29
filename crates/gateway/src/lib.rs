@@ -88,16 +88,23 @@ impl Gateway {
     }
 
     /// A harness this client doesn't know, from an rh newer or older than its own, is left out
-    /// rather than failing the whole node.
+    /// rather than failing the whole node; a list it can read none of is an error.
     pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
         let url = format!("{}/api/harnesses", self.base_url);
         let list: Offerings = self.get_json(&url).await?;
-        Ok(list
+        let listed = list.harnesses.len();
+        let offers: Vec<_> = list
             .harnesses
             .into_iter()
             .filter_map(|raw| serde_json::from_value::<wire::harness::HarnessOffering>(raw).ok())
             .map(translate::offer)
-            .collect())
+            .collect();
+        if offers.is_empty() && listed > 0 {
+            return Err(GatewayError::Refused(
+                "this app can't read any of the harnesses this node offers".into(),
+            ));
+        }
+        Ok(offers)
     }
 
     pub async fn mesh(&self) -> Result<Vec<model::mesh::Node>, GatewayError> {
