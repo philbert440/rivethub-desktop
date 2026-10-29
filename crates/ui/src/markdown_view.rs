@@ -111,9 +111,13 @@ impl RenderOnce for CodeBlock {
         let text = self.text.trim_end_matches('\n').to_owned();
         let copy = {
             let text = text.clone();
-            move |_: &ClickEvent, _: &mut Window, cx: &mut App| copy::copy(&copied, &text, cx)
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                copy::copy(&copied, &text, cx);
+            }
         };
         let wrap = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            cx.stop_propagation();
             unwrapping.update(cx, |unwrapped, cx| {
                 unwrapped.0 = !unwrapped.0;
                 cx.notify();
