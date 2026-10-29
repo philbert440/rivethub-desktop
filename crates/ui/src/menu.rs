@@ -1,9 +1,12 @@
+use std::future::Future;
+
 use app::Hub;
 use gateway::GatewayError;
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, MouseDownEvent, ParentElement,
+    AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, IntoElement, MouseDownEvent, ParentElement,
     Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred, div, prelude::*, px,
 };
+use model::session::SessionSummary;
 use model::{SessionId, TopicId};
 
 use crate::memory::Focus;
@@ -12,19 +15,28 @@ use crate::theme::Theme;
 pub enum MenuEvent {
     ViewInMemory(Focus),
     Deleted(TopicId),
-    /// A topic was closed or reopened, or a session marked as history or made active.
+    /// A topic was closed, reopened or moved to the top level, or a session marked as history or
+    /// made active.
     Filed,
+    Rename(TopicId),
+    MoveInto(TopicId),
+    MergeInto(TopicId),
+    Open(Box<SessionSummary>),
+    MoveSession(SessionId),
+    Unplace(SessionId),
     Closed,
 }
 
-/// The right-click menu on a topic or session: show it in Memory, close or reopen a topic, mark a
-/// session as history or make it active, or delete a topic after asking.
+/// The right-click menu on a topic or session: show it in Memory; rename, move, merge, close or
+/// delete a topic; open, move or file a session.
 pub struct Menu {
     hub: Hub,
     view: Option<Focus>,
     delete: Option<(TopicId, String)>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
+    edits: Option<(TopicId, bool)>,
+    moves: Option<(SessionSummary, bool)>,
     confirming: bool,
     busy: bool,
     problem: Option<String>,
@@ -55,6 +67,8 @@ impl Menu {
             delete,
             close: None,
             history: None,
+            edits: None,
+            moves: None,
             confirming: false,
             busy: false,
             problem: None,
@@ -73,23 +87,36 @@ impl Menu {
         self
     }
 
-    fn file(&mut self, cx: &mut Context<Self>) {
-        let hub = self.hub.clone();
-        let close = self.close.clone();
-        let history = self.history.clone();
+    /// Offers Rename, Move into and Merge into, and Move to top level for a `subtopic`.
+    pub fn editing(mut self, topic: TopicId, subtopic: bool) -> Self {
+        self.edits = Some((topic, subtopic));
+        self
+    }
+
+    /// Offers Open and Move to topic, and Remove from topic for a session `placed` in one.
+    pub fn moving(mut self, session: SessionSummary, placed: bool) -> Self {
+        self.moves = Some((session, placed));
+        self
+    }
+
+    fn run(
+        &mut self,
+        work: impl Future<Output = Result<(), GatewayError>> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
         self.busy = true;
         self.problem = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let filed = match (close, history) {
-                (Some((topic, closed)), _) => hub.set_topic_closed(topic, !closed).await,
-                (None, Some((session, history))) => hub.set_history(session, !history).await,
-                (None, None) => Ok(()),
-            };
+            let done = work.await;
             this.update(cx, |this, cx| {
                 this.busy = false;
-                match filed {
+                match done {
                     Ok(()) => cx.emit(MenuEvent::Filed),
+                    Err(GatewayError::Conflict(message)) => this.problem = Some(message),
                     Err(err) => this.problem = Some(err.to_string()),
                 }
                 cx.notify();
@@ -123,7 +150,7 @@ impl Menu {
         .detach();
     }
 
-    fn item(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+    fn item(id: &'static str, label: &'static str) -> gpui::Stateful<Div> {
         div()
             .id(id)
             .px_3()
@@ -134,7 +161,18 @@ impl Menu {
             .child(label)
     }
 
-    fn button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+    fn emits(
+        id: &'static str,
+        label: &'static str,
+        event: impl Fn() -> MenuEvent + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        Self::item(id, label)
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(event())))
+            .into_any_element()
+    }
+
+    fn button(id: &'static str, label: &'static str) -> gpui::Stateful<Div> {
         div()
             .id(id)
             .h(px(32.))
@@ -146,36 +184,131 @@ impl Menu {
             .child(label)
     }
 
+    fn divider() -> Div {
+        div().h(px(1.)).mx_2().my_1().bg(Theme::line())
+    }
+
+    /// Rename, Move into, Move to top level and Merge into.
+    fn topic_edits(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some((topic, subtopic)) = self.edits.clone() else {
+            return Vec::new();
+        };
+        let (renamed, moved, merged, lifted) = (topic.clone(), topic.clone(), topic.clone(), topic);
+        let mut items = vec![
+            Self::emits(
+                "rename-topic",
+                "Rename",
+                move || MenuEvent::Rename(renamed.clone()),
+                cx,
+            ),
+            Self::emits(
+                "move-topic",
+                "Move into…",
+                move || MenuEvent::MoveInto(moved.clone()),
+                cx,
+            ),
+        ];
+        if subtopic {
+            items.push(
+                Self::item("lift-topic", "Move to top level")
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        let hub = this.hub.clone();
+                        let topic = lifted.clone();
+                        this.run(async move { hub.move_topic(topic, None).await }, cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+        items.push(Self::emits(
+            "merge-topic",
+            "Merge into…",
+            move || MenuEvent::MergeInto(merged.clone()),
+            cx,
+        ));
+        items
+    }
+
+    /// Open, Move to topic and Remove from topic.
+    fn session_moves(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some((session, placed)) = self.moves.clone() else {
+            return Vec::new();
+        };
+        let (moved, unplaced) = (session.id.clone(), session.id.clone());
+        let opened = Box::new(session);
+        let mut items = vec![
+            Self::emits(
+                "open-session",
+                "Open",
+                move || MenuEvent::Open(opened.clone()),
+                cx,
+            ),
+            Self::emits(
+                "move-session",
+                "Move to topic…",
+                move || MenuEvent::MoveSession(moved.clone()),
+                cx,
+            ),
+        ];
+        if placed {
+            items.push(Self::emits(
+                "unplace-session",
+                "Remove from topic",
+                move || MenuEvent::Unplace(unplaced.clone()),
+                cx,
+            ));
+        }
+        items
+    }
+
     fn items(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut open = self.session_moves(cx);
+        let moves = open.split_off(open.len().min(1));
+        let edits = self.topic_edits(cx);
+        let grouped = !open.is_empty() || !edits.is_empty();
         div()
             .flex()
             .flex_col()
+            .children(open)
             .when_some(self.view.clone(), |items, focus| {
-                items.child(
-                    Self::item("view-in-memory", "View in Memory").on_click(cx.listener(
-                        move |_, _: &ClickEvent, _, cx| cx.emit(MenuEvent::ViewInMemory(focus.clone())),
-                    )),
-                )
+                items.child(Self::emits(
+                    "view-in-memory",
+                    "View in Memory",
+                    move || MenuEvent::ViewInMemory(focus.clone()),
+                    cx,
+                ))
             })
-            .when_some(self.close.as_ref().map(|(_, closed)| *closed), |items, closed| {
-                let label = if closed { "Reopen topic" } else { "Close topic" };
-                items.child(Self::item("close-topic", label).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        if !this.busy {
-                            this.file(cx);
-                        }
-                    },
-                )))
-            })
+            .children(moves)
+            .children(edits)
+            .when(
+                grouped && (self.close.is_some() || self.history.is_some()),
+                |items| items.child(Self::divider()),
+            )
             .when_some(
-                self.history.as_ref().map(|(_, history)| *history),
-                |items, history| {
+                self.close
+                    .as_ref()
+                    .map(|(topic, closed)| (topic.clone(), *closed)),
+                |items, (topic, closed)| {
+                    let label = if closed { "Reopen topic" } else { "Close topic" };
+                    items.child(Self::item("close-topic", label).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            let hub = this.hub.clone();
+                            let topic = topic.clone();
+                            this.run(async move { hub.set_topic_closed(topic, !closed).await }, cx);
+                        },
+                    )))
+                },
+            )
+            .when_some(
+                self.history
+                    .as_ref()
+                    .map(|(session, history)| (session.clone(), *history)),
+                |items, (session, history)| {
                     let label = if history { "Make active" } else { "Mark as history" };
                     items.child(Self::item("mark-history", label).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            if !this.busy {
-                                this.file(cx);
-                            }
+                        move |this, _: &ClickEvent, _, cx| {
+                            let hub = this.hub.clone();
+                            let session = session.clone();
+                            this.run(async move { hub.set_history(session, !history).await }, cx);
                         },
                     )))
                 },
@@ -213,7 +346,7 @@ impl Menu {
             .child(
                 div()
                     .text_color(Theme::ink_dim())
-                    .child("Delete this topic? Its sessions go back to Uncategorized."),
+                    .child("Delete this topic? Its sessions go back to Uncategorized, and any subtopics move to the top level."),
             )
             .children(
                 self.problem

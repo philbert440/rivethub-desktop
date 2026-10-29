@@ -164,9 +164,38 @@ impl Hub {
         .await
     }
 
+    pub async fn rename_topic(&self, topic: TopicId, name: String) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.rename_topic(&topic, &name).await })
+            .await
+    }
+
+    /// Moves the topic under `parent`, or to the top level when there is none.
+    pub async fn move_topic(&self, topic: TopicId, parent: Option<TopicId>) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.move_topic(&topic, parent.as_ref()).await })
+            .await
+    }
+
+    pub async fn merge_topic(&self, topic: TopicId, into: TopicId) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.merge_topic(&topic, &into).await })
+            .await
+    }
+
+    /// Deletes the topic. Its subtopics move up to the top level first, since rh refuses to delete
+    /// a topic that still has them; its sessions go back to Uncategorized.
     pub async fn delete_topic(&self, topic: TopicId) -> Result<(), GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.delete_topic(&topic).await })
-            .await
+        self.on_runtime(async move {
+            let topics = gateway.topics().await?;
+            let subtopics = topics
+                .iter()
+                .filter(|known| known.parent.as_ref() == Some(&topic));
+            futures::future::try_join_all(subtopics.map(|subtopic| gateway.move_topic(&subtopic.id, None)))
+                .await?;
+            gateway.delete_topic(&topic).await
+        })
+        .await
     }
 }

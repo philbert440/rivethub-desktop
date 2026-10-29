@@ -1,6 +1,9 @@
 mod everything;
 mod new_topic;
+mod topic_edit;
 mod topic_view;
+
+pub use topic_edit::CancelRetitle;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -27,6 +30,7 @@ use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, Sid
 use crate::text::{now_ms, one_line};
 use crate::topic_picker::{PickerEvent, TopicPicker};
 use crate::{brand, shell, theme::Theme};
+use topic_edit::Pick;
 
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
@@ -75,6 +79,8 @@ pub struct Workspace {
     marks: HistoryMarks,
     history_open: HashSet<TopicId>,
     naming: Option<new_topic::Naming>,
+    retitling: Option<topic_edit::Retitling>,
+    choosing: Option<topic_edit::Choosing>,
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
     folded: HashSet<SessionId>,
@@ -166,6 +172,8 @@ impl Workspace {
             marks: HistoryMarks::new(),
             history_open: HashSet::new(),
             naming: None,
+            retitling: None,
+            choosing: None,
             suggestions: HashMap::new(),
             subagents: HashMap::new(),
             folded: HashSet::new(),
@@ -461,37 +469,44 @@ impl Workspace {
     }
 
     fn open_menu(&mut self, focus: Focus, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let (delete, closing, filing) = match &focus {
-            Focus::Topic(topic) => {
-                let known = self.topic(topic);
+        self.choosing = None;
+        let topic = match &focus {
+            Focus::Topic(topic) => self.topic(topic).map(|known| {
                 (
-                    known.map(|known| (topic.clone(), known.name.clone())),
-                    known.map(|known| (topic.clone(), self.closed(known))),
-                    None,
+                    topic.clone(),
+                    known.name.clone(),
+                    known.parent.is_some(),
+                    self.closed(known),
                 )
-            }
+            }),
+            Focus::Session(_) => None,
+        };
+        let session = match &focus {
             Focus::Session(session) => {
                 let latest = self
                     .sessions
                     .iter()
                     .find(|known| known.id == session.id)
                     .unwrap_or(session.as_ref());
-                (
-                    None,
-                    None,
-                    Some((session.id.clone(), in_history(latest, &self.marks))),
-                )
+                Some((
+                    latest.clone(),
+                    self.placements.contains_key(&latest.id),
+                    in_history(latest, &self.marks),
+                ))
             }
+            Focus::Topic(_) => None,
         };
+        let delete = topic.as_ref().map(|(id, name, ..)| (id.clone(), name.clone()));
         let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
-        if let Some((topic, closed)) = closing {
-            menu = menu.closing(topic, closed);
+        if let Some((id, _, subtopic, closed)) = topic {
+            menu = menu.editing(id.clone(), subtopic).closing(id, closed);
         }
-        if let Some((session, history)) = filing {
-            menu = menu.filing(session, history);
+        if let Some((latest, placed, history)) = session {
+            let id = latest.id.clone();
+            menu = menu.moving(latest, placed).filing(id, history);
         }
         let menu = cx.new(|_| menu);
-        let events = cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, window, cx| {
+        let events = cx.subscribe_in(&menu, window, move |this, menu, event: &MenuEvent, window, cx| {
             if this.menu.as_ref().is_none_or(|open| &open.menu != menu) {
                 return;
             }
@@ -503,6 +518,12 @@ impl Workspace {
                     cx.emit(TopicDeleted(topic.clone()));
                 }
                 MenuEvent::Filed => this.load(cx),
+                MenuEvent::Rename(topic) => this.begin_retitle(topic.clone(), window, cx),
+                MenuEvent::MoveInto(topic) => this.choose(Pick::MoveInto(topic.clone()), at, window, cx),
+                MenuEvent::MergeInto(topic) => this.choose(Pick::MergeInto(topic.clone()), at, window, cx),
+                MenuEvent::Open(session) => this.open((**session).clone(), window, cx),
+                MenuEvent::MoveSession(session) => this.choose(Pick::File(session.clone()), at, window, cx),
+                MenuEvent::Unplace(session) => this.unplace(session.clone(), cx),
                 MenuEvent::Closed => {}
             }
             cx.notify();
@@ -897,14 +918,21 @@ impl Workspace {
                     .topic(&topic)
                     .map_or_else(|| topic.as_str().to_owned(), |known| known.name.clone());
                 let here = session.is_none();
-                Self::crumb("crumb-topic", name.into(), here)
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        Self::on_right_click(Focus::Topic(topic.clone()), cx),
-                    )
-                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                        this.leave_to(Altitude::Topic(topic.clone()), window, cx);
-                    }))
+                match self.retitle_field(&topic, cx) {
+                    Some(field) => div().id("crumb-topic").child(field),
+                    None => Self::crumb("crumb-topic", name.into(), here)
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            Self::on_right_click(Focus::Topic(topic.clone()), cx),
+                        )
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if here && event.click_count() == 2 {
+                                this.begin_retitle(topic.clone(), window, cx);
+                            } else {
+                                this.leave_to(Altitude::Topic(topic.clone()), window, cx);
+                            }
+                        })),
+                }
             }
             None => Self::crumb("crumb-uncategorized", "Uncategorized".into(), false).on_click(cx.listener(
                 |this, _: &gpui::ClickEvent, window, cx| {
@@ -1170,5 +1198,6 @@ impl Render for Workspace {
                     .child(editor.clone())
             }))
             .children(self.menu.as_ref().map(OpenMenu::overlay))
+            .children(self.choosing_overlay(cx))
     }
 }

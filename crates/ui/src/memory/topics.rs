@@ -144,7 +144,15 @@ impl MemoryPage {
                     this.topic_deleted(topic, cx);
                     cx.emit(MemoryEvent::TopicDeleted(topic.clone()));
                 }
-                MenuEvent::ViewInMemory(_) | MenuEvent::Filed | MenuEvent::Closed => {}
+                MenuEvent::ViewInMemory(_)
+                | MenuEvent::Filed
+                | MenuEvent::Rename(_)
+                | MenuEvent::MoveInto(_)
+                | MenuEvent::MergeInto(_)
+                | MenuEvent::Open(_)
+                | MenuEvent::MoveSession(_)
+                | MenuEvent::Unplace(_)
+                | MenuEvent::Closed => {}
             }
             cx.notify();
         });

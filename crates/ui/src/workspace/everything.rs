@@ -6,9 +6,10 @@ use model::session::SessionSummary;
 use model::topics::Card;
 
 use super::Workspace;
+use super::topic_edit::DraggedTopic;
 use crate::brand;
 use crate::memory::Focus;
-use crate::side_panel::{DraggedAgent, DraggedSession};
+use crate::side_panel::{DragGhost, DraggedAgent, DraggedSession};
 use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
 
@@ -164,6 +165,11 @@ impl Workspace {
         let topic = card.topic.id.clone();
         let dropped_session = topic.clone();
         let dropped_agent = topic.clone();
+        let dropped_topic = topic.clone();
+        let dragged = DraggedTopic {
+            topic: topic.clone(),
+            name: card.topic.name.clone().into(),
+        };
         let waiting = card
             .sessions
             .iter()
@@ -188,12 +194,19 @@ impl Workspace {
             .gap_2()
             .drag_over::<DraggedSession>(|style, _, _, _| style.border_color(Theme::accent()))
             .drag_over::<DraggedAgent>(|style, _, _, _| style.border_color(Theme::accent()))
+            .drag_over::<DraggedTopic>(|style, _, _, _| style.border_color(Theme::accent()))
             .on_drop(cx.listener(move |this, dragged: &DraggedSession, _, cx| {
                 this.place(dragged.0.id.clone(), dropped_session.clone(), cx);
             }))
             .on_drop(cx.listener(move |this, dragged: &DraggedAgent, window, cx| {
                 this.start_with(dragged.0.clone(), Some(dropped_agent.clone()), window, cx);
             }))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTopic, _, cx| {
+                this.nest(dragged.topic.clone(), Some(dropped_topic.clone()), cx);
+            }))
+            .on_drag(dragged, |dragged, _, _, cx| {
+                cx.new(|_| DragGhost(dragged.name.clone()))
+            })
             .on_mouse_down(
                 MouseButton::Right,
                 Self::on_right_click(Focus::Topic(card.topic.id.clone()), cx),
@@ -206,13 +219,20 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
+                    .child(match self.retitle_field(&card.topic.id, cx) {
+                        Some(field) => div()
+                            .id(("retitle", index))
+                            .flex_1()
+                            .on_click(|_, _, cx| cx.stop_propagation())
+                            .child(field)
+                            .into_any_element(),
+                        None => div()
                             .flex_1()
                             .truncate()
                             .text_color(Theme::ink())
-                            .child(card.topic.name.clone()),
-                    )
+                            .child(card.topic.name.clone())
+                            .into_any_element(),
+                    })
                     .when(waiting > 0, |row| row.child(Self::needs_you_chip())),
             )
             .child(match self.counts(card.sessions.iter().copied()) {

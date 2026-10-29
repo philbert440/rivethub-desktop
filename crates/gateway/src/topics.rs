@@ -4,7 +4,7 @@ use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
     PlacementRequest, SessionHistoryList, SessionHistoryMark, TopicCreateRequest, TopicDecision,
-    TopicDecisionList, TopicList, TopicRecord, TopicSessionList,
+    TopicDecisionList, TopicList, TopicMergeRequest, TopicRecord, TopicSessionList, TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -98,6 +98,47 @@ impl Gateway {
         Ok(())
     }
 
+    pub async fn rename_topic(&self, topic: &TopicId, name: &str) -> Result<(), GatewayError> {
+        self.update_topic(
+            topic,
+            TopicUpdate {
+                name: Some(name.to_owned()),
+                ..TopicUpdate::default()
+            },
+        )
+        .await
+    }
+
+    /// Moves a topic under `parent`, or to the top level when there is none. rh nests one level
+    /// deep, so a subtopic can't take subtopics and a topic with subtopics can't move under another.
+    pub async fn move_topic(&self, topic: &TopicId, parent: Option<&TopicId>) -> Result<(), GatewayError> {
+        self.update_topic(
+            topic,
+            TopicUpdate {
+                parent: Some(parent.map(|parent| parent.as_str().to_owned())),
+                ..TopicUpdate::default()
+            },
+        )
+        .await
+    }
+
+    async fn update_topic(&self, topic: &TopicId, update: TopicUpdate) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str()])?;
+        let _: TopicRecord = Self::refusable(self.http.patch(url).json(&update).send().await).await?;
+        Ok(())
+    }
+
+    /// Merges a topic into another: its sessions, subtopics and names move there, and its old
+    /// address redirects to it.
+    pub async fn merge_topic(&self, topic: &TopicId, into: &TopicId) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "merge"])?;
+        let body = TopicMergeRequest {
+            into: into.as_str().to_owned(),
+        };
+        let _: TopicRecord = Self::refusable(self.http.post(url).json(&body).send().await).await?;
+        Ok(())
+    }
+
     /// Closes a topic you're done with; it is past until one of its sessions is active again.
     pub async fn close_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
         self.post_topic(topic, "close").await
@@ -158,7 +199,7 @@ impl Gateway {
             text: text.to_owned(),
             session_id: None,
         };
-        let added: TopicDecision = Self::decided(self.http.post(url).json(&body).send().await).await?;
+        let added: TopicDecision = Self::refusable(self.http.post(url).json(&body).send().await).await?;
         Ok(translate::decision(added))
     }
 
@@ -172,7 +213,7 @@ impl Gateway {
         let body = DecisionUpdate {
             text: text.to_owned(),
         };
-        let edited: TopicDecision = Self::decided(self.http.patch(url).json(&body).send().await).await?;
+        let edited: TopicDecision = Self::refusable(self.http.patch(url).json(&body).send().await).await?;
         Ok(translate::decision(edited))
     }
 
@@ -195,13 +236,14 @@ impl Gateway {
             text: text.map(str::to_owned),
             session_id: None,
         };
-        let _: DecisionSuperseded = Self::decided(self.http.post(url).json(&body).send().await).await?;
+        let _: DecisionSuperseded = Self::refusable(self.http.post(url).json(&body).send().await).await?;
         Ok(())
     }
 
-    /// A decision write's reply. rh answers 409 for a decision already superseded and 400 for empty
-    /// text, and both come back as `Conflict` carrying rh's own message.
-    async fn decided<T: serde::de::DeserializeOwned>(
+    /// A topic or decision write's reply. rh's refusals (400 and 409: a name already taken, a
+    /// subtopic given subtopics, a decision already superseded, empty text) come back as
+    /// `Conflict` carrying rh's own message.
+    async fn refusable<T: serde::de::DeserializeOwned>(
         sent: Result<reqwest::Response, reqwest::Error>,
     ) -> Result<T, GatewayError> {
         match Self::read_json(sent)?.await {
@@ -214,7 +256,7 @@ impl Gateway {
     }
 
     /// Deletes a topic; its sessions go back to Uncategorized. rh refuses category topics and topics
-    /// with child topics, and that refusal comes back as `Conflict` carrying rh's own message.
+    /// with subtopics, and that refusal comes back as `Conflict` carrying rh's own message.
     pub async fn delete_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str()])?;
         let reply = self.http.delete(url).send().await.map_err(GatewayError::Http)?;

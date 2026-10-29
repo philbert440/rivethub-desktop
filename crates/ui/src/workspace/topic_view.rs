@@ -63,12 +63,6 @@ impl Workspace {
                     stubs,
                 }
             })
-            .filter(|section| {
-                section.topic.id == *root
-                    || !section.sessions.is_empty()
-                    || !section.history.is_empty()
-                    || !section.stubs.is_empty()
-            })
             .collect()
     }
 
@@ -148,7 +142,7 @@ impl Workspace {
         now: i64,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let heading = (section.topic.id != *root).then(|| section.topic.name.to_uppercase());
+        let heading = (section.topic.id != *root).then(|| self.subtopic_heading(section.topic, cx));
         let rows = lineage::nest(&section.sessions, &self.folded);
         let empty = rows.is_empty() && section.stubs.is_empty() && section.history.is_empty();
         let mut lines = Vec::with_capacity(rows.len() + section.stubs.len());
@@ -180,7 +174,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_1()
-            .children(heading.map(|name| div().pb_1().text_xs().text_color(Theme::ink_dim()).child(name)))
+            .children(heading)
             .when(empty, |list| {
                 list.child(
                     div()
@@ -190,6 +184,44 @@ impl Workspace {
                 )
             })
             .children(lines)
+            .into_any_element()
+    }
+
+    /// A subtopic's heading: right-click for its menu, double-click to rename it, and drop a
+    /// session on it to file the session there.
+    fn subtopic_heading(&self, topic: &Topic, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(field) = self.retitle_field(&topic.id, cx) {
+            return div().pb_1().child(field).into_any_element();
+        }
+        let (renamed, filed) = (topic.id.clone(), topic.id.clone());
+        div()
+            .id(gpui::ElementId::Name(
+                format!("subtopic-{}", topic.id.as_str()).into(),
+            ))
+            .pb_1()
+            .px_1()
+            .rounded(px(8.))
+            .cursor_pointer()
+            .text_xs()
+            .text_color(Theme::ink_dim())
+            .hover(|heading| heading.text_color(Theme::ink()))
+            .drag_over::<DraggedSession>(|style, _, _, _| {
+                style.bg(Theme::selected()).text_color(Theme::on_selected())
+            })
+            .on_drop(cx.listener(move |this, dragged: &DraggedSession, _, cx| {
+                cx.stop_propagation();
+                this.place(dragged.0.id.clone(), filed.clone(), cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                Self::on_right_click(Focus::Topic(topic.id.clone()), cx),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.click_count() == 2 {
+                    this.begin_retitle(renamed.clone(), window, cx);
+                }
+            }))
+            .child(topic.name.to_uppercase())
             .into_any_element()
     }
 

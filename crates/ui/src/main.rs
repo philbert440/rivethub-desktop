@@ -80,6 +80,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-j", NextNeedingYou, Some("Workspace")),
         KeyBinding::new("ctrl-j", gpui::NoAction, Some("Terminal")),
         KeyBinding::new("escape", topic_picker::Dismiss, Some("TopicPicker")),
+        KeyBinding::new("escape", workspace::CancelRetitle, Some("TopicRetitle")),
         KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("shift-enter", input::Newline, Some("TextInput")),
