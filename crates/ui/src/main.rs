@@ -15,6 +15,7 @@ mod side_panel;
 mod terminal_view;
 mod text;
 mod theme;
+mod tip;
 mod tool_view;
 mod topic_picker;
 mod topic_rail;
