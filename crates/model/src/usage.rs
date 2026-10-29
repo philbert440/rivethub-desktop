@@ -52,31 +52,31 @@ impl AddAssign for Pace {
     }
 }
 
-/// Times a model's writing as it streams: each burst of text or reasoning from its first token
-/// to its last, without the pauses while tools run.
+/// Times the model's share of a turn: from the prompt, and again from each tool's result, to the
+/// next tool call or the turn's end, leaving out the time tools take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stopwatch {
-    burst: Option<(u64, u64)>,
+    since: Option<u64>,
     ms: u64,
 }
 
 impl Stopwatch {
-    /// A token streamed at `at_ms` on a monotonic clock.
-    pub fn token(&mut self, at_ms: u64) {
-        let start = self.burst.map_or(at_ms, |(start, _)| start);
-        self.burst = Some((start, at_ms.max(start)));
+    /// The model is at work from `at_ms` on a monotonic clock: a prompt went in, a tool's result
+    /// came back, or its output is streaming.
+    pub fn resume(&mut self, at_ms: u64) {
+        self.since.get_or_insert(at_ms);
     }
 
-    /// The model stopped writing, to call a tool or wait on an approval.
-    pub fn pause(&mut self) {
-        if let Some((start, end)) = self.burst.take() {
-            self.ms += end - start;
+    /// The model handed off at `at_ms`, to run a tool or wait on an approval.
+    pub fn pause(&mut self, at_ms: u64) {
+        if let Some(since) = self.since.take() {
+            self.ms += at_ms.saturating_sub(since);
         }
     }
 
-    /// Ends the turn: the pace of its `output` tokens over the writing time measured.
-    pub fn stop(&mut self, output: u64) -> Option<Pace> {
-        self.pause();
+    /// The turn ended at `at_ms`: the pace of its `output` tokens over the model's time.
+    pub fn stop(&mut self, at_ms: u64, output: u64) -> Option<Pace> {
+        self.pause(at_ms);
         Pace::of(output, std::mem::take(&mut self.ms))
     }
 }
@@ -106,20 +106,17 @@ mod tests {
     }
 
     #[test]
-    fn the_stopwatch_times_streaming_bursts_and_not_the_tool_pauses_between() {
+    fn the_stopwatch_times_the_model_and_not_the_tools_it_runs() {
         let mut watch = Stopwatch::default();
-        for at in [1_000, 2_000, 3_000] {
-            watch.token(at);
-        }
-        watch.pause();
-        for at in [60_000, 61_000] {
-            watch.token(at);
-        }
+        watch.resume(0);
+        watch.resume(500);
+        watch.pause(2_000);
+        watch.resume(60_000);
         assert_eq!(
-            watch.stop(150).and_then(|pace| pace.tokens_per_second()),
+            watch.stop(61_000, 150).and_then(|pace| pace.tokens_per_second()),
             Some(50)
         );
-        assert_eq!(watch.stop(150), None);
+        assert_eq!(watch.stop(70_000, 150), None);
     }
 
     #[test]

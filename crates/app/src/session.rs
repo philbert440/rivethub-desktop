@@ -113,20 +113,26 @@ impl Actor {
         }
     }
 
-    /// Times the model's writing from the stream; the end of a turn yields its pace.
+    /// Times the model's share of the turn from the stream; the end of a turn yields its pace.
     fn time(&self, event: &SessionEvent) -> Option<Pace> {
+        let at = self.now_ms();
         let mut watch = self.stopwatch.lock();
         match event {
-            SessionEvent::AssistantText(_) | SessionEvent::Reasoning(_) => {
-                watch.token(u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX));
-            }
-            SessionEvent::ToolStarted { .. }
+            SessionEvent::AssistantText(_)
+            | SessionEvent::Reasoning(_)
             | SessionEvent::ToolFinished { .. }
-            | SessionEvent::ApprovalRequested(_) => watch.pause(),
-            SessionEvent::TurnComplete(usage) => return watch.stop(usage.map_or(0, |usage| usage.output)),
+            | SessionEvent::ApprovalResolved { .. } => watch.resume(at),
+            SessionEvent::ToolStarted { .. } | SessionEvent::ApprovalRequested(_) => watch.pause(at),
+            SessionEvent::TurnComplete(usage) => {
+                return watch.stop(at, usage.map_or(0, |usage| usage.output));
+            }
             _ => {}
         }
         None
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     async fn drain(&self) {
@@ -147,7 +153,9 @@ impl Actor {
         };
         match outcome {
             Ok(()) => {
-                *self.stopwatch.lock() = Stopwatch::default();
+                let mut watch = Stopwatch::default();
+                watch.resume(self.now_ms());
+                *self.stopwatch.lock() = watch;
                 self.view.write().accepted(&prompt, epoch_ms());
                 self.changed();
             }
