@@ -13,6 +13,7 @@ pub mod mesh;
 pub mod nav;
 pub mod notice;
 pub mod plan;
+pub mod plugin;
 pub mod prefs;
 pub mod preview;
 pub mod prompt;
