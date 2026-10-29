@@ -6,6 +6,9 @@ use crate::{SessionId, TopicId};
 
 const MAX_DEPTH: usize = 8;
 
+/// How many levels topics nest, a top-level topic being the first; rh refuses deeper.
+pub const MAX_LEVELS: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Topic {
     pub id: TopicId,
@@ -114,7 +117,49 @@ impl<'a> Atlas<'a> {
 
     pub fn within(&self, session: &SessionSummary, topic: &TopicId) -> bool {
         self.topic_of(session)
-            .is_some_and(|own| own == topic || self.root(own) == topic)
+            .is_some_and(|own| self.lineage(own).contains(&topic))
+    }
+
+    /// The topic and the topics above it, nearest first.
+    pub fn lineage(&self, topic: &'a TopicId) -> Vec<&'a TopicId> {
+        let mut lineage = vec![topic];
+        let mut current = topic;
+        for _ in 0..MAX_DEPTH {
+            match self.topics.get(current).and_then(|topic| topic.parent.as_ref()) {
+                Some(parent) if self.topics.contains_key(parent) => {
+                    lineage.push(parent);
+                    current = parent;
+                }
+                _ => break,
+            }
+        }
+        lineage
+    }
+
+    /// How many levels the topic's subtree spans, the topic itself being one.
+    pub fn height(&self, topic: &TopicId) -> usize {
+        self.height_below(topic, MAX_DEPTH)
+    }
+
+    fn height_below(&self, topic: &TopicId, budget: usize) -> usize {
+        let children = self
+            .topics
+            .values()
+            .filter(|child| child.parent.as_ref() == Some(topic));
+        1 + match budget {
+            0 => 0,
+            _ => children
+                .map(|child| self.height_below(&child.id, budget - 1))
+                .max()
+                .unwrap_or(0),
+        }
+    }
+
+    /// Whether `topic` can move under `parent`: never under itself or its own subtopics, and never
+    /// so that its deepest subtopic would sit below `MAX_LEVELS`.
+    pub fn can_nest(&self, topic: &TopicId, parent: &'a TopicId) -> bool {
+        let lineage = self.lineage(parent);
+        !lineage.contains(&topic) && lineage.len() + self.height(topic) <= MAX_LEVELS
     }
 }
 
@@ -340,6 +385,31 @@ mod tests {
             ["mesh"]
         );
         assert!(board.uncategorized.is_empty() && board.history.is_empty());
+    }
+
+    #[test]
+    fn a_topic_nests_anywhere_but_its_own_subtree_and_never_past_four_levels() {
+        let topics = [
+            topic("a", None),
+            topic("b", Some("a")),
+            topic("c", Some("b")),
+            topic("d", Some("c")),
+            topic("x", None),
+            topic("y", Some("x")),
+        ];
+        let placements = Placements::new();
+        let atlas = Atlas::new(&topics, &[], &placements);
+        let id = TopicId::new;
+        assert_eq!(
+            (atlas.lineage(&topics[3].id).len(), atlas.height(&id("a"))),
+            (4, 4)
+        );
+        assert!(atlas.can_nest(&id("y"), &topics[2].id));
+        assert!(!atlas.can_nest(&id("y"), &topics[3].id));
+        assert!(atlas.can_nest(&id("x"), &topics[1].id));
+        assert!(!atlas.can_nest(&id("x"), &topics[2].id));
+        assert!(!atlas.can_nest(&id("a"), &topics[2].id));
+        assert!(!atlas.can_nest(&id("b"), &topics[1].id));
     }
 
     #[test]

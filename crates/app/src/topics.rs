@@ -183,17 +183,23 @@ impl Hub {
             .await
     }
 
-    /// Deletes the topic. Its subtopics move up to the top level first, since rh refuses to delete
-    /// a topic that still has them; its sessions go back to Uncategorized.
+    /// Deletes the topic. Its subtopics move up a level first, since rh refuses to delete a topic
+    /// that still has them; its sessions go back to Uncategorized.
     pub async fn delete_topic(&self, topic: TopicId) -> Result<(), GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
             let topics = gateway.topics().await?;
+            let above = topics
+                .iter()
+                .find(|known| known.id == topic)
+                .and_then(|known| known.parent.clone());
             let subtopics = topics
                 .iter()
                 .filter(|known| known.parent.as_ref() == Some(&topic));
-            futures::future::try_join_all(subtopics.map(|subtopic| gateway.move_topic(&subtopic.id, None)))
-                .await?;
+            futures::future::try_join_all(
+                subtopics.map(|subtopic| gateway.move_topic(&subtopic.id, above.as_ref())),
+            )
+            .await?;
             gateway.delete_topic(&topic).await
         })
         .await

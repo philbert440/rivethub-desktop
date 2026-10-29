@@ -139,14 +139,17 @@ impl Workspace {
                 .map_or_else(String::new, |known| known.name.clone())
         };
         let (heading, topics): (String, Vec<Topic>) = match &pick {
-            Pick::MoveInto(topic) => (
-                format!("Move “{}” into", name(topic)),
+            Pick::MoveInto(topic) => (format!("Move “{}” into", name(topic)), {
+                let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
                 self.topics
                     .iter()
-                    .filter(|known| known.parent.is_none() && &known.id != topic)
+                    .filter(|under| {
+                        self.topic(topic).and_then(|known| known.parent.as_ref()) != Some(&under.id)
+                            && atlas.can_nest(topic, &under.id)
+                    })
                     .cloned()
-                    .collect(),
-            ),
+                    .collect()
+            }),
             Pick::MergeInto(topic) => (
                 format!("Merge “{}” into", name(topic)),
                 self.topics

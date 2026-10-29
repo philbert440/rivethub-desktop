@@ -24,7 +24,7 @@ use model::{Altitude, HarnessId, SessionId, TopicId};
 use crate::agent_editor::{AgentEditor, AgentEditorEvent};
 use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
 use crate::memory::Focus;
-use crate::menu::{Menu, MenuEvent, OpenMenu};
+use crate::menu::{Lift, Menu, MenuEvent, OpenMenu};
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
@@ -475,7 +475,7 @@ impl Workspace {
                 (
                     topic.clone(),
                     known.name.clone(),
-                    known.parent.is_some(),
+                    known.parent.clone(),
                     self.closed(known),
                 )
             }),
@@ -498,9 +498,14 @@ impl Workspace {
         };
         let delete = topic.as_ref().map(|(id, name, ..)| (id.clone(), name.clone()));
         let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
-        if let Some((id, _, subtopic, closed)) = topic {
-            let movable = !self.topics.iter().any(|known| known.parent.as_ref() == Some(&id));
-            menu = menu.editing(id.clone(), subtopic, movable).closing(id, closed);
+        if let Some((id, _, parent, closed)) = topic {
+            let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+            let movable = self
+                .topics
+                .iter()
+                .any(|under| Some(&under.id) != parent.as_ref() && atlas.can_nest(&id, &under.id));
+            let up = parent.map(|parent| Lift(self.topic(&parent).and_then(|parent| parent.parent.clone())));
+            menu = menu.editing(id.clone(), up, movable).closing(id, closed);
         }
         if let Some((latest, placed, history)) = session {
             let id = latest.id.clone();

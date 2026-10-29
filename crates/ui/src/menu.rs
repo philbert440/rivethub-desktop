@@ -27,6 +27,11 @@ pub enum MenuEvent {
     Closed,
 }
 
+/// Where Move up a level takes a subtopic: under its grandparent, or to the top level when it has
+/// none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lift(pub Option<TopicId>);
+
 /// The right-click menu on a topic or session: show it in Memory; rename, move, merge, close or
 /// delete a topic; open, move or file a session.
 pub struct Menu {
@@ -35,7 +40,7 @@ pub struct Menu {
     delete: Option<(TopicId, String)>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
-    edits: Option<(TopicId, bool, bool)>,
+    edits: Option<(TopicId, Option<Lift>, bool)>,
     moves: Option<(SessionSummary, bool)>,
     confirming: bool,
     busy: bool,
@@ -87,10 +92,10 @@ impl Menu {
         self
     }
 
-    /// Offers Rename and Merge into; Move into for a topic that can go under another (one with no
-    /// subtopics of its own, since rh nests one level deep); Move to top level for a `subtopic`.
-    pub fn editing(mut self, topic: TopicId, subtopic: bool, movable: bool) -> Self {
-        self.edits = Some((topic, subtopic, movable));
+    /// Offers Rename and Merge into, Move into when the topic fits under some other topic, and
+    /// Move up a level for a subtopic, which `up` says where to.
+    pub fn editing(mut self, topic: TopicId, up: Option<Lift>, movable: bool) -> Self {
+        self.edits = Some((topic, up, movable));
         self
     }
 
@@ -191,7 +196,7 @@ impl Menu {
 
     /// Rename, Move into, Move to top level and Merge into.
     fn topic_edits(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some((topic, subtopic, movable)) = self.edits.clone() else {
+        let Some((topic, up, movable)) = self.edits.clone() else {
             return Vec::new();
         };
         let (renamed, moved, merged, lifted) = (topic.clone(), topic.clone(), topic.clone(), topic);
@@ -209,13 +214,13 @@ impl Menu {
                 cx,
             ));
         }
-        if subtopic {
+        if let Some(Lift(up)) = up {
             items.push(
-                Self::item("lift-topic", "Move to top level")
+                Self::item("lift-topic", "Move up a level")
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         let hub = this.hub.clone();
-                        let topic = lifted.clone();
-                        this.run(async move { hub.move_topic(topic, None).await }, cx);
+                        let (topic, up) = (lifted.clone(), up.clone());
+                        this.run(async move { hub.move_topic(topic, up).await }, cx);
                     }))
                     .into_any_element(),
             );
@@ -347,7 +352,7 @@ impl Menu {
             .child(
                 div()
                     .text_color(Theme::ink_dim())
-                    .child("Delete this topic? Its sessions go back to Uncategorized, and any subtopics move to the top level."),
+                    .child("Delete this topic? Its sessions go back to Uncategorized, and any subtopics move up a level."),
             )
             .children(
                 self.problem
