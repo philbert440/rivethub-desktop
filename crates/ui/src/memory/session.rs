@@ -26,6 +26,7 @@ pub(super) struct Viewing {
     memory: Option<SessionMemory>,
     blocks: HashMap<String, Vec<Block>>,
     expanded: HashSet<String>,
+    loading: bool,
     _refresh: Task<()>,
 }
 
@@ -96,27 +97,30 @@ impl MemoryPage {
             memory: None,
             blocks: HashMap::new(),
             expanded: HashSet::new(),
+            loading: false,
             _refresh: refresh,
         });
         self.load_session(cx);
         cx.notify();
     }
 
-    /// Reloads the open session's page once its first load has landed.
-    pub(super) fn refresh_session(&self, cx: &mut Context<Self>) {
+    /// Reloads the open session's page once its first load has landed and no other is under way.
+    pub(super) fn refresh_session(&mut self, cx: &mut Context<Self>) {
         if self
             .viewing
             .as_ref()
-            .is_some_and(|viewing| viewing.memory.is_some())
+            .is_some_and(|viewing| viewing.memory.is_some() && !viewing.loading)
         {
             self.load_session(cx);
         }
     }
 
-    fn load_session(&self, cx: &mut Context<Self>) {
-        let Some(id) = self.viewing.as_ref().map(|viewing| viewing.session.id.clone()) else {
+    fn load_session(&mut self, cx: &mut Context<Self>) {
+        let Some(viewing) = self.viewing.as_mut() else {
             return;
         };
+        viewing.loading = true;
+        let id = viewing.session.id.clone();
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let memory = hub.session_memory(id.clone()).await;
@@ -124,6 +128,7 @@ impl MemoryPage {
                 let Some(viewing) = this.viewing.as_mut().filter(|viewing| viewing.session.id == id) else {
                     return;
                 };
+                viewing.loading = false;
                 match memory {
                     Ok(memory) if viewing.memory.as_ref() == Some(&memory) => {}
                     Ok(memory) => {
