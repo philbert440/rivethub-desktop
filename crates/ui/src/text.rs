@@ -80,6 +80,32 @@ pub fn ago_phrase(now_ms: i64, at_ms: i64) -> String {
     }
 }
 
+/// A length of time as a person says it: "850 ms", "1m 12s", "2h 5m".
+pub fn duration(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0 => format!("{ms} ms"),
+        1..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m {}s", seconds / 60, seconds % 60),
+        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
+/// A size in bytes, to one decimal past a kilobyte: "512 B", "4.1 KB", "17.8 MB".
+pub fn bytes(count: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if count < 1024 {
+        return format!("{count} B");
+    }
+    let mut tenths = count * 10 / 1024;
+    let mut unit = 0;
+    while tenths >= 10_240 && unit + 1 < UNITS.len() {
+        tenths /= 1024;
+        unit += 1;
+    }
+    format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[unit])
+}
+
 #[cfg(test)]
 mod tests {
     use super::one_line;

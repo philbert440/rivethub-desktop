@@ -1,7 +1,7 @@
 use app::Hub;
 use gpui::{
-    AnyElement, Context, Div, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    prelude::*, px,
+    AnyElement, ClickEvent, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Window, div, prelude::*, px,
 };
 use model::health::{MemoryHealth, Status};
 use model::mesh::Node;
@@ -9,9 +9,10 @@ use model::prefs::LastLaunch;
 use model::trust::{Certificate, Trust, Validity};
 
 use crate::GatewayUrl;
-use crate::shell;
+use crate::plugin::{PluginSettings, Plugins, PluginsEvent, SettingsEvent};
 use crate::text::now_ms;
 use crate::theme::Theme;
+use crate::{brand, shell};
 
 enum Load<T> {
     Waiting,
@@ -25,30 +26,43 @@ impl<T> Load<T> {
     }
 }
 
-/// The Settings page: the mesh's nodes, the gateway, what you've chosen, this device's certificate
-/// and how memory is doing.
+/// The Settings page: the mesh's nodes, the gateway, what you've chosen, this device's certificate,
+/// how memory is doing, and every node's plug-ins.
 pub struct SettingsPage {
     hub: Hub,
     gateway: GatewayUrl,
     nodes: Load<Vec<Node>>,
     trust: Load<Trust>,
     memory: Load<MemoryHealth>,
+    plugins: Entity<Plugins>,
+    /// The plug-in whose entry is open.
+    plugin: Option<(Entity<PluginSettings>, Subscription)>,
+    _listed: Subscription,
 }
 
 impl SettingsPage {
-    pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
+    pub fn new(hub: Hub, plugins: Entity<Plugins>, cx: &mut Context<Self>) -> Self {
+        let listed = cx.subscribe(&plugins, |_, _, event: &PluginsEvent, cx| {
+            if matches!(event, PluginsEvent::Listed) {
+                cx.notify();
+            }
+        });
         let mut page = Self {
             hub,
             gateway: crate::gateway_url(),
             nodes: Load::Waiting,
             trust: Load::Waiting,
             memory: Load::Waiting,
+            plugins,
+            plugin: None,
+            _listed: listed,
         };
         page.refresh(cx);
         page
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.plugins.update(cx, |plugins, cx| plugins.load(cx));
         self.nodes = Load::Waiting;
         self.trust = Load::Waiting;
         self.memory = Load::Waiting;
@@ -148,6 +162,98 @@ impl SettingsPage {
                     .into_any_element()
             })
             .collect()
+    }
+
+    fn open_plugin(&mut self, plugin: model::plugin::PluginRef, cx: &mut Context<Self>) {
+        let (hub, plugins) = (self.hub.clone(), self.plugins.clone());
+        let entry = cx.new(|cx| PluginSettings::new(hub, plugins, plugin, cx));
+        let back = cx.subscribe(&entry, |this, _, SettingsEvent::Back, cx| {
+            this.plugin = None;
+            cx.notify();
+        });
+        self.plugin = Some((entry, back));
+        cx.notify();
+    }
+
+    fn plugins(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let (installed, unreachable) = {
+            let plugins = self.plugins.read(cx);
+            (plugins.installed().to_vec(), plugins.unreachable().join(", "))
+        };
+        let mut rows: Vec<AnyElement> = installed
+            .iter()
+            .enumerate()
+            .map(|(index, plugin)| {
+                let at = plugin.at.clone();
+                row()
+                    .id(("plugin", index))
+                    .cursor_pointer()
+                    .hover(|row| row.bg(Theme::raised()))
+                    .on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.open_plugin(at.clone(), cx)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .min_w_0()
+                            .child(brand::icon(
+                                brand::symbol(plugin.icon.as_deref()),
+                                20.,
+                                Theme::ink_dim(),
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(plugin.name.clone())
+                                            .child(chip_text(plugin.at.node.clone())),
+                                    )
+                                    .child(dim(plugin.description.clone()).text_xs().truncate()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .flex_none()
+                            .child(dim(plugin.state.label()))
+                            .child(brand::icon(
+                                brand::symbol(Some("chevron_right")),
+                                18.,
+                                Theme::ink_dim(),
+                            )),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push(
+                row()
+                    .child(dim("No node has plug-ins installed."))
+                    .into_any_element(),
+            );
+        }
+        if !unreachable.is_empty() {
+            rows.push(
+                row()
+                    .child(
+                        div()
+                            .text_color(Theme::warn())
+                            .child(format!("Couldn't reach {unreachable}")),
+                    )
+                    .into_any_element(),
+            );
+        }
+        rows
     }
 
     fn device(&self) -> Vec<AnyElement> {
@@ -355,27 +461,27 @@ impl Render for SettingsPage {
             .child(
                 shell::tile().child(
                     div().id("settings-scroll").size_full().overflow_y_scroll().child(
-                        div()
-                            .max_w(px(720.))
-                            .px_8()
-                            .py_6()
-                            .flex()
-                            .flex_col()
-                            .gap_8()
-                            .child(section("Nodes", self.nodes()))
-                            .child(section("Gateway", self.gateway()))
-                            .child(section("Sessions", self.sessions(cx)))
-                            .child(section("Notifications", self.notifications(cx)))
-                            .child(section("This device", self.device()))
-                            .child(section("Certificate authority", self.authority()))
-                            .child(section("Memory", self.memory())),
+                        div().max_w(px(720.)).px_8().py_6().flex().flex_col().gap_8().map(
+                            |column| match &self.plugin {
+                                Some((entry, _)) => column.child(entry.clone()),
+                                None => column
+                                    .child(section("Nodes", self.nodes()))
+                                    .child(section("Gateway", self.gateway()))
+                                    .child(section("Sessions", self.sessions(cx)))
+                                    .child(section("Notifications", self.notifications(cx)))
+                                    .child(section("Plug-ins", self.plugins(cx)))
+                                    .child(section("This device", self.device()))
+                                    .child(section("Certificate authority", self.authority()))
+                                    .child(section("Memory", self.memory())),
+                            },
+                        ),
                     ),
                 ),
             )
     }
 }
 
-fn section(title: &'static str, rows: Vec<AnyElement>) -> Div {
+pub(crate) fn section(title: &'static str, rows: Vec<AnyElement>) -> Div {
     div()
         .flex()
         .flex_col()
@@ -396,7 +502,7 @@ fn section(title: &'static str, rows: Vec<AnyElement>) -> Div {
         )
 }
 
-fn row() -> Div {
+pub(crate) fn row() -> Div {
     div()
         .min_h(px(52.))
         .px_5()
@@ -485,7 +591,7 @@ fn expiry(cert: &Certificate) -> Div {
     }
 }
 
-fn dim(text: impl Into<SharedString>) -> Div {
+pub(crate) fn dim(text: impl Into<SharedString>) -> Div {
     div().text_color(Theme::ink_dim()).child(text.into())
 }
 
@@ -509,6 +615,17 @@ fn chip(text: &'static str) -> Div {
         .text_xs()
         .bg(Theme::selected())
         .text_color(Theme::on_selected())
+        .child(text)
+}
+
+/// A node's name beside what runs on it.
+fn chip_text(text: String) -> Div {
+    div()
+        .px_2()
+        .rounded(px(8.))
+        .text_xs()
+        .bg(Theme::raised())
+        .text_color(Theme::ink_dim())
         .child(text)
 }
 

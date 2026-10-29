@@ -6,9 +6,12 @@ use gpui::{
     AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, IntoElement, MouseDownEvent, ParentElement,
     Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred, div, prelude::*, px,
 };
+use model::plugin::view::Action;
+use model::plugin::{PluginRef, SessionAction};
 use model::session::SessionSummary;
 use model::{SessionId, TopicId};
 
+use crate::brand;
 use crate::memory::Focus;
 use crate::theme::Theme;
 
@@ -24,6 +27,12 @@ pub enum MenuEvent {
     Open(Box<SessionSummary>),
     MoveSession(SessionId),
     Unplace(SessionId),
+    /// A plug-in's session-menu entry, to run on the session.
+    PluginAction {
+        plugin: PluginRef,
+        action: Action,
+        session: SessionId,
+    },
     Closed,
 }
 
@@ -33,7 +42,7 @@ pub enum MenuEvent {
 pub struct Lift(pub Option<TopicId>);
 
 /// The right-click menu on a topic or session: show it in Memory; rename, move, merge, close or
-/// delete a topic; open, move or file a session.
+/// delete a topic; open, move or file a session, or run a plug-in's entry on it.
 pub struct Menu {
     hub: Hub,
     view: Option<Focus>,
@@ -42,6 +51,7 @@ pub struct Menu {
     history: Option<(SessionId, bool)>,
     edits: Option<(TopicId, Option<Lift>, bool)>,
     moves: Option<(SessionSummary, bool)>,
+    plugin_actions: Vec<(PluginRef, SessionAction)>,
     confirming: bool,
     busy: bool,
     problem: Option<String>,
@@ -74,6 +84,7 @@ impl Menu {
             history: None,
             edits: None,
             moves: None,
+            plugin_actions: Vec::new(),
             confirming: false,
             busy: false,
             problem: None,
@@ -102,6 +113,12 @@ impl Menu {
     /// Offers Open and Move to topic, and Remove from topic for a session `placed` in one.
     pub fn moving(mut self, session: SessionSummary, placed: bool) -> Self {
         self.moves = Some((session, placed));
+        self
+    }
+
+    /// Offers the entries plug-ins add to the menu of the session `moving` names.
+    pub fn plugin_actions(mut self, actions: Vec<(PluginRef, SessionAction)>) -> Self {
+        self.plugin_actions = actions;
         self
     }
 
@@ -266,10 +283,55 @@ impl Menu {
         items
     }
 
+    /// Each plug-in's entry, labelled by the node it runs on.
+    fn plugin_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some((session, _)) = &self.moves else {
+            return Vec::new();
+        };
+        self.plugin_actions
+            .iter()
+            .enumerate()
+            .map(|(index, (plugin, entry))| {
+                let (plugin, action, session) = (plugin.clone(), entry.action.clone(), session.id.clone());
+                div()
+                    .id(("plugin-action", index))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|item| item.bg(Theme::selected()).text_color(Theme::on_selected()))
+                    .child(brand::icon(
+                        brand::symbol(entry.icon.as_deref()),
+                        16.,
+                        Theme::ink_dim(),
+                    ))
+                    .child(div().flex_1().child(entry.title.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .child(plugin.node.clone()),
+                    )
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(MenuEvent::PluginAction {
+                            plugin: plugin.clone(),
+                            action: action.clone(),
+                            session: session.clone(),
+                        });
+                    }))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn items(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut open = self.session_moves(cx);
         let moves = open.split_off(open.len().min(1));
         let edits = self.topic_edits(cx);
+        let plugged = self.plugin_items(cx);
         let grouped = !open.is_empty() || !edits.is_empty();
         div()
             .flex()
@@ -285,6 +347,9 @@ impl Menu {
             })
             .children(moves)
             .children(edits)
+            .when(!plugged.is_empty(), |items| {
+                items.child(Self::divider()).children(plugged)
+            })
             .when(
                 grouped && (self.close.is_some() || self.history.is_some()),
                 |items| items.child(Self::divider()),

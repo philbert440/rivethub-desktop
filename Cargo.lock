@@ -6241,6 +6241,7 @@ dependencies = [
  "gpui_platform",
  "model",
  "parking_lot",
+ "svgtypes",
  "term",
  "tokio",
  "tracing",

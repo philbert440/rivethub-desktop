@@ -38,6 +38,17 @@ actions!(
 
 pub struct Submitted(pub String);
 
+/// What the input is for, which decides what Enter does with its text and how it is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    /// Enter sends the text and clears the input.
+    Message,
+    /// Enter hands the text on and keeps it.
+    Field,
+    /// A field whose text is masked and never copied out.
+    Secret,
+}
+
 /// An image pasted into a multi-line input, for the view that owns it to attach.
 pub struct PastedImage(pub gpui::Image);
 
@@ -45,6 +56,7 @@ pub struct TextInput {
     focus_handle: FocusHandle,
     /// Whether the text may span lines: Shift+Enter and pasted newlines stay, where a one-line input flattens them.
     multiline: bool,
+    purpose: Purpose,
     content: SharedString,
     placeholder: SharedString,
     selected_range: Range<usize>,
@@ -219,14 +231,14 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && self.purpose != Purpose::Secret {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
         }
     }
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && self.purpose != Purpose::Secret {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
@@ -551,10 +563,25 @@ fn composed_selection(range: &Range<usize>, new_text: &str, within: Option<&Rang
     )
 }
 
+/// A secret shown as one mark a character, each as long in UTF-8 as the character it hides, so
+/// every offset into the text still lands on the same place.
+fn masked(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch.len_utf8() {
+            1 => '*',
+            2 => '\u{b7}',
+            3 => '\u{2022}',
+            _ => '\u{1f784}',
+        })
+        .collect()
+}
+
 fn runs_for(input: &TextInput, window: &Window) -> (SharedString, Vec<TextRun>) {
     let style = window.text_style();
     let (text, color) = if input.content.is_empty() {
         (input.placeholder.clone(), Theme::ink_dim().into())
+    } else if input.purpose == Purpose::Secret {
+        (masked(&input.content).into(), style.color)
     } else {
         (input.content.clone(), style.color)
     };
@@ -788,6 +815,7 @@ impl TextInput {
         Self {
             focus_handle: cx.focus_handle(),
             multiline: false,
+            purpose: Purpose::Message,
             content: SharedString::default(),
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -804,6 +832,28 @@ impl TextInput {
     #[must_use]
     pub fn multiline(mut self) -> Self {
         self.multiline = true;
+        self
+    }
+
+    /// Keeps the text when Enter hands it on, as a form's field does.
+    #[must_use]
+    pub fn keeping(mut self) -> Self {
+        self.purpose = Purpose::Field;
+        self
+    }
+
+    /// Masks the text and keeps it off the clipboard.
+    #[must_use]
+    pub fn secret(mut self) -> Self {
+        self.purpose = Purpose::Secret;
+        self
+    }
+
+    /// Starts with `text` and the cursor at its end, as a form's field starts with its value.
+    #[must_use]
+    pub fn with_text(mut self, text: &str) -> Self {
+        self.content = text.to_owned().into();
+        self.selected_range = self.content.len()..self.content.len();
         self
     }
 
@@ -833,7 +883,9 @@ impl TextInput {
     }
 
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.take(cx) {
+        if self.purpose != Purpose::Message {
+            cx.emit(Submitted(self.text().to_owned()));
+        } else if let Some(text) = self.take(cx) {
             cx.emit(Submitted(text));
         }
     }

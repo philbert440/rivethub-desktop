@@ -7,6 +7,7 @@ mod launcher;
 mod markdown_view;
 mod memory;
 mod menu;
+mod plugin;
 mod question_card;
 mod session_pane;
 mod settings;
