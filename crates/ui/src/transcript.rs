@@ -429,6 +429,11 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 )),
         );
     }
+    let unanswered =
+        !working && exchange.prompt.is_some() && exchange.answer.trim().is_empty() && !exchange.has_process();
+    if unanswered {
+        column = column.child(div().text_sm().text_color(Theme::ink_dim()).child("No reply"));
+    }
     if !working {
         column = column.children(actions(exchange, ix));
     }

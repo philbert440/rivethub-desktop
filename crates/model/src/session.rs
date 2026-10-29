@@ -303,6 +303,7 @@ impl SessionView {
     /// arrives, and an earlier failure no longer stands.
     pub fn accepted(&mut self, prompt: &Prompt, at_ms: i64) {
         self.error = None;
+        self.activity = Activity::Working;
         self.turns.push(Turn {
             role: Role::User,
             text: prompt.text.clone(),

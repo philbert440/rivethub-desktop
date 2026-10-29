@@ -665,7 +665,7 @@ impl SessionPane {
         let folded = {
             let view = self.handle.view();
             let view = view.read();
-            exchanges(view.turns(), view.live())
+            exchanges(view.turns(), view.live(), view.busy())
         };
         let previous = Arc::clone(&self.exchanges);
         let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
