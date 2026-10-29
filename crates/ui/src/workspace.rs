@@ -1,4 +1,5 @@
 mod everything;
+mod new_topic;
 mod topic_view;
 
 use std::collections::{HashMap, HashSet};
@@ -14,7 +15,7 @@ use gpui::{
 use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
 use model::session::SessionSummary;
-use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
+use model::topics::{Atlas, Board, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows, in_history};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::agent_editor::{AgentEditor, AgentEditorEvent};
@@ -35,7 +36,7 @@ const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
 
 type Loaded = (
     Result<app::AllSessions, GatewayError>,
-    Result<(Vec<Topic>, Placements), GatewayError>,
+    Result<Filing, GatewayError>,
 );
 
 enum Launch {
@@ -71,6 +72,9 @@ pub struct Workspace {
     sessions: Vec<SessionSummary>,
     topics: Vec<Topic>,
     placements: Placements,
+    marks: HistoryMarks,
+    history_open: HashSet<TopicId>,
+    naming: Option<new_topic::Naming>,
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
     folded: HashSet<SessionId>,
@@ -159,6 +163,9 @@ impl Workspace {
             sessions: Vec::new(),
             topics: Vec::new(),
             placements: Placements::new(),
+            marks: HistoryMarks::new(),
+            history_open: HashSet::new(),
+            naming: None,
             suggestions: HashMap::new(),
             subagents: HashMap::new(),
             folded: HashSet::new(),
@@ -240,9 +247,10 @@ impl Workspace {
             Err(err) => problems.push(err.to_string()),
         }
         match topics {
-            Ok((topics, placements)) => {
-                self.topics = topics;
-                self.placements = placements;
+            Ok(filing) => {
+                self.topics = filing.topics;
+                self.placements = filing.placements;
+                self.marks = filing.marks;
             }
             Err(err) if err.is_missing_route() => {
                 problems.push("Topics need a newer rh on this node.".to_owned());
@@ -317,7 +325,13 @@ impl Workspace {
             uncategorized_ms: UNCATEGORIZED_MS,
             recent_ms: RECENT_MS,
         };
-        model::topics::board(&self.topics, &self.sessions, &self.placements, windows)
+        model::topics::board(
+            &self.topics,
+            &self.sessions,
+            &self.placements,
+            &self.marks,
+            windows,
+        )
     }
 
     fn sync_panel(&self, cx: &mut Context<Self>) {
@@ -447,12 +461,36 @@ impl Workspace {
     }
 
     fn open_menu(&mut self, focus: Focus, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let delete = match &focus {
-            Focus::Topic(topic) => self.topic(topic).map(|known| (topic.clone(), known.name.clone())),
-            Focus::Session(_) => None,
+        let (delete, closing, filing) = match &focus {
+            Focus::Topic(topic) => {
+                let known = self.topic(topic);
+                (
+                    known.map(|known| (topic.clone(), known.name.clone())),
+                    known.map(|known| (topic.clone(), self.closed(known))),
+                    None,
+                )
+            }
+            Focus::Session(session) => {
+                let latest = self
+                    .sessions
+                    .iter()
+                    .find(|known| known.id == session.id)
+                    .unwrap_or(session.as_ref());
+                (
+                    None,
+                    None,
+                    Some((session.id.clone(), in_history(latest, &self.marks))),
+                )
+            }
         };
-        let hub = self.hub.clone();
-        let menu = cx.new(|_| Menu::new(hub, Some(focus), delete));
+        let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
+        if let Some((topic, closed)) = closing {
+            menu = menu.closing(topic, closed);
+        }
+        if let Some((session, history)) = filing {
+            menu = menu.filing(session, history);
+        }
+        let menu = cx.new(|_| menu);
         let events = cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, window, cx| {
             if this.menu.as_ref().is_none_or(|open| &open.menu != menu) {
                 return;
@@ -464,6 +502,7 @@ impl Workspace {
                     this.topic_deleted(topic, window, cx);
                     cx.emit(TopicDeleted(topic.clone()));
                 }
+                MenuEvent::Filed => this.load(cx),
                 MenuEvent::Closed => {}
             }
             cx.notify();
@@ -474,6 +513,19 @@ impl Workspace {
             _events: events,
         });
         cx.notify();
+    }
+
+    /// Closed, with none of its sessions active since.
+    fn closed(&self, topic: &Topic) -> bool {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        let newest = self
+            .sessions
+            .iter()
+            .filter(|session| atlas.within(session, &topic.id))
+            .map(|session| session.updated_at_ms)
+            .max()
+            .unwrap_or(0);
+        topic.is_closed(newest)
     }
 
     /// A deleted topic's sessions are back in Uncategorized; leave the topic if it was open.

@@ -1,10 +1,10 @@
 use model::decisions::Decision;
-use model::topics::{Suggestion, Topic};
+use model::topics::{HistoryMarks, Suggestion, Topic};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
-    PlacementRequest, TopicCreateRequest, TopicDecision, TopicDecisionList, TopicList, TopicRecord,
-    TopicSessionList,
+    PlacementRequest, SessionHistoryList, SessionHistoryMark, TopicCreateRequest, TopicDecision,
+    TopicDecisionList, TopicList, TopicRecord, TopicSessionList,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -16,6 +16,8 @@ fn topic(record: TopicRecord, last_active_ms: Option<i64>) -> Topic {
         name: record.name,
         parent: record.parent.map(TopicId::new),
         last_active_ms,
+        created_ms: record.created_at.timestamp_millis(),
+        closed_ms: record.closed_at.map(|at| at.timestamp_millis()),
     }
 }
 
@@ -94,6 +96,53 @@ impl Gateway {
         let url = self.api_url(&["api", "sessions", &segment, "placement"])?;
         let _: PlacementReply = Self::read_json(self.http.delete(url).send().await)?.await?;
         Ok(())
+    }
+
+    /// Closes a topic you're done with; it is past until one of its sessions is active again.
+    pub async fn close_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
+        self.post_topic(topic, "close").await
+    }
+
+    pub async fn reopen_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
+        self.post_topic(topic, "reopen").await
+    }
+
+    async fn post_topic(&self, topic: &TopicId, verb: &str) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), verb])?;
+        let _: TopicRecord = Self::read_json(self.http.post(url).send().await)?.await?;
+        Ok(())
+    }
+
+    /// When each session was marked as history.
+    pub async fn history_marks(&self) -> Result<HistoryMarks, GatewayError> {
+        let url = self.api_url(&["api", "sessions", "history"])?;
+        let list: SessionHistoryList = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(list
+            .sessions
+            .iter()
+            .map(|mark| {
+                (
+                    translate::session(&mark.session_id),
+                    mark.marked_at.timestamp_millis(),
+                )
+            })
+            .collect())
+    }
+
+    /// Marks a session as history: it leaves its topic's active sessions until it is active again.
+    pub async fn mark_history(&self, session: &SessionId) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "history"])?;
+        let _: SessionHistoryMark = Self::read_json(self.http.put(url).send().await)?.await?;
+        Ok(())
+    }
+
+    pub async fn unmark_history(&self, session: &SessionId) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "history"])?;
+        Self::check(self.http.delete(url).send().await.map_err(GatewayError::Http)?)
+            .await
+            .map(drop)
     }
 
     /// The topic's own decisions, oldest first.

@@ -144,7 +144,7 @@ impl MemoryPage {
                     this.topic_deleted(topic, cx);
                     cx.emit(MemoryEvent::TopicDeleted(topic.clone()));
                 }
-                MenuEvent::ViewInMemory(_) | MenuEvent::Closed => {}
+                MenuEvent::ViewInMemory(_) | MenuEvent::Filed | MenuEvent::Closed => {}
             }
             cx.notify();
         });

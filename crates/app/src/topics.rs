@@ -2,7 +2,7 @@ use gateway::GatewayError;
 use std::collections::HashMap;
 
 use model::decisions::{Decision, Group, on_page};
-use model::topics::{Placements, Suggestion, Topic};
+use model::topics::{Filing, Suggestion, Topic};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -64,7 +64,7 @@ impl Hub {
         .await
     }
 
-    pub async fn topics(&self) -> Result<(Vec<Topic>, Placements), GatewayError> {
+    pub async fn topics(&self) -> Result<Filing, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
             let topics = gateway.topics().await?;
@@ -76,7 +76,12 @@ impl Hub {
                 .zip(filed)
                 .flat_map(|(topic, sessions)| sessions.into_iter().map(|session| (session, topic.id.clone())))
                 .collect();
-            Ok((topics, placements))
+            let marks = gateway.history_marks().await?;
+            Ok(Filing {
+                topics,
+                placements,
+                marks,
+            })
         })
         .await
     }
@@ -123,6 +128,38 @@ impl Hub {
             let topic = gateway.create_topic(&name).await?;
             gateway.place(&session, &topic.id).await?;
             Ok(topic)
+        })
+        .await
+    }
+
+    pub async fn create_topic(&self, name: String) -> Result<Topic, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.create_topic(&name).await })
+            .await
+    }
+
+    /// Closes the topic, or reopens it when `closed` is false.
+    pub async fn set_topic_closed(&self, topic: TopicId, closed: bool) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            if closed {
+                gateway.close_topic(&topic).await
+            } else {
+                gateway.reopen_topic(&topic).await
+            }
+        })
+        .await
+    }
+
+    /// Marks the session as history, or makes it active again when `history` is false.
+    pub async fn set_history(&self, session: SessionId, history: bool) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            if history {
+                gateway.mark_history(&session).await
+            } else {
+                gateway.unmark_history(&session).await
+            }
         })
         .await
     }

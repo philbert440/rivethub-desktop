@@ -4,7 +4,7 @@ use gpui::{
     AnyElement, ClickEvent, Context, IntoElement, MouseButton, ParentElement, Styled, div, prelude::*, px,
 };
 use model::session::SessionSummary;
-use model::topics::{Atlas, Topic};
+use model::topics::{Atlas, Topic, in_history};
 use model::{SessionId, TopicId, lineage};
 
 use super::Workspace;
@@ -17,6 +17,7 @@ use crate::theme::Theme;
 struct Section<'a> {
     topic: &'a Topic,
     sessions: Vec<SessionSummary>,
+    history: Vec<SessionSummary>,
     stubs: Vec<(&'a SessionSummary, Option<&'a Topic>)>,
 }
 
@@ -40,6 +41,9 @@ impl Workspace {
                     .collect();
                 sessions
                     .sort_by_key(|session| (!self.feed.needs_you(session), Reverse(session.updated_at_ms)));
+                let (history, sessions) = sessions
+                    .into_iter()
+                    .partition(|session| in_history(atlas.origin(session), &self.marks));
                 let stubs = self
                     .sessions
                     .iter()
@@ -55,11 +59,15 @@ impl Workspace {
                 Section {
                     topic,
                     sessions,
+                    history,
                     stubs,
                 }
             })
             .filter(|section| {
-                section.topic.id == *root || !section.sessions.is_empty() || !section.stubs.is_empty()
+                section.topic.id == *root
+                    || !section.sessions.is_empty()
+                    || !section.history.is_empty()
+                    || !section.stubs.is_empty()
             })
             .collect()
     }
@@ -142,7 +150,7 @@ impl Workspace {
     ) -> AnyElement {
         let heading = (section.topic.id != *root).then(|| section.topic.name.to_uppercase());
         let rows = lineage::nest(&section.sessions, &self.folded);
-        let empty = rows.is_empty() && section.stubs.is_empty();
+        let empty = rows.is_empty() && section.stubs.is_empty() && section.history.is_empty();
         let mut lines = Vec::with_capacity(rows.len() + section.stubs.len());
         for line in &rows {
             *row += 1;
@@ -151,6 +159,22 @@ impl Workspace {
         for (session, elsewhere) in section.stubs {
             *row += 1;
             lines.push(Self::stub_row(*row, session, elsewhere, cx));
+        }
+        if !section.history.is_empty() {
+            let open = self.history_open.contains(&section.topic.id);
+            lines.push(Self::history_toggle(
+                *row,
+                section.topic.id.clone(),
+                section.history.len(),
+                open,
+                cx,
+            ));
+            if open {
+                for line in &lineage::nest(&section.history, &self.folded) {
+                    *row += 1;
+                    lines.push(self.session_row(*row, line, now, cx));
+                }
+            }
         }
         div()
             .flex()
@@ -166,6 +190,39 @@ impl Workspace {
                 )
             })
             .children(lines)
+            .into_any_element()
+    }
+
+    /// The row that folds a topic's history sessions away, the ones marked as history and not
+    /// active since.
+    fn history_toggle(
+        row: usize,
+        topic: TopicId,
+        count: usize,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(("history", row))
+            .mt_1()
+            .px_2()
+            .py(px(6.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(10.))
+            .cursor_pointer()
+            .hover(|line| line.bg(Theme::card()))
+            .text_xs()
+            .text_color(Theme::ink_dim())
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if !this.history_open.remove(&topic) {
+                    this.history_open.insert(topic.clone());
+                }
+                cx.notify();
+            }))
+            .child(div().w(px(12.)).child(if open { "▾" } else { "▸" }))
+            .child(format!("History · {count}"))
             .into_any_element()
     }
 

@@ -263,18 +263,19 @@ async fn a_session_placed_in_a_new_topic_reads_back_under_it() -> Result<(), Box
     assert!(unplaced.is_empty());
     let name = format!("Desktop smoke {stamp}");
     let created = hub.place_in_new(session.clone(), name.clone()).await?;
-    let (topics, placements) = hub.topics().await?;
+    let filing = hub.topics().await?;
     assert!(
-        topics
+        filing
+            .topics
             .iter()
             .any(|topic| topic.id == created.id && topic.name == name)
     );
-    assert_eq!(placements.get(&session), Some(&created.id));
+    assert_eq!(filing.placements.get(&session), Some(&created.id));
     let found = hub.search_topics(name.to_lowercase()).await?;
     assert_eq!(found.first().map(|topic| &topic.id), Some(&created.id));
     hub.unplace(session.clone()).await?;
-    let (_, placements) = hub.topics().await?;
-    assert!(!placements.contains_key(&session));
+    let filing = hub.topics().await?;
+    assert!(!filing.placements.contains_key(&session));
     Ok(())
 }
 

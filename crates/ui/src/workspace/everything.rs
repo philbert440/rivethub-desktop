@@ -14,7 +14,7 @@ use crate::theme::Theme;
 
 const CARD_SESSIONS: usize = 3;
 const UNCATEGORIZED_SHOWN: usize = 6;
-const TILE_WIDTH: f32 = 300.;
+pub(super) const TILE_WIDTH: f32 = 300.;
 
 impl Workspace {
     pub(super) fn everything(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -33,6 +33,7 @@ impl Workspace {
                 .child(img(brand::ghost()).size(px(96.)))
                 .child(div().text_color(Theme::ink()).child("Nothing active"))
                 .child(div().text_color(Theme::ink_dim()).child(line))
+                .child(self.new_topic_card(cx))
                 .into_any_element();
         }
         let now = now_ms();
@@ -51,24 +52,27 @@ impl Workspace {
             .when(!board.uncategorized.is_empty(), |page| {
                 page.child(self.uncategorized_lane(&board.uncategorized, now, cx))
             })
-            .when(!board.recent.is_empty(), |page| {
-                page.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(Self::lane_title("TOPICS", "most recent first".to_owned()))
-                        .child(
-                            div().flex().flex_wrap().gap_3().children(
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(Self::lane_title("TOPICS", "most recent first".to_owned()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_3()
+                            .children(
                                 board
                                     .recent
                                     .iter()
                                     .enumerate()
                                     .map(|(index, card)| self.topic_card(index, card, now, cx)),
-                            ),
-                        ),
-                )
-            })
+                            )
+                            .child(self.new_topic_card(cx)),
+                    ),
+            )
             .into_any_element()
     }
 
