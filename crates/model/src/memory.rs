@@ -135,6 +135,14 @@ pub struct SessionMemory {
 }
 
 impl SessionMemory {
+    /// The summary of the session's latest messages: the one ending last, a leaf over a rollup that
+    /// ends at the same time.
+    pub fn latest(&self) -> Option<&Summary> {
+        self.summaries
+            .iter()
+            .max_by_key(|summary| (summary.to_ms, summary.kind == SummaryKind::Leaf))
+    }
+
     /// The summaries as a tree, with each one's depth: every summary sits under the one it rolls
     /// up into, and siblings run earliest first. A leaf not rolled up yet sits at the top level.
     pub fn outline(&self) -> Vec<(usize, &Summary)> {
@@ -224,6 +232,20 @@ mod tests {
             to_ms: Some(from_ms),
             vector: Vector::Embedded,
         }
+    }
+
+    #[test]
+    fn the_latest_summary_ends_last_and_a_leaf_beats_its_rollup() {
+        let memory = SessionMemory {
+            summaries: vec![
+                summary("early", None, SummaryKind::Leaf, 10),
+                summary("root", None, SummaryKind::Root, 40),
+                summary("last", Some("root"), SummaryKind::Leaf, 40),
+            ],
+            messages: MessageTally::default(),
+        };
+        assert_eq!(memory.latest().map(|summary| summary.id.as_str()), Some("last"));
+        assert!(SessionMemory::default().latest().is_none());
     }
 
     #[test]
