@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use gpui::{
-    AnyElement, ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, IntoElement, ParentElement,
-    SharedString, StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle, Window, div, font,
-    prelude::*, px,
+    AnyElement, App, ClickEvent, ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, IntoElement,
+    ParentElement, RenderOnce, SharedString, StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle,
+    Window, div, font, prelude::*, px,
 };
 use model::markdown::{Block, Run};
 
@@ -74,45 +76,111 @@ fn styled_text(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> Sty
     StyledText::new(SharedString::from(text)).with_runs(text_runs)
 }
 
-fn code_block(language: Option<&str>, text: &str, id: SharedString) -> AnyElement {
-    let copied = text.to_owned();
-    div()
-        .w_full()
-        .rounded(px(16.))
-        .bg(Theme::code())
-        .overflow_hidden()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .px(px(14.))
-                .py(px(9.))
-                .text_xs()
-                .text_color(Theme::ink_dim())
-                .child(language.unwrap_or("text").to_owned())
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .id(id)
-                        .cursor_pointer()
-                        .hover(|copy| copy.text_color(Theme::ink()))
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
-                        })
-                        .child("Copy"),
-                ),
-        )
-        .child(
-            div()
-                .px_4()
-                .pb_4()
-                .font_family(Theme::MONO)
-                .text_size(px(12.))
-                .line_height(px(19.))
-                .text_color(Theme::ink())
-                .child(text.trim_end_matches('\n').to_owned()),
-        )
-        .into_any_element()
+/// The narrowest a table column gets; a table wider than its space scrolls sideways.
+const TABLE_COLUMN: f32 = 140.;
+
+/// How long Copy reads "Copied" after a click.
+const COPIED_FOR: Duration = Duration::from_millis(1500);
+
+/// What a code block keeps between frames: whether it was just copied, and whether its lines run
+/// on past the edge instead of wrapping.
+#[derive(Debug, Clone, Copy, Default)]
+struct CodeState {
+    copied: bool,
+    unwrapped: bool,
+}
+
+/// A fenced block of code under a bar with its language, a Wrap toggle and a Copy that confirms.
+#[derive(IntoElement)]
+struct CodeBlock {
+    id: SharedString,
+    language: Option<String>,
+    text: String,
+}
+
+impl CodeBlock {
+    fn button(&self, name: &str, label: &'static str, lit: bool) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(SharedString::from(format!("{}-{name}", self.id)))
+            .cursor_pointer()
+            .text_color(if lit { Theme::accent() } else { Theme::ink_dim() })
+            .hover(|button| button.text_color(Theme::ink()))
+            .child(label)
+    }
+}
+
+impl RenderOnce for CodeBlock {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, _| CodeState::default());
+        let CodeState { copied, unwrapped } = *state.read(cx);
+        let text = self.text.trim_end_matches('\n').to_owned();
+        let copy = {
+            let state = state.clone();
+            let text = text.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                state.update(cx, |state, cx| {
+                    state.copied = true;
+                    cx.notify();
+                    cx.spawn(async move |state, cx| {
+                        cx.background_executor().timer(COPIED_FOR).await;
+                        state
+                            .update(cx, |state, cx| {
+                                state.copied = false;
+                                cx.notify();
+                            })
+                            .ok();
+                    })
+                    .detach();
+                });
+            }
+        };
+        let wrap = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            state.update(cx, |state, cx| {
+                state.unwrapped = !state.unwrapped;
+                cx.notify();
+            });
+        };
+        let body = div()
+            .id(SharedString::from(format!("{}-body", self.id)))
+            .px_4()
+            .pb_4()
+            .font_family(Theme::MONO)
+            .text_size(px(12.))
+            .line_height(px(19.))
+            .text_color(Theme::ink())
+            .map(|body| {
+                if unwrapped {
+                    body.overflow_x_scroll()
+                        .child(div().whitespace_nowrap().child(text))
+                } else {
+                    body.child(text)
+                }
+            });
+        div()
+            .w_full()
+            .rounded(px(16.))
+            .bg(Theme::code())
+            .overflow_hidden()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px(px(14.))
+                    .py(px(9.))
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(self.language.clone().unwrap_or_else(|| "text".to_owned()))
+                    .child(div().flex_1())
+                    .child(self.button("wrap", "Wrap", !unwrapped).on_click(wrap))
+                    .child(
+                        self.button("copy", if copied { "Copied" } else { "Copy" }, copied)
+                            .on_click(copy),
+                    ),
+            )
+            .child(body)
+    }
 }
 
 pub fn blocks(blocks: &[Block], scope: &str, base: Hsla, window: &Window) -> Vec<AnyElement> {
@@ -186,45 +254,54 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
             .gap_2()
             .children(blocks(inner, scope, Theme::ink_dim().into(), window))
             .into_any_element(),
-        Block::Code { language, text } => code_block(
-            language.as_deref(),
-            text,
-            SharedString::from(format!("copy-{scope}")),
-        ),
+        Block::Code { language, text } => CodeBlock {
+            id: SharedString::from(format!("code-{scope}")),
+            language: language.clone(),
+            text: text.clone(),
+        }
+        .into_any_element(),
         Block::Table { head, rows } => {
+            let columns = rows.iter().map(Vec::len).fold(head.len(), usize::max);
+            let wide = px(TABLE_COLUMN * u16::try_from(columns).map_or(f32::MAX, f32::from));
             div()
+                .id(SharedString::from(format!("{scope}-table")))
                 .w_full()
                 .rounded(px(12.))
                 .border_1()
                 .border_color(Theme::line())
-                .overflow_hidden()
+                .overflow_x_scroll()
                 .child(
                     div()
-                        .flex()
-                        .bg(Theme::card())
-                        .children(head.iter().enumerate().map(|(column, cell)| {
-                            div().flex_1().min_w_0().px_4().py(px(10.)).child(styled(
-                                cell,
-                                Theme::ink().into(),
-                                true,
-                                &format!("{scope}-head-{column}"),
-                                window,
-                            ))
+                        .w_full()
+                        .min_w(wide)
+                        .child(
+                            div()
+                                .flex()
+                                .bg(Theme::card())
+                                .children(head.iter().enumerate().map(|(column, cell)| {
+                                    div().flex_1().min_w_0().px_4().py(px(10.)).child(styled(
+                                        cell,
+                                        Theme::ink().into(),
+                                        true,
+                                        &format!("{scope}-head-{column}"),
+                                        window,
+                                    ))
+                                })),
+                        )
+                        .children(rows.iter().enumerate().map(|(line, row)| {
+                            div().flex().border_t_1().border_color(Theme::line()).children(
+                                row.iter().enumerate().map(|(column, cell)| {
+                                    div().flex_1().min_w_0().px_4().py(px(10.)).child(styled(
+                                        cell,
+                                        base,
+                                        false,
+                                        &format!("{scope}-{line}-{column}"),
+                                        window,
+                                    ))
+                                }),
+                            )
                         })),
                 )
-                .children(rows.iter().enumerate().map(|(line, row)| {
-                    div().flex().border_t_1().border_color(Theme::line()).children(
-                        row.iter().enumerate().map(|(column, cell)| {
-                            div().flex_1().min_w_0().px_4().py(px(10.)).child(styled(
-                                cell,
-                                base,
-                                false,
-                                &format!("{scope}-{line}-{column}"),
-                                window,
-                            ))
-                        }),
-                    )
-                }))
                 .into_any_element()
         }
         Block::Rule => div().w_full().h(px(1.)).bg(Theme::line()).into_any_element(),
