@@ -27,6 +27,7 @@ fn styled(runs: &[Run], base: Hsla, bold_all: bool, id: &str, window: &Window) -
     InteractiveText::new(SharedString::from(format!("text-{id}")), text)
         .on_click(ranges, move |index, _, cx| {
             if let Some(url) = urls.get(index) {
+                cx.stop_propagation();
                 cx.open_url(url);
             }
         })
