@@ -1051,8 +1051,8 @@ impl SessionPane {
     }
 
     /// Puts a queued prompt back in the composer, after any draft, with its images.
-    fn edit_queued(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(prompt) = self.handle.take_queued(index) else {
+    fn edit_queued(&mut self, queued: &Prompt, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.handle.take_queued(queued) else {
             return;
         };
         self.composer.update(cx, |composer, cx| {
@@ -1091,6 +1091,7 @@ impl SessionPane {
                 )))
                 .children(queued.into_iter().enumerate().map(|(index, prompt)| {
                     let handle = self.handle.clone();
+                    let queued = prompt.clone();
                     let images = match prompt.attachments.len() {
                         0 => None,
                         1 => Some("1 image".to_owned()),
@@ -1115,7 +1116,7 @@ impl SessionPane {
                                 .id(("edit-queued", index))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                    this.edit_queued(index, window, cx);
+                                    this.edit_queued(&queued, window, cx);
                                 }))
                                 .child(crate::brand::icon("icons/rename.svg", 13., Theme::ink_dim())),
                         )
