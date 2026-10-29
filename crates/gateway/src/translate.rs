@@ -340,6 +340,7 @@ fn plan(entries: Vec<wire::harness::PlanEntry>) -> Plan {
         steps: entries
             .into_iter()
             .map(|entry| Step {
+                id: None,
                 content: entry.content,
                 status: match entry.status {
                     wire::harness::PlanStatus::Pending => StepStatus::Pending,

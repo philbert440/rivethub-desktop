@@ -236,6 +236,9 @@ impl SessionView {
         match event {
             SessionEvent::Snapshot { mut turns, context } => {
                 self.keep_outputs(&mut turns);
+                if let Some(plan) = written_plan(&turns) {
+                    self.plan = plan;
+                }
                 self.turns = turns;
                 self.live = None;
                 if context.is_some() {
@@ -249,6 +252,9 @@ impl SessionView {
             }
             SessionEvent::Reasoning(text) => self.live_turn().thinking.push_str(&text),
             SessionEvent::ToolStarted { id, name, input } => {
+                if let ToolInput::Todos(todos) = &input {
+                    self.plan.revise(todos);
+                }
                 self.live_turn().tools.push(ToolCall {
                     id: Some(id),
                     name,
@@ -402,9 +408,25 @@ impl SessionView {
     }
 }
 
+/// The plan the todo tool calls in `turns` add up to, when the agent made any.
+fn written_plan(turns: &[Turn]) -> Option<Plan> {
+    turns
+        .iter()
+        .flat_map(|turn| &turn.tools)
+        .fold(None, |plan: Option<Plan>, tool| match &tool.input {
+            ToolInput::Todos(todos) => {
+                let mut plan = plan.unwrap_or_default();
+                plan.revise(todos);
+                Some(plan)
+            }
+            _ => plan,
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolState, Turn};
+    use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolCall, ToolState, Turn};
+    use crate::plan::{StepStatus, Todo, Todos};
     use crate::prompt::Prompt;
     use crate::tools::{ToolInput, ToolOutput};
     use crate::usage::Usage;
@@ -440,6 +462,45 @@ mod tests {
             context: None,
         });
         assert_eq!(texts(&view), ["hi", "hello"]);
+    }
+
+    #[test]
+    fn a_todo_tool_keeps_the_plan_and_a_reopened_transcript_rebuilds_it() {
+        let todos = |status| {
+            ToolInput::Todos(Todos {
+                items: vec![Todo {
+                    id: None,
+                    content: "test".into(),
+                    status: Some(status),
+                }],
+                merge: false,
+            })
+        };
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::ToolStarted {
+            id: "t1".into(),
+            name: "todo_write".into(),
+            input: todos(StepStatus::InProgress),
+        });
+        assert_eq!(
+            view.plan().current().map(|step| step.content.as_str()),
+            Some("test")
+        );
+        let mut done = said(Role::Assistant, "");
+        done.tools.push(ToolCall {
+            id: Some("t2".into()),
+            name: "todo_write".into(),
+            state: ToolState::Done,
+            input: todos(StepStatus::Completed),
+            output: None,
+        });
+        let mut reopened = SessionView::default();
+        reopened.apply(SessionEvent::Snapshot {
+            turns: vec![done],
+            context: None,
+        });
+        assert_eq!(reopened.plan().done(), 1);
+        assert!(reopened.plan().finished());
     }
 
     #[test]

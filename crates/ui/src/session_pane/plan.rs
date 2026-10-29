@@ -6,7 +6,7 @@ use super::SessionPane;
 use crate::theme::Theme;
 use crate::transcript::Fold;
 
-fn mark(status: StepStatus) -> (&'static str, Rgba) {
+pub(crate) fn mark(status: StepStatus) -> (&'static str, Rgba) {
     match status {
         StepStatus::Completed => ("✓", Theme::ink_dim()),
         StepStatus::InProgress => ("●", Theme::accent()),

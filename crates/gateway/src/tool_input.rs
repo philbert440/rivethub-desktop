@@ -1,4 +1,5 @@
 use model::chat::Category;
+use model::plan::{StepStatus, Todo, Todos};
 use model::tools::{Question, QuestionOption, ToolInput, ToolOutput};
 use serde_json::Value;
 use wire::JsonObject;
@@ -80,6 +81,34 @@ fn questions(input: &JsonObject) -> Vec<Question> {
     }
 }
 
+/// Grok's `todo_write` names its items and writes the whole list, or with `merge` only the ones it
+/// changes.
+fn todos(input: &JsonObject) -> Option<Todos> {
+    let item = |value: &Value| {
+        let status = match value.get("status").and_then(Value::as_str)? {
+            "pending" => Some(StepStatus::Pending),
+            "in_progress" => Some(StepStatus::InProgress),
+            "completed" => Some(StepStatus::Completed),
+            "cancelled" => None,
+            _ => return None,
+        };
+        Some(Todo {
+            id: value.get("id").and_then(Value::as_str).map(str::to_owned),
+            content: value
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+            status,
+        })
+    };
+    Some(Todos {
+        items: input.get("todos")?.as_array()?.iter().filter_map(item).collect(),
+        merge: input.get("merge").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
 fn fields(input: &JsonObject) -> ToolInput {
     let shown: Vec<(String, String)> = input
         .as_map()
@@ -110,6 +139,11 @@ pub fn parse(name: &str, input: Option<&JsonObject>) -> ToolInput {
         if !asked.is_empty() {
             return ToolInput::Ask(asked);
         }
+    }
+    if name == "todo_write"
+        && let Some(written) = todos(input)
+    {
+        return ToolInput::Todos(written);
     }
     let path = || text(input, &["file_path", "path", "notebook_path", "filename"]);
     let parsed = match Category::of(name) {
@@ -209,6 +243,33 @@ mod tests {
         );
         let odd = object(r#"{"server":"rivet","limit":3}"#);
         assert!(matches!(parse("mcp__x__y", Some(&odd)), ToolInput::Fields(fields) if fields.len() == 2));
+    }
+
+    #[test]
+    fn todo_tools_parse_as_the_lists_they_write() {
+        let whole = object(
+            r#"{"todos":[{"id":"date","content":"Check the date","status":"in_progress"},{"id":"uptime","content":"Check uptime","status":"pending"}],"merge":false}"#,
+        );
+        let ToolInput::Todos(written) = parse("todo_write", Some(&whole)) else {
+            unreachable!("todo_write parses as a list");
+        };
+        assert!(!written.merge);
+        assert_eq!(written.items[1].status, Some(StepStatus::Pending));
+        let update = object(
+            r#"{"todos":[{"id":"date","status":"completed"},{"id":"uptime","status":"cancelled"}],"merge":true}"#,
+        );
+        let ToolInput::Todos(changed) = parse("todo_write", Some(&update)) else {
+            unreachable!("todo_write parses as a list");
+        };
+        assert!(changed.merge);
+        assert_eq!(
+            (
+                changed.items[1].id.as_deref(),
+                changed.items[1].status,
+                changed.items[1].content.as_str()
+            ),
+            (Some("uptime"), None, "")
+        );
     }
 
     #[test]

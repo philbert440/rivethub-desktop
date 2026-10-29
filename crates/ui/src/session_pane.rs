@@ -21,7 +21,7 @@ use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
 
-mod plan;
+pub(crate) mod plan;
 mod switch;
 
 use switch::Picker;

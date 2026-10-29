@@ -1,3 +1,5 @@
+use crate::plan::{StepStatus, Todos};
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ToolInput {
     Command {
@@ -27,6 +29,7 @@ pub enum ToolInput {
         description: String,
     },
     Ask(Vec<Question>),
+    Todos(Todos),
     Fields(Vec<(String, String)>),
     #[default]
     Unknown,
@@ -120,6 +123,20 @@ pub fn label(name: &str, input: &ToolInput, cwd: Option<&str>, home: Option<&str
             .iter()
             .find_map(|question| question.question.as_deref().or(question.header.as_deref()))
             .map_or_else(|| name.to_owned(), first_line),
+        ToolInput::Todos(todos) => {
+            let named = || todos.items.iter().filter(|todo| !todo.content.is_empty());
+            named()
+                .find(|todo| todo.status == Some(StepStatus::InProgress))
+                .or_else(|| named().next())
+                .map_or_else(
+                    || match todos.items.len() {
+                        0 => name.to_owned(),
+                        1 => "Updates 1 item".to_owned(),
+                        count => format!("Updates {count} items"),
+                    },
+                    |todo| first_line(&todo.content),
+                )
+        }
         ToolInput::Fields(fields) => fields
             .first()
             .map_or_else(|| name.to_owned(), |(_, value)| first_line(value)),
