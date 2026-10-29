@@ -104,13 +104,10 @@ impl MemoryPage {
         cx.notify();
     }
 
-    /// Reloads the open session's page once its first load has landed and no other is under way.
+    /// Reloads the open session's page unless a load is under way, which also retries one that
+    /// failed.
     pub(super) fn refresh_session(&mut self, cx: &mut Context<Self>) {
-        if self
-            .viewing
-            .as_ref()
-            .is_some_and(|viewing| viewing.memory.is_some() && !viewing.loading)
-        {
+        if self.viewing.as_ref().is_some_and(|viewing| !viewing.loading) {
             self.load_session(cx);
         }
     }
@@ -138,6 +135,7 @@ impl MemoryPage {
                             .map(|summary| (summary.id.clone(), model::markdown::parse(summary.text.trim())))
                             .collect();
                         viewing.memory = Some(memory);
+                        this.problem = None;
                         cx.notify();
                     }
                     Err(err) => this.failed(&err, cx),
