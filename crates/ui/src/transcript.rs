@@ -96,6 +96,8 @@ pub struct Context<'a> {
     pub fetched: &'a HashMap<String, model::tools::ToolOutput>,
     /// Sent images fetched from the node that holds their uploads, by upload.
     pub previews: &'a HashMap<String, Arc<gpui::Image>>,
+    /// The agent's plan as it stands, which names the items a todo update changes.
+    pub plan: &'a model::plan::Plan,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {

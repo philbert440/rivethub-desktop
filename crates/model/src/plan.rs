@@ -49,6 +49,14 @@ impl Plan {
         self.done() == self.steps.len()
     }
 
+    /// What the step the agent keys `id` says.
+    pub fn named(&self, id: &str) -> Option<&str> {
+        self.steps
+            .iter()
+            .find(|step| step.id.as_deref() == Some(id))
+            .map(|step| step.content.as_str())
+    }
+
     /// The step the agent is on now.
     pub fn current(&self) -> Option<&Step> {
         self.steps

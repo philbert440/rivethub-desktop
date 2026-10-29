@@ -787,6 +787,7 @@ impl SessionPane {
         let folds = Arc::clone(&self.folds);
         let fetched = Arc::clone(&self.fetched);
         let previews = Arc::clone(&self.previews);
+        let plan = view.plan().clone();
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -805,6 +806,7 @@ impl SessionPane {
                             home: home.as_deref(),
                             fetched: &fetched,
                             previews: &previews,
+                            plan: &plan,
                         };
                         transcript::exchange(exchange, &context, window)
                     },
