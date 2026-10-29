@@ -246,12 +246,19 @@ impl Workspace {
 
     /// A preview as the line under a session's title.
     pub(super) fn preview_line(preview: &Preview) -> String {
+        let prose = || model::markdown::plain(&preview.text);
         match preview.kind {
-            PreviewKind::Running | PreviewKind::Said if preview.text.is_empty() => String::new(),
             PreviewKind::Running => preview.text.clone(),
-            PreviewKind::Asking => format!("Asks: “{}”", preview.text),
             PreviewKind::Approval => format!("Waiting for approval: {}", preview.text),
-            PreviewKind::Said => format!("“{}”", preview.text),
+            PreviewKind::Asking => format!("Asks: “{}”", prose()),
+            PreviewKind::Said => {
+                let said = prose();
+                if said.is_empty() {
+                    said
+                } else {
+                    format!("“{said}”")
+                }
+            }
         }
     }
 
