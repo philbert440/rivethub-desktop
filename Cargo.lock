@@ -1945,6 +1945,7 @@ dependencies = [
 name = "gateway"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "model",
  "reqwest",
@@ -7349,7 +7350,6 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=1c9b4439edfe11346f462939156f2c0c09edf72f#1c9b4439edfe11346f462939156f2c0c09edf72f"
 dependencies = [
  "base64 0.22.1",
  "chrono",

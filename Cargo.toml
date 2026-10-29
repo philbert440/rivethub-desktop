@@ -33,6 +33,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 rustls-pki-types = "1"
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures = "0.3"
+base64 = "0.22"
 notify-rust = { version = "4.18", default-features = false, features = ["z"] }
 x509-parser = { version = "0.18", default-features = false }
 
@@ -57,3 +58,8 @@ missing_panics_doc = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Local development only: the plug-in wire types live on rh branch feat/plugin-host. Repin `wire`
+# above to that branch's merged rev and drop this patch before any PR.
+[patch."https://github.com/philbert440/rivethub-runtime"]
+wire = { path = "/home/phil/work/rh-plugins/crates/wire" }
