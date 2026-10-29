@@ -32,6 +32,13 @@ impl Hub {
         .await
     }
 
+    /// The topic's own decisions, oldest first.
+    pub async fn decisions(&self, topic: TopicId) -> Result<Vec<Decision>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.decisions(&topic).await })
+            .await
+    }
+
     pub async fn add_decision(&self, topic: TopicId, text: String) -> Result<Decision, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.add_decision(&topic, &text).await })

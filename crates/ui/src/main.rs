@@ -17,6 +17,11 @@ mod text;
 mod theme;
 mod tool_view;
 mod topic_picker;
+#[expect(
+    dead_code,
+    reason = "the topic screen mounts the rail when its main-column rebuild lands"
+)]
+mod topic_rail;
 mod transcript;
 mod turn_rail;
 mod window_state;
@@ -81,6 +86,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-j", gpui::NoAction, Some("Terminal")),
         KeyBinding::new("escape", topic_picker::Dismiss, Some("TopicPicker")),
         KeyBinding::new("escape", workspace::CancelRetitle, Some("TopicRetitle")),
+        KeyBinding::new("escape", topic_rail::CancelDecision, Some("RailDecision")),
         KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("shift-enter", input::Newline, Some("TextInput")),
