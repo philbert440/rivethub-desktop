@@ -1,5 +1,6 @@
 mod agent_editor;
 mod brand;
+mod copy;
 mod input;
 mod instance;
 mod launcher;

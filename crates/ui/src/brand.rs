@@ -57,6 +57,7 @@ impl gpui::AssetSource for Icons {
             "icons/tags.svg" => include_bytes!("../assets/icons/tags.svg"),
             "icons/settings.svg" => include_bytes!("../assets/icons/settings.svg"),
             "icons/copy.svg" => include_bytes!("../assets/icons/copy.svg"),
+            "icons/check.svg" => include_bytes!("../assets/icons/check.svg"),
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(bytes)))

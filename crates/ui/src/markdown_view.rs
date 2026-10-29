@@ -1,12 +1,11 @@
-use std::time::Duration;
-
 use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, IntoElement,
-    ParentElement, RenderOnce, SharedString, StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle,
-    Window, div, font, prelude::*, px,
+    AnyElement, App, ClickEvent, FontStyle, FontWeight, Hsla, InteractiveText, IntoElement, ParentElement,
+    RenderOnce, SharedString, StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle, Window, div,
+    font, prelude::*, px,
 };
 use model::markdown::{Block, Run};
 
+use crate::copy;
 use crate::theme::Theme;
 
 /// Inline text, whose web links open in the browser when clicked.
@@ -79,16 +78,9 @@ fn styled_text(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> Sty
 /// The narrowest a table column gets; a table wider than its space scrolls sideways.
 const TABLE_COLUMN: f32 = 140.;
 
-/// How long Copy reads "Copied" after a click.
-const COPIED_FOR: Duration = Duration::from_millis(1500);
-
-/// What a code block keeps between frames: whether it was just copied, and whether its lines run
-/// on past the edge instead of wrapping.
+/// Whether a code block's long lines run on past the edge instead of wrapping, kept between frames.
 #[derive(Debug, Clone, Copy, Default)]
-struct CodeState {
-    copied: bool,
-    unwrapped: bool,
-}
+struct Unwrapped(bool);
 
 /// A fenced block of code under a bar with its language, a Wrap toggle and a Copy that confirms.
 #[derive(IntoElement)]
@@ -111,33 +103,18 @@ impl CodeBlock {
 
 impl RenderOnce for CodeBlock {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state(self.id.clone(), cx, |_, _| CodeState::default());
-        let CodeState { copied, unwrapped } = *state.read(cx);
+        let unwrapping = window.use_keyed_state(self.id.clone(), cx, |_, _| Unwrapped::default());
+        let unwrapped = unwrapping.read(cx).0;
+        let copied = copy::state(format!("{}-copied", self.id), window, cx);
+        let done = copied.read(cx).just();
         let text = self.text.trim_end_matches('\n').to_owned();
         let copy = {
-            let state = state.clone();
             let text = text.clone();
-            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                state.update(cx, |state, cx| {
-                    state.copied = true;
-                    cx.notify();
-                    cx.spawn(async move |state, cx| {
-                        cx.background_executor().timer(COPIED_FOR).await;
-                        state
-                            .update(cx, |state, cx| {
-                                state.copied = false;
-                                cx.notify();
-                            })
-                            .ok();
-                    })
-                    .detach();
-                });
-            }
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| copy::copy(&copied, &text, cx)
         };
         let wrap = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            state.update(cx, |state, cx| {
-                state.unwrapped = !state.unwrapped;
+            unwrapping.update(cx, |unwrapped, cx| {
+                unwrapped.0 = !unwrapped.0;
                 cx.notify();
             });
         };
@@ -175,7 +152,7 @@ impl RenderOnce for CodeBlock {
                     .child(div().flex_1())
                     .child(self.button("wrap", "Wrap", !unwrapped).on_click(wrap))
                     .child(
-                        self.button("copy", if copied { "Copied" } else { "Copy" }, copied)
+                        self.button("copy", if done { "Copied" } else { "Copy" }, done)
                             .on_click(copy),
                     ),
             )
