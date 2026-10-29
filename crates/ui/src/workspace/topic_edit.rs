@@ -70,6 +70,7 @@ impl Workspace {
             let step = (root != topic).then(|| topic.clone());
             self.open_topic(root, window, cx);
             self.screen.step = step;
+            self.sync_rail(cx);
         }
         let input = cx.new(|cx| {
             let mut input = TextInput::new("Topic name", cx);

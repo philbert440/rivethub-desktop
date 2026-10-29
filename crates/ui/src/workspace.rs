@@ -34,6 +34,7 @@ use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
 use crate::topic_picker::{PickerEvent, TopicPicker};
+use crate::topic_rail::{RailEvent, TopicRail};
 use crate::{brand, shell, theme::Theme};
 use topic_edit::Pick;
 
@@ -113,6 +114,8 @@ pub struct Workspace {
     menu: Option<OpenMenu>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
+    rail: Entity<TopicRail>,
+    _rail_events: Subscription,
     _feed: [gpui::Task<()>; 2],
 }
 
@@ -130,6 +133,15 @@ impl EventEmitter<Arc<Listed>> for Workspace {}
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let panel = cx.new(|cx| SidePanel::new(hub.clone(), cx));
+        let rail = cx.new(|cx| TopicRail::new(hub.clone(), cx));
+        let rail_events = cx.subscribe_in(
+            &rail,
+            window,
+            |this, _, event: &RailEvent, window, cx| match event {
+                RailEvent::OpenSession(summary) => this.open((**summary).clone(), window, cx),
+                RailEvent::ViewInMemory(focus) => cx.emit(ViewInMemory(focus.clone())),
+            },
+        );
         let panel_events =
             cx.subscribe_in(
                 &panel,
@@ -204,6 +216,8 @@ impl Workspace {
             menu: None,
             feed,
             _panel_events: panel_events,
+            rail,
+            _rail_events: rail_events,
             _feed: [refresh, repaint],
         };
         workspace.load(cx);
@@ -291,6 +305,7 @@ impl Workspace {
             *self.subagents.entry(parent).or_default() += 1;
         }
         self.sync_panel(cx);
+        self.sync_rail(cx);
         self.load_suggestions(cx);
         cx.notify();
     }
@@ -393,6 +408,23 @@ impl Workspace {
             .as_ref()
             .filter(|step| atlas.lineage(step).contains(&root))
             .map_or_else(|| root.clone(), Clone::clone)
+    }
+
+    /// Points the rail at the open topic's current step and its sessions, newest first.
+    pub(super) fn sync_rail(&self, cx: &mut Context<Self>) {
+        let Altitude::Topic(root) = &self.altitude else {
+            return;
+        };
+        let step = self.step_in(root);
+        let inside = self.shelf(&step);
+        let mut sessions: Vec<SessionSummary> = inside
+            .active
+            .iter()
+            .chain(&inside.history)
+            .map(|session| (*session).clone())
+            .collect();
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
+        self.rail.update(cx, |rail, cx| rail.show(step, sessions, cx));
     }
 
     fn sync_panel(&self, cx: &mut Context<Self>) {
@@ -671,6 +703,7 @@ impl Workspace {
         self.screen = TopicScreen::default();
         self.retitling = None;
         self.altitude = Altitude::Topic(topic);
+        self.sync_rail(cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -943,6 +976,7 @@ impl Workspace {
             self.placing = None;
             self.load(cx);
         }
+        self.sync_rail(cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }

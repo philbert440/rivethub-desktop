@@ -62,9 +62,25 @@ impl Workspace {
             .child(self.topic_heading(step, &inside, now, cx))
             .child(self.topic_path(root, &step_id, cx))
             .children(self.needs_you_strip(&inside, cx))
-            .child(Self::quick_start(&step_id, &inside, cx))
-            .child(self.active_list(&step_id, &inside, &live, now, cx))
-            .children(self.history_list(&step_id, &inside, now, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_6()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(520.))
+                            .flex()
+                            .flex_col()
+                            .gap_5()
+                            .child(Self::quick_start(&step_id, &inside, cx))
+                            .child(self.active_list(&step_id, &inside, &live, now, cx))
+                            .children(self.history_list(&step_id, &inside, now, cx)),
+                    )
+                    .child(div().flex_none().w(px(340.)).child(self.rail.clone())),
+            )
             .into_any_element()
     }
 

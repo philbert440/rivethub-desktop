@@ -17,10 +17,6 @@ mod text;
 mod theme;
 mod tool_view;
 mod topic_picker;
-#[expect(
-    dead_code,
-    reason = "the topic screen mounts the rail when its main-column rebuild lands"
-)]
 mod topic_rail;
 mod transcript;
 mod turn_rail;

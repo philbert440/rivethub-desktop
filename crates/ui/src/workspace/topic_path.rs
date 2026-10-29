@@ -108,6 +108,7 @@ impl Workspace {
                 } else if !current {
                     this.screen.step.clone_from(&step);
                     this.screen.all_history = false;
+                    this.sync_rail(cx);
                     cx.notify();
                 }
             }));
@@ -155,6 +156,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.screen.step = Some(stepped.clone());
                 this.screen.all_history = false;
+                this.sync_rail(cx);
                 cx.notify();
             }))
             .on_drag(dragged, |dragged, _, _, cx| {
