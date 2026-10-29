@@ -410,8 +410,6 @@ impl Hub {
         .await
     }
 
-    /// A node's harness list, read once per run: asking rh again re-runs its model discovery,
-    /// which opens a real session in every ACP harness.
     /// The label a node's harness offers for `model`, from the offers already read.
     pub fn model_label(&self, node: Option<&str>, harness: &HarnessId, model: &str) -> Option<String> {
         let key = node.filter(|node| !self.is_local(node)).unwrap_or_default();
@@ -427,6 +425,8 @@ impl Hub {
             .map(|choice| choice.label.clone())
     }
 
+    /// A node's harness list, read once per run: asking rh again re-runs its model discovery,
+    /// which opens a real session in every ACP harness.
     async fn offers(
         &self,
         node: Option<&str>,
