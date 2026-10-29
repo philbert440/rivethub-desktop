@@ -8,10 +8,11 @@ use gpui::{
     ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
     Window, div, list, prelude::*, px, relative,
 };
-use model::chat::{ExchangeState, arrived, exchanges};
+use model::chat::{ExchangeState, arrived, exchanges, totals};
 use model::harness::ModelChoice;
 use model::prompt::{Attachment, Prompt, Switch, image_media_type};
 use model::session::{Decision, SessionSummary, SessionView, Switches};
+use model::usage::tokens;
 use term::GridSize;
 
 use crate::input::{PastedImage, Submitted, TextInput};
@@ -1096,6 +1097,32 @@ impl SessionPane {
         )
     }
 
+    /// The session so far, beside Send: how fast replies came, what they wrote, and how much of
+    /// what they read came from cache.
+    fn session_stats(&self) -> Option<impl IntoElement> {
+        let (usage, pace) = totals(self.exchanges.iter().map(|view| &view.exchange));
+        let parts: Vec<String> = pace
+            .tokens_per_second()
+            .map(|rate| format!("{rate} tok/s"))
+            .into_iter()
+            .chain((usage.output > 0).then(|| format!("{} out", tokens(usage.output))))
+            .chain(
+                usage
+                    .cached_percent()
+                    .filter(|share| *share > 0)
+                    .map(|share| format!("{share}% cached")),
+            )
+            .collect();
+        (!parts.is_empty()).then(|| {
+            div()
+                .flex_none()
+                .px_3()
+                .text_xs()
+                .text_color(Theme::ink_dim())
+                .child(parts.join(" · "))
+        })
+    }
+
     fn send_button(&self, busy: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let draft = !self.composer.read(cx).is_empty();
         let stop = busy && !draft;
@@ -1224,6 +1251,7 @@ impl SessionPane {
                     .when(self.takes_images, |row| row.child(Self::attach_button(cx)))
                     .children(self.switch_chips(cx))
                     .child(div().flex_1())
+                    .children(self.session_stats())
                     .child(self.send_button(view.busy(), cx)),
             )
             .into_any_element()

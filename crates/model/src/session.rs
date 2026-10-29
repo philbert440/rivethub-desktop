@@ -1,6 +1,7 @@
 use crate::SessionId;
 use crate::prompt::SentFile;
 use crate::tools::{Question, ToolInput, ToolOutput};
+use crate::usage::{Pace, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -32,7 +33,7 @@ pub struct Turn {
     pub tools: Vec<ToolCall>,
     pub ends_with_text: bool,
     pub model: Option<String>,
-    pub output_tokens: u64,
+    pub usage: Usage,
     pub files: Vec<SentFile>,
     /// When the turn began and ended, in epoch milliseconds, where the harness recorded it.
     pub started_at_ms: Option<i64>,
@@ -40,6 +41,12 @@ pub struct Turn {
 }
 
 impl Turn {
+    /// How fast this turn wrote its output, when the harness timed it.
+    pub fn pace(&self) -> Option<Pace> {
+        let ms = self.ended_at_ms? - self.started_at_ms?;
+        Pace::of(self.usage.output, u64::try_from(ms).ok()?)
+    }
+
     fn assistant() -> Self {
         Self {
             role: Role::Assistant,
@@ -48,7 +55,7 @@ impl Turn {
             tools: Vec::new(),
             ends_with_text: false,
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             files: Vec::new(),
             started_at_ms: None,
             ended_at_ms: None,
@@ -361,6 +368,7 @@ impl SessionView {
 mod tests {
     use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolState, Turn};
     use crate::tools::{ToolInput, ToolOutput};
+    use crate::usage::Usage;
 
     fn said(role: Role, text: &str) -> Turn {
         Turn {
@@ -370,7 +378,7 @@ mod tests {
             tools: Vec::new(),
             ends_with_text: true,
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             files: Vec::new(),
             started_at_ms: None,
             ended_at_ms: None,

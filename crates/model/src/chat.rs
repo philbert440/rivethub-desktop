@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::prompt::SentFile;
 use crate::session::{Role, ToolCall, ToolState, Turn};
 use crate::tools::ToolInput;
+use crate::usage::{Pace, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
@@ -79,7 +80,9 @@ pub struct Exchange {
     pub answer: String,
     pub state: ExchangeState,
     pub model: Option<String>,
-    pub output_tokens: u64,
+    pub usage: Usage,
+    /// How fast the exchange's timed model calls wrote their output.
+    pub pace: Pace,
     /// When the person sent the prompt, in epoch milliseconds.
     pub asked_at_ms: Option<i64>,
     /// When the exchange began: the prompt, or for a reply that came without one its first turn.
@@ -97,7 +100,8 @@ impl Exchange {
             answer: String::new(),
             state: ExchangeState::Completed,
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
+            pace: Pace::default(),
             asked_at_ms,
             started_at_ms: asked_at_ms,
             ended_at_ms: None,
@@ -142,7 +146,10 @@ impl Exchange {
         if turn.model.is_some() {
             self.model.clone_from(&turn.model);
         }
-        self.output_tokens += turn.output_tokens;
+        self.usage += turn.usage;
+        if let Some(pace) = turn.pace() {
+            self.pace += pace;
+        }
         if !turn.thinking.trim().is_empty() {
             self.steps.push(Step::Thought(turn.thinking.clone()));
         }
@@ -232,6 +239,17 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
         }
     }
     out
+}
+
+/// Everything the exchanges wrote and read, and how fast they wrote it.
+pub fn totals<'a>(exchanges: impl IntoIterator<Item = &'a Exchange>) -> (Usage, Pace) {
+    let mut usage = Usage::default();
+    let mut pace = Pace::default();
+    for exchange in exchanges {
+        usage += exchange.usage;
+        pace += exchange.pace;
+    }
+    (usage, pace)
 }
 
 /// Whether a transcript that had `count` exchanges, the last in state `last`, moved on to where a
@@ -343,6 +361,7 @@ mod tests {
     use super::{ExchangeState, Step, arrived, elapsed, exchanges, group_summary, thought_summary};
     use crate::session::{Role, ToolCall, ToolState, Turn};
     use crate::tools::ToolInput;
+    use crate::usage::Usage;
 
     fn turn(role: Role, text: &str, tools: &[(&str, ToolState)]) -> Turn {
         Turn {
@@ -351,7 +370,7 @@ mod tests {
             text: text.into(),
             thinking: String::new(),
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             files: Vec::new(),
             started_at_ms: None,
             ended_at_ms: None,

@@ -4,9 +4,10 @@ use model::{
         Activity, Approval, ContextUsage, Role, SessionEvent, SessionStatus, SessionSummary, ToolCall,
         ToolState, Turn,
     },
+    usage::Usage,
 };
 use wire::gateway::sessions::{
-    HarnessTranscriptTurn, SessionMessageRole, TranscriptBlock, TranscriptToolStatus,
+    HarnessTranscriptTurn, MessageUsage, SessionMessageRole, TranscriptBlock, TranscriptToolStatus,
 };
 use wire::harness::{HarnessEvent, HarnessSessionStatus, HarnessSessionSummary, HarnessStatus};
 
@@ -333,6 +334,14 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     }
 }
 
+fn usage(raw: &MessageUsage) -> Usage {
+    Usage {
+        input: raw.prompt_tokens,
+        cached: raw.cached_tokens,
+        output: raw.completion_tokens,
+    }
+}
+
 fn turn(raw: HarnessTranscriptTurn) -> Turn {
     let ends_with_text = raw.last_block.is_none_or(|block| block == TranscriptBlock::Text);
     Turn {
@@ -344,7 +353,7 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
         text: raw.text,
         thinking: raw.thinking.unwrap_or_default(),
         model: raw.model,
-        output_tokens: raw.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
+        usage: raw.usage.as_ref().map(usage).unwrap_or_default(),
         started_at_ms: raw.started_at_ms,
         ended_at_ms: raw.ended_at_ms,
         files: raw

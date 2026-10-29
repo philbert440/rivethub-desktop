@@ -9,6 +9,7 @@ use gpui::{
 use model::chat::{Exchange, ExchangeState, Step, group_summary, running_label, thought_summary};
 use model::markdown::{Block, Parsed, parse};
 use model::prompt::SentFile;
+use model::usage::tokens;
 
 use crate::markdown_view;
 use crate::session_pane::SessionPane;
@@ -327,20 +328,29 @@ fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> 
     .child(chevron(open))
 }
 
-/// When the reply finished, and the model and output tokens behind it, shown when the pointer is
-/// over the exchange.
+/// When the reply finished, the model behind it, and the tokens it read and wrote and how fast,
+/// shown when the pointer is over the exchange.
 fn meta(exchange: &Exchange) -> Option<String> {
-    let tokens = match exchange.output_tokens {
-        0 => None,
-        count if count < 1000 => Some(format!("{count} tokens")),
-        count => Some(format!("{}.{}k tokens", count / 1000, count % 1000 / 100)),
-    };
+    let usage = exchange.usage;
     let parts: Vec<String> = exchange
         .ended_at_ms
         .map(clock)
         .into_iter()
         .chain(exchange.model.iter().cloned())
-        .chain(tokens)
+        .chain((usage.output > 0).then(|| format!("{} out", tokens(usage.output))))
+        .chain(
+            exchange
+                .pace
+                .tokens_per_second()
+                .map(|rate| format!("{rate} tok/s")),
+        )
+        .chain((usage.input > 0).then(|| format!("{} in", tokens(usage.input))))
+        .chain(
+            usage
+                .cached_percent()
+                .filter(|share| *share > 0)
+                .map(|share| format!("{share}% cached")),
+        )
         .collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
 }

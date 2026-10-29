@@ -19,6 +19,7 @@ pub mod session;
 pub mod tools;
 pub mod topics;
 pub mod trust;
+pub mod usage;
 pub mod wiki;
 
 pub use ids::{HarnessId, NativeSessionId, SessionId, TopicId};
