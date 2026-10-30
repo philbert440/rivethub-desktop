@@ -5,7 +5,7 @@ use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
     PlacementRequest, SessionHistoryList, SessionHistoryMark, StartupContext, TopicCreateRequest,
-    TopicDecision, TopicDecisionList, TopicDirectory, TopicList, TopicMergeRequest, TopicRecord,
+    TopicDecision, TopicDecisionList, TopicDirectory, TopicKind, TopicList, TopicMergeRequest, TopicRecord,
     TopicSessionList, TopicUpdate,
 };
 
@@ -70,6 +70,7 @@ impl Gateway {
     pub async fn create_topic(&self, name: &str, parent: Option<&TopicId>) -> Result<Topic, GatewayError> {
         let url = self.api_url(&["api", "topics"])?;
         let body = TopicCreateRequest {
+            kind: TopicKind::Work,
             name: name.to_owned(),
             aliases: Vec::new(),
             parent: parent.map(|parent| parent.as_str().to_owned()),

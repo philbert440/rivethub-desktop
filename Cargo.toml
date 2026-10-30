@@ -57,3 +57,8 @@ missing_panics_doc = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Local development only: tool-update lives on rh branch feat/workspace-polish. Repin `wire` above
+# to that branch's merged rev and drop this patch before any PR.
+[patch."https://github.com/philbert440/rivethub-runtime"]
+wire = { path = "/home/phil/work/rh-workspace/crates/wire" }
