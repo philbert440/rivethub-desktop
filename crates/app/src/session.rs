@@ -126,7 +126,13 @@ impl Actor {
         };
         match outcome {
             Ok(()) => {
-                self.view.write().accepted(&prompt, epoch_ms());
+                let held = {
+                    let view = self.view.read();
+                    view.driving().by_terminal() && view.driving().busy
+                };
+                if !held {
+                    self.view.write().accepted(&prompt, epoch_ms());
+                }
                 self.changed();
             }
             Err(err) if err.is_turn_in_flight() => {

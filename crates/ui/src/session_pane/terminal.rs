@@ -1,7 +1,8 @@
 use gpui::{
-    AnyElement, ClickEvent, Context, Focusable, IntoElement, ParentElement, Styled, Window, div, prelude::*,
-    px,
+    AnyElement, ClickEvent, Context, Entity, Focusable, IntoElement, ParentElement, Styled, Window, div,
+    prelude::*, px,
 };
+use model::session::Driver;
 use term::GridSize;
 
 use super::{Mode, PaneEvent, SessionPane, ToggleTerminal};
@@ -27,12 +28,19 @@ impl SessionPane {
 
     pub(super) fn show(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = mode;
-        match (mode, &self.terminal) {
+        match (mode, self.live_terminal(cx)) {
             (Mode::Chat, _) => window.focus(&self.composer.focus_handle(cx), cx),
             (Mode::Terminal, Some(terminal)) => window.focus(&terminal.focus_handle(cx), cx),
             (Mode::Terminal, None) => self.check_terminal(window, cx),
         }
         cx.notify();
+    }
+
+    /// The terminal this pane shows, unless its process has exited, as when Chat took the session.
+    pub(super) fn live_terminal(&self, cx: &Context<Self>) -> Option<Entity<TerminalView>> {
+        self.terminal
+            .clone()
+            .filter(|terminal| !terminal.read(cx).exited())
     }
 
     fn check_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -62,6 +70,9 @@ impl SessionPane {
 
     fn attach_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_spawn = false;
+        if self.live_terminal(cx).is_none() {
+            self.terminal = None;
+        }
         let terminal = self.terminal.get_or_insert_with(|| {
             let handle = self.hub.open_terminal(&self.summary, FIRST_TERMINAL);
             let terminal = cx.new(|cx| TerminalView::new(handle, window, cx));
@@ -73,7 +84,33 @@ impl SessionPane {
         cx.notify();
     }
 
+    /// What the terminal page says while no terminal runs: why, and that opening one carries on.
+    fn idle_terminal(&self) -> (&'static str, &'static str) {
+        let shared = self.handle.view();
+        let chat = shared.read().driving().driver == Some(Driver::Chat);
+        let exited = self.terminal.is_some();
+        match (chat, exited) {
+            (true, _) => (
+                "Chat has this session now.",
+                "Opening the terminal resumes the session here. If Chat is mid-turn, the terminal starts \
+                 when that turn ends, and Chat keeps showing what happens in it.",
+            ),
+            (false, true) => (
+                "The terminal exited.",
+                "Opening it again resumes the session in a terminal on its node.",
+            ),
+            (false, false) => (
+                "No terminal is running for this session.",
+                "Opening one resumes the session in a terminal on its node. rh runs one copy: a chat \
+                 it's running hands over when its turn ends. A copy running outside rh, such as in a \
+                 terminal of your own, would write to the same transcript.",
+            ),
+        }
+    }
+
     pub(super) fn spawn_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (said, why) = self.idle_terminal();
+        let offered = self.confirm_spawn || self.terminal.is_some();
         div()
             .size_full()
             .flex()
@@ -81,18 +118,10 @@ impl SessionPane {
             .items_center()
             .justify_center()
             .gap_3()
-            .when(self.confirm_spawn, |prompt| {
+            .when(offered, |prompt| {
                 prompt
-                    .child(
-                        div()
-                            .text_color(Theme::ink())
-                            .child("No terminal is running for this session."),
-                    )
-                    .child(div().max_w(px(520.)).text_color(Theme::ink_dim()).child(
-                        "Opening one resumes the session in a terminal on its node. rh runs one copy: a chat \
-                         it's running hands over when its turn ends. A copy running outside rh, such as in a \
-                         terminal of your own, would write to the same transcript.",
-                    ))
+                    .child(div().text_color(Theme::ink()).child(said))
+                    .child(div().max_w(px(520.)).text_color(Theme::ink_dim()).child(why))
                     .child(
                         div()
                             .id("open-terminal")
