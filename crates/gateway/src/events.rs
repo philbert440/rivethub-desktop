@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use model::SessionId;
 use model::plugin::Notice;
 use model::session::SessionStatus;
 use rustls::ClientConfig;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use wire::events::{Activity, AgentEventKind, SessionBroadcast};
 use wire::harness::HarnessEvent;
 
+use crate::socket::{self, Liveness};
 use crate::{GatewayError, translate};
 
 const BUFFER: usize = 256;
@@ -134,22 +135,28 @@ async fn follow<T: Send + 'static>(
     let ws_base = base_url
         .replacen("https://", "wss://", 1)
         .replacen("http://", "ws://", 1);
-    let (socket, _) = connect_async_tls_with_config(
-        format!("{ws_base}{path}"),
-        None,
-        false,
-        Some(Connector::Rustls(tls)),
-    )
-    .await?;
-    let (_, mut source) = socket.split();
+    let socket = socket::connect(format!("{ws_base}{path}"), tls).await?;
+    let (mut sink, mut source) = socket.split();
     let (events, receiver) = mpsc::channel(BUFFER);
     tokio::spawn(async move {
-        while let Some(Ok(frame)) = source.next().await {
-            let Message::Text(text) = frame else { continue };
-            if let Some(event) = decode(&text)
-                && events.send(event).await.is_err()
-            {
-                return;
+        let mut alive = Liveness::new();
+        loop {
+            tokio::select! {
+                frame = source.next() => {
+                    let Some(Ok(frame)) = frame else { break };
+                    alive.heard();
+                    let Message::Text(text) = frame else { continue };
+                    if let Some(event) = decode(&text)
+                        && events.send(event).await.is_err()
+                    {
+                        return;
+                    }
+                }
+                there = alive.due() => {
+                    if !there || sink.send(socket::ping()).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
         let _ = events.send(closed).await;

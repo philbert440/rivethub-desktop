@@ -9,7 +9,6 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use crate::Hub;
-use crate::feed::{FIRST_RETRY, LAST_RETRY};
 
 /// The plug-ins of every node that answered, each labelled by its node.
 #[derive(Debug, Default)]
@@ -263,7 +262,7 @@ impl Drop for PluginWatch {
 }
 
 async fn follow(hub: Hub, node: String, notices: mpsc::UnboundedSender<NodeNotice>) {
-    let mut retry = FIRST_RETRY;
+    let mut retry = hub.backoff(Some(&node));
     let mut broke = false;
     loop {
         let connected = match hub.gateway_for(Some(&node)).await {
@@ -271,7 +270,7 @@ async fn follow(hub: Hub, node: String, notices: mpsc::UnboundedSender<NodeNotic
             Err(err) => Err(err),
         };
         if let Ok(mut events) = connected {
-            retry = FIRST_RETRY;
+            retry.reset();
             if broke {
                 let resumed = NodeNotice {
                     node: node.clone(),
@@ -295,7 +294,6 @@ async fn follow(hub: Hub, node: String, notices: mpsc::UnboundedSender<NodeNotic
             return;
         }
         broke = true;
-        tokio::time::sleep(retry).await;
-        retry = (retry * 2).min(LAST_RETRY);
+        tokio::time::sleep(retry.next_wait()).await;
     }
 }

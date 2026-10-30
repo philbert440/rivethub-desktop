@@ -6,7 +6,7 @@ use model::session::SessionSummary;
 use model::topics::Card;
 
 use super::topic_edit::DraggedTopic;
-use super::{Listing, Workspace};
+use super::{Arrival, Workspace};
 use crate::brand;
 use crate::memory::Focus;
 use crate::side_panel::{DragGhost, DraggedAgent, DraggedSession};
@@ -21,7 +21,7 @@ impl Workspace {
     pub(super) fn everything(&self, cx: &mut Context<Self>) -> AnyElement {
         let board = self.board();
         if board.uncategorized.is_empty() && board.recent.is_empty() {
-            let (heading, hint) = if self.listing == Listing::Arrived {
+            let (heading, hint) = if self.arrival == Arrival::Arrived {
                 ("Nothing active", "Start a session and it will find its topic.")
             } else {
                 ("Finding your sessions…", "Asking each node what it runs.")

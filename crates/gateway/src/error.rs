@@ -12,6 +12,8 @@ pub enum GatewayError {
     Certificate(String),
     #[error("no reachable gateway for node {0}")]
     UnknownNode(String),
+    #[error("{0} didn't answer in time")]
+    TimedOut(String),
     #[error("tls: {0}")]
     Tls(#[from] rustls::Error),
     #[error("http: {0}")]
@@ -37,5 +39,27 @@ impl GatewayError {
 
     pub fn is_missing_route(&self) -> bool {
         matches!(self, Self::Status { status: 404, .. })
+    }
+
+    /// The node answered, but won't take requests from this device, which isn't paired with it.
+    pub fn is_refused_device(&self) -> bool {
+        matches!(
+            self,
+            Self::Status {
+                status: 401 | 403,
+                ..
+            }
+        )
+    }
+
+    /// Nothing answered: the node is down, gone from the network, or never listened there.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            Self::TimedOut(_)
+            | Self::UnknownNode(_)
+            | Self::Socket(tokio_tungstenite::tungstenite::Error::Io(_)) => true,
+            Self::Http(err) => err.is_connect() || err.is_timeout(),
+            _ => false,
+        }
     }
 }
