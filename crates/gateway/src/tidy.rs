@@ -73,6 +73,7 @@ fn proposal(raw: TidyProposal) -> Proposal {
             .map(|sample| Sample {
                 id: sample.id,
                 title: sample.title.filter(|title| !title.trim().is_empty()),
+                last_active_ms: sample.last_active.map(|at| at.timestamp_millis()),
             })
             .collect(),
     }

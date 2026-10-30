@@ -121,11 +121,13 @@ pub enum Proposer {
     Backfill,
 }
 
-/// One of the sessions or conversations behind a proposal, by id, with its title when it has one.
+/// One of the sessions or conversations behind a proposal, by id, with its title and when it was
+/// last active when the proposal says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sample {
     pub id: String,
     pub title: Option<String>,
+    pub last_active_ms: Option<i64>,
 }
 
 /// A proposed change, why, and the sessions behind it.

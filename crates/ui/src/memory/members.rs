@@ -6,6 +6,7 @@ use model::tidy::Proposal;
 use model::topics::{FiledBy, FiledConversation};
 
 use super::{Focus, MemoryPage};
+use crate::text::{ago, now_ms};
 use crate::theme::Theme;
 
 /// A proposal lists this many of the sessions it would file until asked for all of them.
@@ -25,30 +26,33 @@ fn short(id: &str) -> &str {
 }
 
 impl MemoryPage {
-    /// What a session or conversation is called, from what this app lists or the proposal's own
-    /// samples.
-    fn member_title(&self, proposal: &Proposal, member: &Member) -> Option<String> {
-        let sampled = |id: &str| {
-            proposal
-                .samples
-                .iter()
-                .find(|sample| sample.id == id)
-                .and_then(|sample| sample.title.clone())
+    /// What a session or conversation is called and when it was last active, from what this app
+    /// lists or else the proposal's own samples, which name every member a backfill files.
+    fn member_facts(&self, proposal: &Proposal, member: &Member) -> (Option<String>, Option<i64>) {
+        let id = match member {
+            Member::Session(session) => session.to_string(),
+            Member::Conversation(id) => id.clone(),
         };
-        match member {
-            Member::Session(session) => self
-                .known_session(session)
-                .and_then(|known| known.title.clone())
-                .or_else(|| sampled(&session.to_string())),
+        let sample = proposal.samples.iter().find(|sample| sample.id == id);
+        let (title, at) = match member {
+            Member::Session(session) => self.known_session(session).map(|known| {
+                (
+                    known.title.clone(),
+                    Some(known.updated_at_ms).filter(|at| *at > 0),
+                )
+            }),
             Member::Conversation(id) => self
                 .listed
                 .conversations
                 .iter()
                 .find(|known| &known.id == id)
-                .and_then(|known| known.title.clone())
-                .or_else(|| sampled(id)),
+                .map(|known| (known.title.clone(), known.last_active_ms)),
         }
-        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_default();
+        let named = |title: &Option<String>| title.clone().filter(|title| !title.trim().is_empty());
+        let title = named(&title).or_else(|| sample.and_then(|sample| named(&sample.title)));
+        let at = at.or_else(|| sample.and_then(|sample| sample.last_active_ms));
+        (title, at)
     }
 
     fn open_member(&mut self, member: &Member, title: Option<String>, cx: &mut Context<Self>) {
@@ -98,8 +102,9 @@ impl MemoryPage {
         } else {
             members.len().min(LISTED)
         };
+        let now = now_ms();
         let rows = members.iter().take(shown).enumerate().map(|(index, member)| {
-            let title = self.member_title(proposal, member);
+            let (title, at) = self.member_facts(proposal, member);
             let (kind, fallback) = match member {
                 Member::Session(session) => (
                     session.harness().display_name().to_owned(),
@@ -136,6 +141,13 @@ impl MemoryPage {
                         })
                         .child(title.unwrap_or(fallback)),
                 )
+                .children(at.map(|at| {
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(Theme::ink_dim())
+                        .child(ago(now, at))
+                }))
                 .child(
                     div()
                         .flex_none()
