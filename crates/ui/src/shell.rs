@@ -41,30 +41,7 @@ impl Shell {
         let desktop = cx.observe_window_appearance(window, |this, window, cx| {
             appearance::apply(&this.hub, window, cx);
         });
-        let omarchy = cx.spawn_in(window, async move |this, cx| {
-            loop {
-                cx.background_executor().timer(appearance::WATCH).await;
-                let Ok(following) = this.update(cx, |this, _| appearance::follows_omarchy(&this.hub)) else {
-                    break;
-                };
-                if !following {
-                    continue;
-                }
-                let theme = cx
-                    .background_executor()
-                    .spawn(async { app::omarchy::current_theme() })
-                    .await;
-                let followed = this.update_in(cx, |this, window, cx| {
-                    if cx.global::<appearance::Omarchy>().0 != theme {
-                        cx.set_global(appearance::Omarchy(theme));
-                        appearance::apply(&this.hub, window, cx);
-                    }
-                });
-                if followed.is_err() {
-                    break;
-                }
-            }
-        });
+        let omarchy = Self::follow_omarchy(window, cx);
         let plugins = cx.new(|cx| Plugins::new(hub.clone(), cx));
         let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
         let settings = cx.new(|cx| SettingsPage::new(hub.clone(), plugins.clone(), cx));
@@ -157,6 +134,34 @@ impl Shell {
             ],
             _omarchy: omarchy,
         }
+    }
+
+    /// Restyles the window when the Omarchy theme it follows changes.
+    fn follow_omarchy(window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(appearance::WATCH).await;
+                let Ok(following) = this.update(cx, |this, _| appearance::follows_omarchy(&this.hub)) else {
+                    break;
+                };
+                if !following {
+                    continue;
+                }
+                let theme = cx
+                    .background_executor()
+                    .spawn(async { app::omarchy::current_theme() })
+                    .await;
+                let followed = this.update_in(cx, |this, window, cx| {
+                    if cx.global::<appearance::Omarchy>().0 != theme {
+                        cx.set_global(appearance::Omarchy(theme));
+                        appearance::apply(&this.hub, window, cx);
+                    }
+                });
+                if followed.is_err() {
+                    break;
+                }
+            }
+        })
     }
 
     fn open_listed(&mut self, session: &SessionId, window: &mut Window, cx: &mut Context<Self>) -> bool {
