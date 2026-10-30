@@ -2724,7 +2724,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -6571,6 +6571,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
+name = "values"
+version = "0.7.0"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=a906cc21c276f33c378b49d54c098114b95f6fb3#a906cc21c276f33c378b49d54c098114b95f6fb3"
+dependencies = [
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum 0.27.2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7604,7 +7618,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.7.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=3dc64cbd7d9885f69e5003fc6264d9a1cdea2792#3dc64cbd7d9885f69e5003fc6264d9a1cdea2792"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=a906cc21c276f33c378b49d54c098114b95f6fb3#a906cc21c276f33c378b49d54c098114b95f6fb3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7616,6 +7630,7 @@ dependencies = [
  "strum 0.27.2",
  "thiserror 2.0.21",
  "url",
+ "values",
 ]
 
 [[package]]
