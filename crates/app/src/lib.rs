@@ -282,6 +282,12 @@ impl Hub {
     pub async fn all_sessions(&self) -> Result<AllSessions, GatewayError> {
         let hub = self.clone();
         self.on_runtime(async move {
+            // Until this node has named itself, its own mesh entry would be listed again as another
+            // node's, over the network.
+            let unnamed = hub.inner.local_node.read().is_none();
+            if unnamed && let Ok(roster) = hub.inner.local.agents().await {
+                *hub.inner.local_node.write() = Some(roster.node);
+            }
             let local = hub.inner.local_node.read().clone();
             let mut nodes = vec![(None, hub.inner.local.clone())];
             let mesh = hub.inner.local.mesh().await.ok();
@@ -298,7 +304,12 @@ impl Hub {
             // still asked directly, so their sessions stay listed.
             if mesh.is_none() {
                 let known = hub.inner.remote.read().clone();
-                nodes.extend(known.into_iter().map(|(name, gateway)| (Some(name), gateway)));
+                nodes.extend(
+                    known
+                        .into_iter()
+                        .filter(|(name, _)| !hub.is_local(name))
+                        .map(|(name, gateway)| (Some(name), gateway)),
+                );
             }
             let other_nodes = mesh.map(|_| nodes.iter().filter_map(|(node, _)| node.clone()).collect());
             let listed = futures::future::join_all(nodes.into_iter().map(|(node, gateway)| {

@@ -1285,7 +1285,11 @@ fn missing_note(missing: &[app::Missing], local: Option<&str>) -> Option<String>
                     away.push(node);
                 }
             }
-            None if gap.error.is_refused_device() => refused.push(node),
+            _ if gap.error.is_refused_device() => {
+                if !refused.contains(&node) {
+                    refused.push(node);
+                }
+            }
             None => failed.push(format!("{node}: {}", gap.error)),
             Some(harness) => failed.push(format!("{} on {node}: {}", harness.display_name(), gap.error)),
         }
