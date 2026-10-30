@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use gpui::{
     AnyElement, ClickEvent, Context, ElementId, IntoElement, MouseButton, ParentElement, Styled, div,
     prelude::*, px,
@@ -10,6 +12,9 @@ use super::topic_edit::{DraggedTopic, Pick};
 use crate::memory::Focus;
 use crate::side_panel::{DragGhost, DraggedSession};
 use crate::theme::Theme;
+
+/// How long a click waits for a second one, as the platform counts a double-click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 impl Workspace {
     /// Where the topic screen stands inside the open topic, the topic itself shown as "All", and
@@ -144,7 +149,12 @@ impl Workspace {
         if let Some(field) = self.retitle_field(&child.id, cx) {
             return field;
         }
-        let stepped = child.id.clone();
+        let clicked = child.id.clone();
+        let pressed = self
+            .screen
+            .stepping
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == child.id);
         let dragged = DraggedTopic {
             topic: child.id.clone(),
             name: child.name.clone().into(),
@@ -163,11 +173,16 @@ impl Workspace {
             .text_sm()
             .text_color(Theme::ink())
             .hover(|pill| pill.bg(Theme::card()))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.screen.step = Some(stepped.clone());
-                this.screen.all_history = false;
-                this.sync_step(cx);
-                cx.notify();
+            .when(pressed, |pill| {
+                pill.bg(Theme::selected()).text_color(Theme::on_selected())
+            })
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.click_count() > 1 {
+                    this.screen.stepping = None;
+                    this.begin_retitle(clicked.clone(), window, cx);
+                } else {
+                    this.step_after_double_click(clicked.clone(), cx);
+                }
             }))
             .on_drag(dragged, |dragged, _, _, cx| {
                 cx.new(|_| DragGhost(dragged.name.clone()))
@@ -191,6 +206,24 @@ impl Workspace {
                 )
             });
         Self::takes_drops(pill, child.id.clone(), cx).into_any_element()
+    }
+
+    /// Steps into `topic` once a second click can no longer make the first a double-click.
+    fn step_after_double_click(&mut self, topic: TopicId, cx: &mut Context<Self>) {
+        let pending = topic.clone();
+        let step = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(DOUBLE_CLICK).await;
+            this.update(cx, |this, cx| {
+                this.screen.stepping = None;
+                this.screen.step = Some(topic);
+                this.screen.all_history = false;
+                this.sync_step(cx);
+                cx.notify();
+            })
+            .ok();
+        });
+        self.screen.stepping = Some((pending, step));
+        cx.notify();
     }
 
     /// A step or pill's right-click menu, and the sessions and topics it takes when dropped on it.
