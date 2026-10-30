@@ -12,9 +12,9 @@ use gpui::{
 };
 use model::plugin::view::Action;
 use model::plugin::{PluginRef, SessionAction};
-use model::session::SessionSummary;
+use model::session::{SessionSummary, TaskStop};
 use model::trash::Deletion;
-use model::{SessionId, TopicId};
+use model::{SessionId, TaskId, TopicId};
 
 use words::Doomed;
 
@@ -27,6 +27,8 @@ pub enum MenuEvent {
     Deleted(TopicId),
     /// rh deleted the session, which leaves the lists until it is used again.
     SessionDeleted(SessionId),
+    /// The delegated task the session ran was stopped.
+    TaskStopped,
     /// A topic was closed, reopened or moved to the top level, or a session marked as history or
     /// made active.
     Filed,
@@ -56,13 +58,14 @@ pub struct Menu {
     hub: Hub,
     view: Option<Focus>,
     delete: Option<Doomed>,
+    stop: Option<Doomed>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
     edits: Option<(TopicId, Option<Lift>, bool)>,
     moves: Option<(SessionSummary, bool)>,
     noun: Noun,
     plugin_actions: Vec<(PluginRef, SessionAction)>,
-    confirming: bool,
+    confirming: Option<Doomed>,
     busy: bool,
     problem: Option<String>,
 }
@@ -90,13 +93,14 @@ impl Menu {
             hub,
             view,
             delete: delete.map(|(topic, name)| Doomed::Topic(topic, name)),
+            stop: None,
             close: None,
             history: None,
             edits: None,
             moves: None,
             noun: Noun::Topic,
             plugin_actions: Vec::new(),
-            confirming: false,
+            confirming: None,
             busy: false,
             problem: None,
         }
@@ -139,6 +143,12 @@ impl Menu {
         self
     }
 
+    /// Offers Stop task for a session running a delegated task, which asks first.
+    pub fn stopping(mut self, session: SessionSummary, task: TaskId) -> Self {
+        self.stop = Some(Doomed::Task(Box::new(session), task));
+        self
+    }
+
     /// Offers the entries plug-ins add to the menu of the session `moving` names.
     pub fn plugin_actions(mut self, actions: Vec<(PluginRef, SessionAction)>) -> Self {
         self.plugin_actions = actions;
@@ -172,11 +182,11 @@ impl Menu {
         .detach();
     }
 
-    fn delete(&mut self, cx: &mut Context<Self>) {
-        let topic = match self.delete.clone() {
-            Some(Doomed::Topic(topic, _)) => topic,
-            Some(Doomed::Session(session)) => return self.delete_session(*session, cx),
-            None => return,
+    fn carry_out(&mut self, doomed: Doomed, cx: &mut Context<Self>) {
+        let topic = match doomed {
+            Doomed::Topic(topic, _) => topic,
+            Doomed::Session(session) => return self.delete_session(*session, cx),
+            Doomed::Task(session, task) => return self.stop_task(*session, task, cx),
         };
         self.busy = true;
         self.problem = None;
@@ -214,6 +224,29 @@ impl Menu {
                         this.problem = Some(format!("It stays: {why}."));
                     }
                     Err(err) => this.problem = Some(format!("deleting failed: {err}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn stop_task(&mut self, session: SessionSummary, task: TaskId, cx: &mut Context<Self>) {
+        self.busy = true;
+        self.problem = None;
+        cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let stopped = hub.stop_task(&session, task).await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match stopped {
+                    Ok(TaskStop::Stopped) => cx.emit(MenuEvent::TaskStopped),
+                    Ok(TaskStop::AlreadyOver) => {
+                        this.problem = Some("That task had already ended.".to_owned());
+                    }
+                    Err(err) => this.problem = Some(format!("stopping failed: {err}")),
                 }
                 cx.notify();
             })
@@ -433,25 +466,33 @@ impl Menu {
                     )))
                 },
             )
-            .when_some(self.delete.as_ref(), |items, doomed| {
-                items.child(
-                    Self::item("delete", doomed.label(self.noun))
-                        .text_color(Theme::warn())
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.confirming = true;
-                            cx.notify();
-                        })),
-                )
-            })
-            .children(self.problem.clone().filter(|_| !self.confirming).map(|problem| {
-                div()
-                    .max_w(px(280.))
-                    .px_3()
-                    .py_2()
-                    .text_xs()
-                    .text_color(Theme::warn())
-                    .child(problem)
-            }))
+            .children(
+                [("stop", &self.stop), ("delete", &self.delete)]
+                    .into_iter()
+                    .filter_map(|(id, doomed)| Some((id, doomed.clone()?)))
+                    .map(|(id, doomed)| {
+                        Self::item(id, doomed.label(self.noun))
+                            .text_color(Theme::warn())
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.confirming = Some(doomed.clone());
+                                cx.notify();
+                            }))
+                    }),
+            )
+            .children(
+                self.problem
+                    .clone()
+                    .filter(|_| self.confirming.is_none())
+                    .map(|problem| {
+                        div()
+                            .max_w(px(280.))
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(Theme::warn())
+                            .child(problem)
+                    }),
+            )
             .into_any_element()
     }
 
@@ -485,17 +526,18 @@ impl Menu {
                             .hover(|button| button.text_color(Theme::ink()))
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(MenuEvent::Closed))),
                     )
-                    .child(
-                        Self::button("delete-topic-confirm", "Delete")
+                    .child({
+                        let doomed = doomed.clone();
+                        Self::button("delete-topic-confirm", doomed.verb())
                             .bg(Theme::warn_container())
                             .text_color(Theme::warn())
                             .when(self.busy, |button| button.opacity(0.5))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if !this.busy {
-                                    this.delete(cx);
+                                    this.carry_out(doomed.clone(), cx);
                                 }
-                            })),
-                    ),
+                            }))
+                    }),
             )
             .into_any_element()
     }
@@ -503,9 +545,9 @@ impl Menu {
 
 impl Render for Menu {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let body = match (&self.delete, self.confirming) {
-            (Some(doomed), true) => self.confirm(doomed, cx),
-            _ => self.items(cx),
+        let body = match self.confirming.clone() {
+            Some(doomed) => self.confirm(&doomed, cx),
+            None => self.items(cx),
         };
         div()
             .min_w(px(200.))

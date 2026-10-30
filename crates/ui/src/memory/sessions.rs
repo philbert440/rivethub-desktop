@@ -74,7 +74,7 @@ impl MemoryPage {
         let mut sessions: Vec<&SessionSummary> = listed
             .sessions
             .iter()
-            .filter(|session| session.parent.is_none() && atlas.within(session, &root))
+            .filter(|session| !session.inside_parent() && atlas.within(session, &root))
             .collect();
         if sessions.is_empty() {
             return None;

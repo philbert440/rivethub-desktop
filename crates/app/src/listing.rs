@@ -210,7 +210,10 @@ async fn node_sessions(gateway: &Gateway, offers: &[model::harness::HarnessOffer
         .filter(|offer| offer.lists_sessions)
         .map(|offer| &offer.id)
         .collect();
-    let lists = futures::future::join_all(listing.iter().map(|harness| gateway.sessions(harness))).await;
+    let (lists, live) = futures::join!(
+        futures::future::join_all(listing.iter().map(|harness| gateway.sessions(harness))),
+        gateway.live_sessions()
+    );
     let mut sessions = Vec::new();
     let mut failed = Vec::new();
     for (harness, list) in listing.into_iter().zip(lists) {
@@ -219,7 +222,24 @@ async fn node_sessions(gateway: &Gateway, offers: &[model::harness::HarnessOffer
             Err(err) => failed.push((harness.clone(), err)),
         }
     }
+    match live {
+        Ok(live) => take_live(&mut sessions, live),
+        Err(err) => {
+            tracing::warn!(%err, "the node's live chats couldn't be read, so its delegated tasks go unnamed");
+        }
+    }
     (sessions, failed)
+}
+
+/// The task and parent of a delegated chat, which the harness's list doesn't name, from the node's
+/// live chats.
+fn take_live(sessions: &mut [SessionSummary], live: Vec<SessionSummary>) {
+    for chat in live {
+        if let Some(listed) = sessions.iter_mut().find(|listed| listed.id == chat.id) {
+            listed.parent = chat.parent.or(listed.parent.take());
+            listed.task = chat.task.or(listed.task.take());
+        }
+    }
 }
 
 #[cfg(test)]

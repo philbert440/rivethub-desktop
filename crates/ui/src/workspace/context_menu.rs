@@ -1,4 +1,5 @@
 use gpui::{App, AppContext, Context, MouseDownEvent, Pixels, Point, Window};
+use model::session::SessionStatus;
 use model::topics::{Atlas, in_history};
 
 use super::topic_edit::Pick;
@@ -67,6 +68,13 @@ impl Workspace {
             let id = latest.id.clone();
             let local = self.hub.local_node();
             let plugged = self.plugins.read(cx).session_actions(&latest, local.as_deref());
+            if let Some(task) = latest
+                .task
+                .clone()
+                .filter(|_| latest.status == SessionStatus::Active)
+            {
+                menu = menu.stopping(latest.clone(), task);
+            }
             menu = menu
                 .deleting(latest.clone())
                 .moving(latest, placed)
@@ -88,6 +96,7 @@ impl Workspace {
                 MenuEvent::SessionDeleted(session) => {
                     this.sessions_deleted(std::slice::from_ref(session), window, cx);
                 }
+                MenuEvent::TaskStopped => this.load(cx),
                 MenuEvent::Filed => this.refile(cx),
                 MenuEvent::Rename(topic) => this.begin_retitle(topic.clone(), window, cx),
                 MenuEvent::MoveInto(topic) => this.choose(Pick::MoveInto(topic.clone()), at, window, cx),

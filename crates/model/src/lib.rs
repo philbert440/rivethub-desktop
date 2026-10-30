@@ -31,5 +31,5 @@ pub mod trust;
 pub mod usage;
 pub mod wiki;
 
-pub use ids::{HarnessId, NativeSessionId, SessionId, TopicId};
+pub use ids::{HarnessId, NativeSessionId, SessionId, TaskId, TopicId};
 pub use nav::{Altitude, Page};

@@ -123,7 +123,8 @@ impl Workspace {
             }
         }
         self.subagents.clear();
-        for parent in self.sessions.iter().filter_map(|session| session.parent.clone()) {
+        let subagents = self.sessions.iter().filter(|session| session.inside_parent());
+        for parent in subagents.filter_map(|session| session.parent.clone()) {
             *self.subagents.entry(parent).or_default() += 1;
         }
         self.show_listing(cx);

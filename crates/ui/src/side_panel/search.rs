@@ -50,6 +50,7 @@ impl SidePanel {
                 cwd: None,
                 updated_at_ms: found.latest_ms,
                 parent: None,
+                task: None,
                 node: None,
                 blocked: false,
             })

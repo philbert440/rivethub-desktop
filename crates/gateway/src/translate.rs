@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use model::{
-    HarnessId, NativeSessionId, SessionId,
+    HarnessId, NativeSessionId, SessionId, TaskId,
     plan::{Plan, Step, StepStatus},
     session::{
         Activity, Approval, ContextUsage, Role, SessionEvent, SessionStatus, SessionSummary, ToolCall,
@@ -367,6 +367,7 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
         cwd: raw.cwd,
         updated_at_ms: raw.updated_at.timestamp_millis(),
         parent: raw.parent_session_id.as_ref().map(session),
+        task: raw.task_id.map(TaskId::new),
         node: None,
         blocked: raw.blocked.unwrap_or(false),
     }

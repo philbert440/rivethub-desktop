@@ -32,8 +32,8 @@ use model::prefs::Preferences;
 use model::preview::Previews;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
-use model::session::{Described, SessionSummary};
-use model::{HarnessId, TopicId};
+use model::session::{Described, SessionSummary, TaskStop};
+use model::{HarnessId, TaskId, TopicId};
 use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 
@@ -151,6 +151,17 @@ impl Hub {
             let mut renamed = gateway.rename(&session, &title).await?;
             renamed.node = node;
             Ok(renamed)
+        })
+        .await
+    }
+
+    /// Stops the delegated task the session runs, asking the node it runs on.
+    pub async fn stop_task(&self, summary: &SessionSummary, task: TaskId) -> Result<TaskStop, GatewayError> {
+        let hub = self.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            gateway.stop_task(&task).await
         })
         .await
     }

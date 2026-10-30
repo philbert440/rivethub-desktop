@@ -273,6 +273,7 @@ impl<'a> Atlas<'a> {
                     && !session
                         .parent
                         .as_ref()
+                        .filter(|_| session.inside_parent())
                         .and_then(|parent| self.sessions.get(parent))
                         .is_some_and(|parent| self.within(parent, topic))
             })
@@ -364,7 +365,7 @@ pub fn board<'a, S: BuildHasher>(
     let mut board = Board::default();
     for session in sessions {
         if let Some(topic) = atlas.topic_of(session) {
-            if session.parent.is_none() || atlas.topic_of_parent(session) != Some(topic) {
+            if !session.inside_parent() || atlas.topic_of_parent(session) != Some(topic) {
                 filed.entry(atlas.root(topic)).or_default().push(session);
             }
         } else {
@@ -417,6 +418,7 @@ impl<'a> Atlas<'a> {
             match current
                 .parent
                 .as_ref()
+                .filter(|_| current.inside_parent())
                 .and_then(|parent| self.sessions.get(parent))
             {
                 Some(parent) => current = parent,

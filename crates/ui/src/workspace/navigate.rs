@@ -29,8 +29,7 @@ impl Workspace {
         }
         let topic = self.home_of(&summary);
         let session = summary.id.clone();
-        // A child session is a transcript inside its parent's, with no terminal of its own.
-        let terminal = self.hub.preferences().opens_in == SessionView::Terminal && summary.parent.is_none();
+        let terminal = self.hub.preferences().opens_in == SessionView::Terminal && !summary.inside_parent();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         if terminal && new {
             pane.update(cx, |pane, cx| pane.start_terminal(window, cx));

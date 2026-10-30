@@ -112,6 +112,7 @@ impl MemoryPage {
                 | MenuEvent::MoveSession(_)
                 | MenuEvent::Unplace(_)
                 | MenuEvent::SessionDeleted(_)
+                | MenuEvent::TaskStopped
                 | MenuEvent::PluginAction { .. }
                 | MenuEvent::Closed => {}
             }

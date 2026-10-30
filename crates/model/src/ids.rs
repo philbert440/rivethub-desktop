@@ -15,6 +15,10 @@ pub struct SessionId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TopicId(String);
 
+/// A delegated task, which runs as a session another session started.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TaskId(String);
+
 impl HarnessId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -65,6 +69,16 @@ impl SessionId {
 }
 
 impl TopicId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TaskId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }

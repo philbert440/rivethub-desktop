@@ -1,5 +1,5 @@
-use model::TopicId;
 use model::session::SessionSummary;
+use model::{TaskId, TopicId};
 
 /// What the menu's topic is, which words its moves and its delete use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -39,11 +39,13 @@ impl Noun {
     }
 }
 
-/// What the menu's Delete removes, and what its confirm names.
+/// What the menu asks about first, deleting something or stopping a delegated task, and what its
+/// confirm names.
 #[derive(Debug, Clone)]
 pub(super) enum Doomed {
     Topic(TopicId, String),
     Session(Box<SessionSummary>),
+    Task(Box<SessionSummary>, TaskId),
 }
 
 impl Doomed {
@@ -51,13 +53,22 @@ impl Doomed {
         match self {
             Self::Topic(..) => noun.deletes(),
             Self::Session(_) => "Delete session",
+            Self::Task(..) => "Stop task",
+        }
+    }
+
+    /// The confirm button's word.
+    pub(super) fn verb(&self) -> &'static str {
+        match self {
+            Self::Topic(..) | Self::Session(_) => "Delete",
+            Self::Task(..) => "Stop",
         }
     }
 
     pub(super) fn name(&self) -> String {
         match self {
             Self::Topic(_, name) => name.clone(),
-            Self::Session(session) => session.name(),
+            Self::Session(session) | Self::Task(session, _) => session.name(),
         }
     }
 
@@ -66,6 +77,9 @@ impl Doomed {
             Self::Topic(..) => noun.warning(),
             Self::Session(_) => {
                 "Delete this session? Memory forgets it and it leaves every list. Its harness keeps the transcript, so using the session again brings it back."
+            }
+            Self::Task(..) => {
+                "Stop this task? Its turn stops and the task ends as killed. The session stays open, so you can read it or carry on in it."
             }
         }
     }

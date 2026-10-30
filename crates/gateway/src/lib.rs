@@ -6,6 +6,7 @@ mod pairing;
 mod plugins;
 mod previews;
 mod socket;
+mod tasks;
 mod terminal;
 mod tidy;
 mod tls;

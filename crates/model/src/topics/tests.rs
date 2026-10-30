@@ -23,6 +23,7 @@ fn session(native: &str, hours_ago: i64, parent: Option<&str>) -> SessionSummary
         cwd: None,
         updated_at_ms: WINDOWS.now_ms - hours_ago * HOUR,
         parent: parent.map(id),
+        task: None,
         node: None,
         blocked: false,
     }
@@ -54,6 +55,10 @@ fn natives(sessions: &[&SessionSummary]) -> Vec<String> {
 
 #[test]
 fn placed_sessions_file_under_their_root_topic_and_subagents_follow_their_parent() {
+    let delegated = SessionSummary {
+        task: Some(crate::TaskId::new("task-1")),
+        ..session("delegated", 1, Some("lead"))
+    };
     let topics = [
         topic("desktop", None),
         topic("desktop-chat", Some("desktop")),
@@ -62,6 +67,7 @@ fn placed_sessions_file_under_their_root_topic_and_subagents_follow_their_parent
     let sessions = [
         session("lead", 1, None),
         session("helper", 1, Some("lead")),
+        delegated,
         session("chat", 2, None),
         session("certs", 200, None),
     ];
@@ -80,7 +86,8 @@ fn placed_sessions_file_under_their_root_topic_and_subagents_follow_their_parent
     );
     assert_eq!(board.recent.len(), 1);
     assert_eq!(board.recent[0].topic.slug, "desktop");
-    assert_eq!(natives(&board.recent[0].sessions), ["lead", "chat"]);
+    // A delegated child is a session of its own in its parent's topic; a subagent goes with its parent.
+    assert_eq!(natives(&board.recent[0].sessions), ["lead", "delegated", "chat"]);
     assert_eq!(
         board
             .past

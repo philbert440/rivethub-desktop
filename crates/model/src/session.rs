@@ -1,8 +1,8 @@
-use crate::SessionId;
 use crate::plan::Plan;
 use crate::prompt::{Prompt, SentFile};
 use crate::tools::{Question, ToolInput, ToolOutput};
 use crate::usage::{Pace, Usage};
+use crate::{SessionId, TaskId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -114,8 +114,18 @@ pub struct SessionSummary {
     pub cwd: Option<String>,
     pub updated_at_ms: i64,
     pub parent: Option<SessionId>,
+    /// The delegated task the session runs, for one another session started as a task.
+    pub task: Option<TaskId>,
     pub node: Option<String>,
     pub blocked: bool,
+}
+
+/// What stopping a delegated task found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskStop {
+    Stopped,
+    /// It had already finished, failed or been stopped.
+    AlreadyOver,
 }
 
 impl SessionSummary {
@@ -135,9 +145,16 @@ impl SessionSummary {
             cwd: None,
             updated_at_ms,
             parent: None,
+            task: None,
             node,
             blocked: false,
         }
+    }
+
+    /// A subagent: a transcript inside its parent's, which goes with its parent and has no
+    /// terminal of its own. A delegated task's session is a session in its own right.
+    pub fn inside_parent(&self) -> bool {
+        self.parent.is_some() && self.task.is_none()
     }
 
     /// What to call the session where it isn't on screen: its title, or before it has one,
