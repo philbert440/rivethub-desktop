@@ -75,6 +75,8 @@ pub struct SessionPane {
     renaming: Option<Renaming>,
     /// The exchange a fork is being started after, until the fork opens or fails.
     forking: Option<usize>,
+    /// Whether the session's stream was down when the transcript was last folded.
+    lost: bool,
     awaiting_title: bool,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -132,6 +134,7 @@ impl SessionPane {
             attach_problem: None,
             renaming: None,
             forking: None,
+            lost: false,
             awaiting_title: false,
             _revisions: watcher,
             _submitted: submitted,
@@ -230,10 +233,10 @@ impl SessionPane {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let folded = {
+        let (folded, lost) = {
             let view = self.handle.view();
             let view = view.read();
-            exchanges(view.turns(), view.live(), view.busy())
+            (exchanges(view.turns(), view.live(), view.busy()), view.lost())
         };
         let previous = Arc::clone(&self.exchanges);
         let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
@@ -260,11 +263,16 @@ impl SessionPane {
             .collect();
         let count = views.len();
         let known = self.turns.item_count();
-        let first_changed = views
+        let mut first_changed = views
             .iter()
             .zip(previous.iter())
             .position(|(new, old)| new != old)
             .unwrap_or(known.min(count));
+        // A running exchange shows whether its stream is down, so the newest one draws again.
+        if lost != self.lost {
+            self.lost = lost;
+            first_changed = first_changed.min(count.saturating_sub(1));
+        }
         if count < known {
             self.turns.reset(count);
         } else {

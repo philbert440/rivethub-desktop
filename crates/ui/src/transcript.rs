@@ -100,6 +100,8 @@ pub struct Context<'a> {
     pub plan: &'a model::plan::Plan,
     /// Whether a fork after this exchange is starting.
     pub forking: bool,
+    /// Whether the stream to the session's node is down, so a running turn can't be followed.
+    pub lost: bool,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
@@ -223,6 +225,26 @@ fn status(label: &str) -> AnyElement {
                 .with_easing(pulsating_between(0.45, 1.)),
             gpui::Styled::opacity,
         )
+        .into_any_element()
+}
+
+/// A running turn whose stream is down: nothing says what it is doing until the node is back.
+fn disconnected() -> AnyElement {
+    div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(13.))
+        .text_color(Theme::ink_dim())
+        .child(
+            div()
+                .size(px(8.))
+                .rounded(px(4.))
+                .border_1()
+                .border_color(Theme::ink_dim()),
+        )
+        .child("Disconnected")
         .into_any_element()
 }
 
@@ -478,7 +500,7 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 }
             })
             .unwrap_or("Thinking");
-        column = column.child(status(label));
+        column = column.child(if cx.lost { disconnected() } else { status(label) });
     }
     div()
         .w_full()

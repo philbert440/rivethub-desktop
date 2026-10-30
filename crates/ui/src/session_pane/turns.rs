@@ -79,6 +79,7 @@ impl SessionPane {
         let previews = Arc::clone(&self.previews);
         let plan = view.plan().clone();
         let forking = self.forking;
+        let lost = self.lost;
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -99,6 +100,7 @@ impl SessionPane {
                             previews: &previews,
                             plan: &plan,
                             forking: forking == Some(index),
+                            lost,
                         };
                         transcript::exchange(exchange, &context, window)
                     },

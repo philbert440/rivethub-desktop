@@ -207,6 +207,12 @@ impl Actor {
         self.changed();
     }
 
+    /// No stream follows the session now, as `message` says, until it reconnects.
+    fn lose(&self, message: &str) {
+        self.view.write().disconnected(message.to_owned());
+        self.changed();
+    }
+
     async fn run(self, mut commands: mpsc::Receiver<Command>) {
         let mut retry = self.hub.backoff(self.node.as_deref());
         loop {
@@ -232,13 +238,13 @@ impl Actor {
                             },
                         }
                     }
-                    self.fail("Lost the connection to this session's node. Reconnecting…");
+                    self.lose("Lost the connection to this session's node. Reconnecting…");
                 }
                 Err(err) if err.is_unreachable() => {
                     tracing::debug!(%err, session = %self.id, "the session's node is out of reach");
-                    self.fail("Can't reach this session's node. Retrying…");
+                    self.lose("Can't reach this session's node. Retrying…");
                 }
-                Err(err) => self.fail(&err.to_string()),
+                Err(err) => self.lose(&err.to_string()),
             }
             tokio::select! {
                 () = tokio::time::sleep(retry.next_wait()) => {}

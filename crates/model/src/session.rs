@@ -238,6 +238,8 @@ pub struct SessionView {
     context: Option<ContextUsage>,
     activity: Activity,
     error: Option<String>,
+    /// The stream to the session's node is down, so a turn it showed running can't be followed.
+    lost: bool,
     paced: Pace,
     plan: Plan,
 }
@@ -350,6 +352,13 @@ impl SessionView {
     pub fn reconnected(&mut self) {
         self.activity = Activity::Idle;
         self.error = None;
+        self.lost = false;
+    }
+
+    /// The stream to the session's node went down or couldn't open, as `message` says.
+    pub fn disconnected(&mut self, message: String) {
+        self.error = Some(message);
+        self.lost = true;
     }
 
     /// The running turn took `prompt` as it went: the reply so far stays above it and goes on
@@ -444,6 +453,11 @@ impl SessionView {
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// Whether the stream to the session's node is down until it reconnects.
+    pub fn lost(&self) -> bool {
+        self.lost
     }
 
     pub fn busy(&self) -> bool {
