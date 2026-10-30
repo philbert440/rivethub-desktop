@@ -1,10 +1,12 @@
 //! Changes to the topic, entity and type trees that wait for a person, and how memory is keeping up.
 
-use std::collections::HashSet;
+mod tree;
+
+pub use tree::{Branch, Row};
 
 use crate::{SessionId, TopicId};
 
-/// One change to a tree, naming topics, entities and types by id.
+/// One change to a tree, naming topics, entities and types by id, or to a wiki page by slug.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     Merge {
@@ -25,11 +27,18 @@ pub enum Change {
     Delete {
         topic: TopicId,
     },
-    /// A new work topic, with the id it will get, and what it would file.
+    /// A new work topic, with the id it will get, its other names, and what it would file.
     CreateTopic {
         topic: TopicId,
         name: String,
         parent: Option<TopicId>,
+        aliases: Vec<String>,
+        sessions: Vec<SessionId>,
+        conversations: Vec<String>,
+    },
+    /// Sessions and conversations filed under a topic that exists already.
+    FileInto {
+        topic: TopicId,
         sessions: Vec<SessionId>,
         conversations: Vec<String>,
     },
@@ -38,6 +47,15 @@ pub enum Change {
         name: String,
         parent: Option<TopicId>,
     },
+    /// One wiki page folded into another.
+    MergePage {
+        page: String,
+        into: String,
+    },
+    /// A loose wiki page removed, with its file.
+    RemovePage {
+        page: String,
+    },
 }
 
 impl Change {
@@ -45,11 +63,7 @@ impl Change {
     pub fn creates(&self) -> Option<&TopicId> {
         match self {
             Self::CreateTopic { topic, .. } | Self::AddType { topic, .. } => Some(topic),
-            Self::Merge { .. }
-            | Self::Move { .. }
-            | Self::Rename { .. }
-            | Self::Close { .. }
-            | Self::Delete { .. } => None,
+            _ => None,
         }
     }
 
@@ -57,12 +71,46 @@ impl Change {
     fn under(&self) -> Option<&TopicId> {
         match self {
             Self::CreateTopic { parent, .. } | Self::AddType { parent, .. } => parent.as_ref(),
-            Self::Merge { .. }
-            | Self::Move { .. }
-            | Self::Rename { .. }
-            | Self::Close { .. }
-            | Self::Delete { .. } => None,
+            _ => None,
         }
+    }
+
+    /// The topic that exists already that this change acts on.
+    fn subject(&self) -> Option<&TopicId> {
+        match self {
+            Self::Merge { source: topic, .. }
+            | Self::Move { topic, .. }
+            | Self::Rename { topic, .. }
+            | Self::Close { topic }
+            | Self::Delete { topic }
+            | Self::FileInto { topic, .. } => Some(topic),
+            Self::CreateTopic { .. }
+            | Self::AddType { .. }
+            | Self::MergePage { .. }
+            | Self::RemovePage { .. } => None,
+        }
+    }
+
+    /// The sessions and conversations this change would file.
+    pub fn members(&self) -> Option<(&[SessionId], &[String])> {
+        match self {
+            Self::CreateTopic {
+                sessions,
+                conversations,
+                ..
+            }
+            | Self::FileInto {
+                sessions,
+                conversations,
+                ..
+            } => Some((sessions, conversations)),
+            _ => None,
+        }
+    }
+
+    /// Whether this changes a wiki page rather than a tree.
+    pub fn is_page(&self) -> bool {
+        matches!(self, Self::MergePage { .. } | Self::RemovePage { .. })
     }
 }
 
@@ -73,6 +121,13 @@ pub enum Proposer {
     Backfill,
 }
 
+/// One of the sessions or conversations behind a proposal, by id, with its title when it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sample {
+    pub id: String,
+    pub title: Option<String>,
+}
+
 /// A proposed change, why, and the sessions behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proposal {
@@ -80,8 +135,8 @@ pub struct Proposal {
     pub change: Change,
     pub reason: String,
     pub sessions: u64,
-    /// A few of the sessions' titles.
-    pub samples: Vec<String>,
+    /// A few of the sessions.
+    pub samples: Vec<Sample>,
 }
 
 /// The proposals one run made together, waiting to be approved or rejected.
@@ -94,61 +149,18 @@ pub struct Batch {
 }
 
 impl Batch {
-    /// The batch as a proposed tree: each new topic or type with the proposals that would sit under
-    /// it right below, one level deeper, and everything else at the top in the order rh gave.
-    pub fn tree(&self) -> Vec<(usize, &Proposal)> {
-        let created: HashSet<&TopicId> = self
-            .proposals
-            .iter()
-            .filter_map(|proposal| proposal.change.creates())
-            .collect();
-        let mut out = Vec::with_capacity(self.proposals.len());
-        let mut placed: HashSet<&str> = HashSet::new();
-        let tops = self.proposals.iter().filter(|proposal| {
-            proposal
-                .change
-                .under()
-                .is_none_or(|parent| !created.contains(parent))
-        });
-        for top in tops {
-            self.place(top, 0, &mut out, &mut placed);
-        }
-        for proposal in &self.proposals {
-            self.place(proposal, 0, &mut out, &mut placed);
-        }
-        out
-    }
-
-    fn place<'a>(
-        &'a self,
-        proposal: &'a Proposal,
-        depth: usize,
-        out: &mut Vec<(usize, &'a Proposal)>,
-        placed: &mut HashSet<&'a str>,
-    ) {
-        if !placed.insert(proposal.id.as_str()) {
-            return;
-        }
-        out.push((depth, proposal));
-        let Some(created) = proposal.change.creates() else {
-            return;
-        };
-        for child in self
-            .proposals
-            .iter()
-            .filter(|child| child.change.under() == Some(created))
-        {
-            self.place(child, depth + 1, out, placed);
-        }
-    }
-
-    /// How many sessions the batch would file, across its new topics.
+    /// How many sessions and conversations the batch would file, into new topics and existing ones.
     pub fn sessions(&self) -> u64 {
         self.proposals
             .iter()
-            .filter(|proposal| matches!(proposal.change, Change::CreateTopic { .. }))
+            .filter(|proposal| proposal.change.members().is_some())
             .map(|proposal| proposal.sessions)
             .sum()
+    }
+
+    /// The wiki page changes, which sit outside the tree.
+    pub fn pages(&self) -> impl Iterator<Item = &Proposal> {
+        self.proposals.iter().filter(|proposal| proposal.change.is_page())
     }
 }
 
@@ -201,74 +213,4 @@ pub struct Upkeep {
     pub wiki: Wiki,
     pub workers: Workers,
     pub pending: u64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Batch, Change, Proposal, Proposer};
-    use crate::TopicId;
-
-    fn id(text: &str) -> TopicId {
-        TopicId::new(text.to_owned())
-    }
-
-    fn proposal(key: &str, change: Change) -> Proposal {
-        Proposal {
-            id: key.to_owned(),
-            change,
-            reason: String::new(),
-            sessions: 0,
-            samples: Vec::new(),
-        }
-    }
-
-    fn create(key: &str, topic: &str, parent: Option<&str>) -> Proposal {
-        proposal(
-            key,
-            Change::CreateTopic {
-                topic: id(topic),
-                name: topic.to_owned(),
-                parent: parent.map(id),
-                sessions: Vec::new(),
-                conversations: Vec::new(),
-            },
-        )
-    }
-
-    #[test]
-    fn new_topics_nest_under_the_new_topics_they_sit_in() {
-        let batch = Batch {
-            id: "b".to_owned(),
-            by: Proposer::Backfill,
-            at_ms: 0,
-            proposals: vec![
-                create("child", "rail", Some("desktop")),
-                proposal(
-                    "rename",
-                    Change::Rename {
-                        topic: id("old"),
-                        name: "New".to_owned(),
-                    },
-                ),
-                create("root", "desktop", None),
-                create("grandchild", "dots", Some("rail")),
-                create("existing", "certs", Some("mesh")),
-            ],
-        };
-        let tree: Vec<(usize, &str)> = batch
-            .tree()
-            .into_iter()
-            .map(|(depth, proposal)| (depth, proposal.id.as_str()))
-            .collect();
-        assert_eq!(
-            tree,
-            [
-                (0, "rename"),
-                (0, "root"),
-                (1, "child"),
-                (2, "grandchild"),
-                (0, "existing")
-            ]
-        );
-    }
 }

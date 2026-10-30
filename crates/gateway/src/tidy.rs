@@ -1,6 +1,8 @@
 use model::TopicId;
 use model::memory::Verdict;
-use model::tidy::{Batch, Change, Filing, Proposal, Proposer, TypeCount, Upkeep, Wiki, Worker, Workers};
+use model::tidy::{
+    Batch, Change, Filing, Proposal, Proposer, Sample, TypeCount, Upkeep, Wiki, Worker, Workers,
+};
 use wire::gateway::tidy::{
     MemoryUpkeep, TidyBatch, TidyBatchDecision, TidyChange, TidyPending, TidyProposal, WorkerActivity,
 };
@@ -28,15 +30,28 @@ fn change(raw: TidyChange) -> Change {
             topic,
             name,
             parent,
+            aliases,
             sessions,
             conversations,
         } => Change::CreateTopic {
             topic: id(topic),
             name,
             parent: parent.map(id),
+            aliases,
             sessions: sessions.iter().map(translate::session).collect(),
             conversations,
         },
+        TidyChange::FileInto {
+            topic,
+            sessions,
+            conversations,
+        } => Change::FileInto {
+            topic: id(topic),
+            sessions: sessions.iter().map(translate::session).collect(),
+            conversations,
+        },
+        TidyChange::MergePage { page, into } => Change::MergePage { page, into },
+        TidyChange::RemovePage { page } => Change::RemovePage { page },
         TidyChange::AddType { topic, name, parent } => Change::AddType {
             topic: id(topic),
             name,
@@ -55,8 +70,10 @@ fn proposal(raw: TidyProposal) -> Proposal {
             .evidence
             .samples
             .into_iter()
-            .filter_map(|sample| sample.title)
-            .filter(|title| !title.trim().is_empty())
+            .map(|sample| Sample {
+                id: sample.id,
+                title: sample.title.filter(|title| !title.trim().is_empty()),
+            })
             .collect(),
     }
 }

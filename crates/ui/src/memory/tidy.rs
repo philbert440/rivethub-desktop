@@ -148,7 +148,7 @@ impl MemoryPage {
                 .when(!tidy.batches.is_empty(), |list| {
                     list.child(Self::group(
                         "Topics, entities and types",
-                        "changes to the trees, in the batches they were proposed in",
+                        "changes to the trees and the wiki's pages, in the batches they were proposed in",
                     ))
                     .children(self.batches(cx))
                 })

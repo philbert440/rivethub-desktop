@@ -3,6 +3,7 @@ mod conversation;
 mod decisions;
 mod entities;
 mod entity_edit;
+mod members;
 mod mentions;
 mod proposals;
 mod session;
@@ -11,7 +12,6 @@ mod stats;
 mod tidy;
 mod topics;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use app::{Hub, Library, Tidy};
@@ -114,7 +114,7 @@ pub struct MemoryPage {
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
-    open_batches: HashSet<String>,
+    review: proposals::Review,
     stats: Option<Stats>,
     upkeep: Option<Upkeep>,
     catalog: Option<Catalog>,
@@ -174,7 +174,7 @@ impl MemoryPage {
             deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
-            open_batches: HashSet::new(),
+            review: proposals::Review::default(),
             stats: None,
             upkeep: None,
             catalog: None,
