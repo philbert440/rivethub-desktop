@@ -282,6 +282,31 @@ impl Workspace {
         .detach();
     }
 
+    /// Reads the topics and what is filed under them again, without listing every node's sessions:
+    /// what a topic or filing change alters, shown as soon as rh has it.
+    fn refile(&self, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let filing = hub.topics().await;
+            this.update(cx, |this, cx| {
+                match filing {
+                    Ok(filing) => {
+                        this.topics = filing.topics;
+                        this.placements = filing.placements;
+                        this.marks = filing.marks;
+                    }
+                    Err(err) => this.failed = Some(format!("topics: {err}")),
+                }
+                this.publish(cx);
+                this.sync_panel(cx);
+                this.sync_step(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn loaded(&mut self, (sessions, topics): Loaded, cx: &mut Context<Self>) {
         let mut problems = Vec::new();
         match sessions {
@@ -670,7 +695,7 @@ impl Workspace {
                     this.topic_deleted(topic, window, cx);
                     cx.emit(TopicDeleted(topic.clone()));
                 }
-                MenuEvent::Filed => this.load(cx),
+                MenuEvent::Filed => this.refile(cx),
                 MenuEvent::Rename(topic) => this.begin_retitle(topic.clone(), window, cx),
                 MenuEvent::MoveInto(topic) => this.choose(Pick::MoveInto(topic.clone()), at, window, cx),
                 MenuEvent::MergeInto(topic) => this.choose(Pick::MergeInto(topic.clone()), at, window, cx),
@@ -815,7 +840,7 @@ impl Workspace {
                 if let Err(err) = placed {
                     this.failed = Some(format!("placing the session failed: {err}"));
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
@@ -834,7 +859,7 @@ impl Workspace {
                 if let Err(err) = unplaced {
                     this.failed = Some(format!("taking the session out of its topic failed: {err}"));
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
@@ -850,7 +875,7 @@ impl Workspace {
                 if let Err(err) = created {
                     this.failed = Some(format!("creating the topic failed: {err}"));
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
