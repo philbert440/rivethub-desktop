@@ -269,12 +269,15 @@ impl MemoryPage {
                             )
                             .children(topic)
                             .children(undo)
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child(format!("active {}", ago_phrase(now_ms(), session.updated_at_ms))),
-                            ),
+                            // A session memory knows no time for says nothing about when it was active.
+                            .when(session.updated_at_ms > 0, |line| {
+                                line.child(
+                                    div().text_xs().text_color(Theme::ink_dim()).child(format!(
+                                        "active {}",
+                                        ago_phrase(now_ms(), session.updated_at_ms)
+                                    )),
+                                )
+                            }),
                     ),
             )
             .child(
