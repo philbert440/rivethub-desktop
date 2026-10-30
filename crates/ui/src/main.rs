@@ -3,6 +3,7 @@ mod brand;
 mod copy;
 mod input;
 mod instance;
+mod launch_choice;
 mod launcher;
 mod markdown_view;
 mod memory;

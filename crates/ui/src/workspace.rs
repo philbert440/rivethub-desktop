@@ -29,7 +29,8 @@ use model::topics::{
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::agent_editor::{AgentEditor, AgentEditorEvent};
-use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
+use crate::launch_choice::Choice;
+use crate::launcher::{Launcher, LauncherEvent, Target};
 use crate::memory::Focus;
 use crate::menu::{Lift, Menu, MenuEvent, OpenMenu};
 use crate::session_pane::{PaneEvent, SessionPane};
