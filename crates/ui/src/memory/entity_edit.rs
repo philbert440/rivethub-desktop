@@ -111,6 +111,7 @@ impl MemoryPage {
                 | MenuEvent::Open(_)
                 | MenuEvent::MoveSession(_)
                 | MenuEvent::Unplace(_)
+                | MenuEvent::PluginAction { .. }
                 | MenuEvent::Closed => {}
             }
             cx.notify();

@@ -23,6 +23,14 @@ pub struct Palette {
     pub removed_bg: u32,
     pub on_accent: u32,
     pub scrim: u32,
+    pub outline: u32,
+    pub info: u32,
+    pub info_container: u32,
+    pub danger: u32,
+    pub danger_container: u32,
+    pub secondary_container: u32,
+    /// The plug-in category colours with no tone of their own: violet, teal and pink.
+    pub categories: [u32; 3],
 }
 
 /// The app's own Material dark theme.
@@ -47,6 +55,13 @@ pub const DARK: Palette = Palette {
     removed_bg: 0x003a_1f1f,
     on_accent: 0x0000_3825,
     scrim: 0x0509_07b3,
+    outline: 0x0085_908a,
+    info: 0x008e_cbff,
+    info_container: 0x0016_2a38,
+    danger: 0x00ff_b4ab,
+    danger_container: 0x003a_1f1f,
+    secondary_container: 0x0034_4b41,
+    categories: [0x00c9_b2ff, 0x0099_d9c4, 0x00e8_b4d8],
 };
 
 /// The light Material theme from the same emerald seed.
@@ -71,6 +86,13 @@ pub const LIGHT: Palette = Palette {
     removed_bg: 0x00fa_dcd8,
     on_accent: 0x00ff_ffff,
     scrim: 0x0f28_1c59,
+    outline: 0x0070_7a74,
+    info: 0x000b_57d0,
+    info_container: 0x00d8_e6fb,
+    danger: 0x00ba_1a1a,
+    danger_container: 0x00fa_dcd8,
+    secondary_container: 0x00cf_e8da,
+    categories: [0x0067_50a4, 0x0000_6b5e, 0x008e_4585],
 };
 
 /// The palette `appearance` shows on a light or dark desktop, with the Omarchy theme's palette
@@ -96,6 +118,9 @@ struct Omarchy {
     green: u32,
     yellow: u32,
     orange: Option<u32>,
+    blue: Option<u32>,
+    magenta: Option<u32>,
+    cyan: Option<u32>,
     backgrounds: Vec<u32>,
     dim_foreground: Option<u32>,
 }
@@ -127,6 +152,9 @@ impl Omarchy {
             green: pick("green", "color2")?,
             yellow: pick("yellow", "color3")?,
             orange: get("orange"),
+            blue: pick("blue", "color4"),
+            magenta: pick("magenta", "color5"),
+            cyan: pick("cyan", "color6"),
             backgrounds: ["dark_background", "darker_background", "lighter_background"]
                 .into_iter()
                 .filter_map(get)
@@ -185,6 +213,11 @@ impl Omarchy {
         .flatten()
         .find(|color| contrast(*color, bg) >= 3.0)
         .unwrap_or(0x00b4_5309);
+        let removed = readable(self.red, bg, 3.0, fg);
+        let removed_bg = mix(bg, self.red, 0.15);
+        let info = readable(self.blue.unwrap_or(self.accent), bg, 3.0, fg);
+        let fallback = if self.light { LIGHT } else { DARK }.categories;
+        let hue = |color: Option<u32>, fallback: u32| readable(color.unwrap_or(fallback), bg, 3.0, fg);
         let on_accent = if contrast(0x0000_0000, self.accent) >= contrast(0x00ff_ffff, self.accent) {
             0x0000_0000
         } else {
@@ -206,11 +239,25 @@ impl Omarchy {
             line: mix(card, fg, 0.15),
             selected,
             on_selected: readable(mix(self.accent, ink, 0.3), selected, 4.5, ink),
-            removed: readable(self.red, bg, 3.0, fg),
+            removed,
             added_bg: mix(bg, self.green, 0.15),
-            removed_bg: mix(bg, self.red, 0.15),
+            removed_bg,
             on_accent,
             scrim: (if self.light { fg } else { window }) << 8 | if self.light { 0x59 } else { 0xb3 },
+            outline: mix(ink_dim, bg, 0.3),
+            info,
+            info_container: mix(bg, info, 0.15),
+            danger: removed,
+            danger_container: removed_bg,
+            secondary_container: mix(card, self.accent, 0.15),
+            categories: [
+                hue(self.magenta, fallback[0]),
+                hue(self.cyan, fallback[1]),
+                hue(
+                    self.magenta.map(|magenta| mix(magenta, self.red, 0.5)),
+                    fallback[2],
+                ),
+            ],
         }
     }
 }

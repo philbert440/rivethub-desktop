@@ -3,6 +3,7 @@ mod error;
 mod events;
 mod memory;
 mod pairing;
+mod plugins;
 mod previews;
 mod terminal;
 mod tidy;
@@ -13,7 +14,7 @@ mod translate;
 
 pub use chat::SessionStream;
 pub use error::GatewayError;
-pub use events::WorkspaceEvent;
+pub use events::{PluginEvent, WorkspaceEvent};
 pub use terminal::{TermInput, TermOutput, TerminalStream};
 pub use tls::certificates;
 
@@ -86,6 +87,10 @@ impl Gateway {
             tls,
             base_url: endpoint.base_url.trim_end_matches('/').to_owned(),
         })
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub async fn sessions(&self, harness: &HarnessId) -> Result<Vec<SessionSummary>, GatewayError> {

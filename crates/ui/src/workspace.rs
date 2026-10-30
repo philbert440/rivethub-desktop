@@ -34,6 +34,7 @@ use crate::launch_choice::Choice;
 use crate::launcher::{Launcher, LauncherEvent, Target};
 use crate::memory::Focus;
 use crate::menu::{Lift, Menu, MenuEvent, OpenMenu};
+use crate::plugin::Plugins;
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
@@ -134,6 +135,7 @@ pub struct Workspace {
     launching: Option<(Entity<Launcher>, Subscription)>,
     editing_agent: Option<(Entity<AgentEditor>, Subscription)>,
     menu: Option<OpenMenu>,
+    plugins: Entity<Plugins>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
     rail: Entity<TopicRail>,
@@ -154,9 +156,9 @@ impl EventEmitter<TopicDeleted> for Workspace {}
 impl EventEmitter<Arc<Listed>> for Workspace {}
 
 impl Workspace {
-    pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(hub: Hub, plugins: Entity<Plugins>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let panel = cx.new(|cx| SidePanel::new(hub.clone(), cx));
-        let rail = cx.new(|cx| TopicRail::new(hub.clone(), cx));
+        let rail = cx.new(|cx| TopicRail::new(hub.clone(), plugins.clone(), cx));
         let rail_events = cx.subscribe_in(
             &rail,
             window,
@@ -242,6 +244,7 @@ impl Workspace {
             launching: None,
             editing_agent: None,
             menu: None,
+            plugins,
             feed,
             _panel_events: panel_events,
             rail,
@@ -714,7 +717,12 @@ impl Workspace {
         }
         if let Some((latest, placed, history)) = session {
             let id = latest.id.clone();
-            menu = menu.moving(latest, placed).filing(id, history);
+            let local = self.hub.local_node();
+            let plugged = self.plugins.read(cx).session_actions(&latest, local.as_deref());
+            menu = menu
+                .moving(latest, placed)
+                .filing(id, history)
+                .plugin_actions(plugged);
         }
         let menu = cx.new(|_| menu);
         let events = cx.subscribe_in(&menu, window, move |this, menu, event: &MenuEvent, window, cx| {
@@ -735,6 +743,13 @@ impl Workspace {
                 MenuEvent::Open(session) => this.open((**session).clone(), window, cx),
                 MenuEvent::MoveSession(session) => this.choose(Pick::File(session.clone()), at, window, cx),
                 MenuEvent::Unplace(session) => this.unplace(session.clone(), cx),
+                MenuEvent::PluginAction {
+                    plugin,
+                    action,
+                    session,
+                } => this.plugins.update(cx, |plugins, cx| {
+                    plugins.run_session_action(plugin.clone(), action.clone(), session.clone(), cx);
+                }),
                 MenuEvent::Closed => {}
             }
             cx.notify();

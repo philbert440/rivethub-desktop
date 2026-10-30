@@ -11,6 +11,7 @@ use model::{SessionId, TopicId};
 
 use crate::input::{Submitted, TextInput};
 use crate::memory::Focus;
+use crate::plugin::{Card, Plugins, PluginsEvent};
 use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
 
@@ -40,9 +41,13 @@ struct Adding {
     _submitted: Subscription,
 }
 
-/// The topic screen's rail: the shown topic's decisions, and what its newest sessions last did.
+/// The topic screen's rail: the shown topic's decisions, what its newest sessions last did, and
+/// the cards plug-ins draw about it.
 pub struct TopicRail {
     hub: Hub,
+    plugins: Entity<Plugins>,
+    cards: Vec<Card>,
+    _listed: Subscription,
     topic: Option<TopicId>,
     decisions: Option<Vec<Decision>>,
     problem: Option<String>,
@@ -56,9 +61,17 @@ pub struct TopicRail {
 impl EventEmitter<RailEvent> for TopicRail {}
 
 impl TopicRail {
-    pub fn new(hub: Hub, _: &mut Context<Self>) -> Self {
+    pub fn new(hub: Hub, plugins: Entity<Plugins>, cx: &mut Context<Self>) -> Self {
+        let listed = cx.subscribe(&plugins, |this, _, event: &PluginsEvent, cx| {
+            if matches!(event, PluginsEvent::Listed) {
+                this.load_cards(cx);
+            }
+        });
         Self {
             hub,
+            plugins,
+            cards: Vec::new(),
+            _listed: listed,
             topic: None,
             decisions: None,
             problem: None,
@@ -84,6 +97,7 @@ impl TopicRail {
             self.startup_open = false;
             self.load_startup(topic.clone(), cx);
             self.load_decisions(topic, cx);
+            self.load_cards(cx);
         }
         let newest: Vec<SessionSummary> = sessions.into_iter().take(CAUGHT_SESSIONS).collect();
         let watched: Vec<(SessionId, i64)> = newest
@@ -94,6 +108,14 @@ impl TopicRail {
             self.watched = watched;
             self.load_catch_up(newest, cx);
         }
+    }
+
+    fn load_cards(&mut self, cx: &mut Context<Self>) {
+        let Some(topic) = self.topic.clone() else {
+            return;
+        };
+        self.cards = self.plugins.update(cx, |plugins, cx| plugins.cards(&topic, cx));
+        cx.notify();
     }
 
     /// What a session started in the topic would be told. A node without startup memory, or with
@@ -472,6 +494,16 @@ impl Render for TopicRail {
             .flex_col()
             .gap_4()
             .child(self.decisions_card(cx))
+            .children(self.cards.iter().map(|card| {
+                Self::card()
+                    .gap_3()
+                    .child(Self::label(format!(
+                        "{} · {}",
+                        card.title.to_uppercase(),
+                        card.node
+                    )))
+                    .child(card.frame.clone())
+            }))
             .children(self.catch_up_card(cx))
             .children(self.startup_card(cx))
     }

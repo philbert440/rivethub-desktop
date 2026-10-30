@@ -10,6 +10,7 @@ publish.workspace = true
 doctest = false
 
 [dependencies]
+base64.workspace = true
 model.workspace = true
 wire.workspace = true
 reqwest.workspace = true

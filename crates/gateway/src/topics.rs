@@ -388,6 +388,6 @@ impl Gateway {
 }
 
 /// The message in rh's error body, or the body itself when it isn't one.
-fn rh_message(detail: String) -> String {
+pub(crate) fn rh_message(detail: String) -> String {
     serde_json::from_str::<wire::gateway::GatewayError>(&detail).map_or(detail, |body| body.error)
 }

@@ -24,6 +24,8 @@ pub enum GatewayError {
     Conflict(String),
     #[error("refused: {0}")]
     Refused(String),
+    #[error("the plug-in {0}")]
+    Plugin(&'static str),
     #[error("not a session id: {0}")]
     SessionId(String),
 }

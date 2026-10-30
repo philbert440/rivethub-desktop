@@ -5,7 +5,8 @@ mod devices;
 mod general;
 mod memory;
 mod pairing;
-mod parts;
+pub(crate) mod parts;
+mod plugins;
 
 use app::Hub;
 use gpui::{
@@ -20,6 +21,7 @@ use model::trust::Trust;
 use crate::GatewayUrl;
 use crate::agent_editor::AgentEditor;
 use crate::launch_choice::LaunchChoices;
+use crate::plugin::{PluginSettings, Plugins, PluginsEvent};
 use crate::shell;
 use crate::theme::Theme;
 use pairing::PhonePairing;
@@ -34,17 +36,19 @@ enum Tab {
     Nodes,
     Devices,
     Memory,
+    Plugins,
     About,
 }
 
 impl Tab {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::General,
         Self::Agents,
         Self::Appearance,
         Self::Nodes,
         Self::Devices,
         Self::Memory,
+        Self::Plugins,
         Self::About,
     ];
 
@@ -56,6 +60,7 @@ impl Tab {
             Self::Nodes => "Nodes",
             Self::Devices => "Devices",
             Self::Memory => "Memory",
+            Self::Plugins => "Plug-ins",
             Self::About => "About",
         }
     }
@@ -81,13 +86,22 @@ pub struct SettingsPage {
     choosing: Option<(Entity<LaunchChoices>, Subscription)>,
     editing: Option<(Entity<AgentEditor>, Subscription)>,
     pairing: Entity<PhonePairing>,
+    plugins: Entity<Plugins>,
+    /// The plug-in whose entry is open in Plug-ins.
+    plugin: Option<(Entity<PluginSettings>, Subscription)>,
+    _listed: Subscription,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPage {}
 
 impl SettingsPage {
-    pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
+    pub fn new(hub: Hub, plugins: Entity<Plugins>, cx: &mut Context<Self>) -> Self {
         let pairing = cx.new(|cx| PhonePairing::new(hub.clone(), cx));
+        let listed = cx.subscribe(&plugins, |_, _, event: &PluginsEvent, cx| {
+            if matches!(event, PluginsEvent::Listed) {
+                cx.notify();
+            }
+        });
         let mut page = Self {
             hub,
             gateway: crate::gateway_url(),
@@ -99,12 +113,16 @@ impl SettingsPage {
             choosing: None,
             editing: None,
             pairing,
+            plugins,
+            plugin: None,
+            _listed: listed,
         };
         page.refresh(cx);
         page
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.plugins.update(cx, |plugins, cx| plugins.load(cx));
         self.nodes = Load::Waiting;
         self.trust = Load::Waiting;
         self.memory = Load::Waiting;
@@ -187,6 +205,7 @@ impl SettingsPage {
             Tab::Nodes => self.nodes_tab(),
             Tab::Devices => self.devices(),
             Tab::Memory => self.memory_tab(),
+            Tab::Plugins => self.plugins_tab(cx),
             Tab::About => self.about(window, cx),
         };
         sections.into_iter().map(IntoElement::into_any_element).collect()

@@ -2020,6 +2020,7 @@ dependencies = [
 name = "gateway"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "model",
  "reqwest",
@@ -6426,6 +6427,7 @@ dependencies = [
  "model",
  "parking_lot",
  "qrcode",
+ "svgtypes",
  "term",
  "tokio",
  "tracing",

@@ -16,6 +16,7 @@ pub mod notice;
 pub mod pairing;
 pub mod palette;
 pub mod plan;
+pub mod plugin;
 pub mod prefs;
 pub mod preview;
 pub mod prompt;

@@ -1,7 +1,12 @@
 use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
-use gpui::{Image, ImageFormat};
+use gpui::{Image, ImageFormat, SharedString};
+
+/// The Material Symbols plug-ins name their icons with, as `name path-data` lines.
+const SYMBOLS: &str = include_str!("../assets/icons/material.txt");
+/// The generic plug-in glyph, drawn for a symbol this app doesn't carry.
+const PLUGIN_GLYPH: &str = "extension";
 
 static GHOST: LazyLock<Arc<Image>> = LazyLock::new(|| {
     Arc::new(Image::from_bytes(
@@ -31,6 +36,17 @@ pub struct Icons;
 
 impl gpui::AssetSource for Icons {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(name) = path
+            .strip_prefix("icons/symbols/")
+            .and_then(|file| file.strip_suffix(".svg"))
+        {
+            return Ok(symbol_data(name).map(|data| {
+                Cow::Owned(
+                    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="{data}"/></svg>"#)
+                        .into_bytes(),
+                )
+            }));
+        }
         let bytes: &'static [u8] = match path {
             "icons/search.svg" => include_bytes!("../assets/icons/search.svg"),
             "icons/history.svg" => include_bytes!("../assets/icons/history.svg"),
@@ -57,7 +73,23 @@ impl gpui::AssetSource for Icons {
     }
 }
 
-pub fn icon(name: &'static str, size: f32, color: gpui::Rgba) -> gpui::Svg {
+fn symbol_data(name: &str) -> Option<&'static str> {
+    SYMBOLS
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
+}
+
+/// The asset path of the Material Symbol `name`, or of the generic plug-in glyph when there is no
+/// name or this app doesn't carry it.
+pub fn symbol(name: Option<&str>) -> SharedString {
+    let name = name
+        .filter(|name| symbol_data(name).is_some())
+        .unwrap_or(PLUGIN_GLYPH);
+    format!("icons/symbols/{name}.svg").into()
+}
+
+pub fn icon(name: impl Into<SharedString>, size: f32, color: gpui::Rgba) -> gpui::Svg {
     use gpui::Styled;
     gpui::svg()
         .path(name)
