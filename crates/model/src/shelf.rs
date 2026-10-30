@@ -79,6 +79,7 @@ mod tests {
             cwd: None,
             updated_at_ms: NOW - hours_ago * HOUR,
             parent,
+            task: None,
             node: None,
             blocked: false,
         }

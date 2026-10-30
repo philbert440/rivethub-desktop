@@ -98,6 +98,10 @@ pub struct Context<'a> {
     pub previews: &'a HashMap<String, Arc<gpui::Image>>,
     /// The agent's plan as it stands, which names the items a todo update changes.
     pub plan: &'a model::plan::Plan,
+    /// Whether a fork after this exchange is starting.
+    pub forking: bool,
+    /// Whether the stream to the session's node is down, so a running turn can't be followed.
+    pub lost: bool,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
@@ -221,6 +225,26 @@ fn status(label: &str) -> AnyElement {
                 .with_easing(pulsating_between(0.45, 1.)),
             gpui::Styled::opacity,
         )
+        .into_any_element()
+}
+
+/// A running turn whose stream is down: nothing says what it is doing until the node is back.
+fn disconnected() -> AnyElement {
+    div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(13.))
+        .text_color(Theme::ink_dim())
+        .child(
+            div()
+                .size(px(8.))
+                .rounded(px(4.))
+                .border_1()
+                .border_color(Theme::ink_dim()),
+        )
+        .child("Disconnected")
         .into_any_element()
 }
 
@@ -359,14 +383,17 @@ fn meta(exchange: &Exchange) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// What shows under a finished exchange while the pointer is over it: a copy of the reply's markdown, then the
-/// model and tokens behind it.
-fn actions(exchange: &Exchange, ix: usize) -> Option<impl IntoElement> {
+/// What shows under a finished exchange while the pointer is over it: a copy of the reply's markdown, a fork
+/// of the conversation as it stood after it, then the model and tokens behind it.
+fn actions(exchange: &Exchange, cx: &Context<'_>) -> Option<impl IntoElement> {
+    let ix = cx.index;
     let reply = exchange.answer.trim().to_owned();
     let meta = meta(exchange);
-    if reply.is_empty() && meta.is_none() {
+    let forks = exchange.prompt.is_some();
+    if reply.is_empty() && meta.is_none() && !forks {
         return None;
     }
+    let pane = cx.pane.clone();
     let row = div()
         .h(px(24.))
         .flex()
@@ -374,10 +401,26 @@ fn actions(exchange: &Exchange, ix: usize) -> Option<impl IntoElement> {
         .gap_3()
         .text_xs()
         .text_color(Theme::ink_dim())
-        .invisible()
-        .group_hover("exchange", gpui::Styled::visible)
+        .when(!cx.forking, |row| {
+            row.invisible().group_hover("exchange", gpui::Styled::visible)
+        })
         .when(!reply.is_empty(), |row| {
             row.child(CopyIcon::new(format!("copy-reply-{ix}"), reply))
+        })
+        .when(forks && cx.forking, |row| {
+            row.child(div().text_color(Theme::accent()).child("Forking…"))
+        })
+        .when(forks && !cx.forking, |row| {
+            row.child(
+                div()
+                    .id(SharedString::from(format!("fork-{ix}")))
+                    .cursor_pointer()
+                    .hover(|fork| fork.text_color(Theme::ink()))
+                    .on_click(move |_, _, cx| {
+                        pane.update(cx, |pane, cx| pane.fork_after(ix, cx)).ok();
+                    })
+                    .child("Fork from here"),
+            )
         })
         .children(meta);
     Some(row)
@@ -442,7 +485,7 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
         column = column.child(div().text_sm().text_color(Theme::ink_dim()).child(ended));
     }
     if !working {
-        column = column.children(actions(exchange, ix));
+        column = column.children(actions(exchange, cx));
     }
     if working {
         let label = exchange
@@ -457,7 +500,7 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 }
             })
             .unwrap_or("Thinking");
-        column = column.child(status(label));
+        column = column.child(if cx.lost { disconnected() } else { status(label) });
     }
     div()
         .w_full()

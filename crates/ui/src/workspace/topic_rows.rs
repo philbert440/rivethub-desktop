@@ -1,16 +1,17 @@
+use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ParentElement, Styled, div,
-    prelude::*, px,
+    AnyElement, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ParentElement, Styled, Window,
+    div, prelude::*, px,
 };
 use model::preview::{Preview, PreviewKind};
 use model::session::SessionSummary;
 use model::shelf::Shelf;
-use model::topics::Atlas;
+use model::topics::{Atlas, FiledConversation};
 use model::{SessionId, TopicId};
 
-use super::Workspace;
+use super::{ViewInMemory, Workspace};
 use crate::memory::Focus;
 use crate::side_panel::{DragGhost, DraggedSession};
 use crate::text::{ago, one_line};
@@ -18,6 +19,21 @@ use crate::theme::Theme;
 
 /// How many History sessions show before Show all.
 const HISTORY_SHOWN: usize = 5;
+
+/// A row of History: a session, or a conversation filed here that is no harness session.
+enum Past<'a> {
+    Session(&'a SessionSummary),
+    Conversation(&'a FiledConversation),
+}
+
+impl Past<'_> {
+    fn at_ms(&self) -> i64 {
+        match self {
+            Self::Session(session) => session.updated_at_ms,
+            Self::Conversation(conversation) => conversation.last_active_ms.unwrap_or_default(),
+        }
+    }
+}
 
 impl Workspace {
     /// The step's Active sessions, the ones needing you first, then newest first.
@@ -54,7 +70,8 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The step's History, newest first: its first few, or all of it once asked.
+    /// The step's History, newest first: its first few, or all of it once asked. Conversations
+    /// filed here that are no harness session sit among the sessions by when they were last active.
     pub(super) fn history_list(
         &self,
         step: &TopicId,
@@ -62,10 +79,24 @@ impl Workspace {
         now: i64,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if inside.history.is_empty() {
+        let atlas = Atlas::new(&self.topics, &[], &self.placements);
+        let mut past: Vec<Past<'_>> = inside
+            .history
+            .iter()
+            .copied()
+            .map(Past::Session)
+            .chain(
+                self.conversations
+                    .iter()
+                    .filter(|conversation| atlas.lineage(&conversation.topic).contains(&step))
+                    .map(Past::Conversation),
+            )
+            .collect();
+        if past.is_empty() {
             return None;
         }
-        let total = inside.history.len();
+        past.sort_by_key(|row| Reverse(row.at_ms()));
+        let total = past.len();
         let shown = if self.screen.all_history {
             total
         } else {
@@ -81,14 +112,17 @@ impl Workspace {
                     "quiet for a day, or marked as history; newest first",
                 ))
                 .children(
-                    inside
-                        .history
-                        .iter()
+                    past.into_iter()
                         .take(shown)
                         .enumerate()
-                        .map(|(index, session)| {
-                            let age = ago(now, session.updated_at_ms);
-                            self.session_row(("history", index), session, step, age, false, cx)
+                        .map(|(index, row)| match row {
+                            Past::Session(session) => {
+                                let age = ago(now, session.updated_at_ms);
+                                self.session_row(("history", index), session, step, age, false, cx)
+                            }
+                            Past::Conversation(conversation) => {
+                                Self::conversation_row(("history", index), conversation, now, cx)
+                            }
                         }),
                 )
                 .when(total > HISTORY_SHOWN, |list| {
@@ -115,6 +149,74 @@ impl Workspace {
                 })
                 .into_any_element(),
         )
+    }
+
+    /// A conversation in History: a bot chat, a voice call or an import, which opens in Memory.
+    fn conversation_row(
+        id: (&'static str, usize),
+        conversation: &FiledConversation,
+        now: i64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let shown = conversation.clone();
+        let title = match conversation
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+        {
+            Some(title) => one_line(Some(title)),
+            None => format!("{} conversation", conversation.channel).into(),
+        };
+        div()
+            .id(id)
+            .px_4()
+            .py(px(9.))
+            .rounded(px(14.))
+            .border_1()
+            .border_color(Theme::surface())
+            .flex()
+            .items_center()
+            .gap_3()
+            .cursor_pointer()
+            .hover(|row| row.bg(Theme::card()))
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                cx.emit(ViewInMemory(Focus::Conversation(Box::new(shown.clone()))));
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(9.))
+                    .rounded(px(5.))
+                    .border_1()
+                    .border_color(Theme::ink_dim()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(Theme::ink())
+                    .child(title),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(match &conversation.node {
+                        Some(node) => format!("{} · {node} · in Memory", conversation.channel),
+                        None => format!("{} · in Memory", conversation.channel),
+                    }),
+            )
+            .child(
+                div().flex_none().text_xs().text_color(Theme::ink_dim()).child(
+                    conversation
+                        .last_active_ms
+                        .map(|at| ago(now, at))
+                        .unwrap_or_default(),
+                ),
+            )
+            .into_any_element()
     }
 
     fn list_heading(title: String, note: &'static str) -> impl IntoElement {
@@ -169,7 +271,7 @@ impl Workspace {
                 Self::on_right_click(Focus::Session(Box::new(session.clone())), cx),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.open(open.clone(), window, cx);
+                this.open_filed(open.clone(), window, cx);
             }));
         let row = if active {
             row.bg(Theme::card()).hover(|row| row.bg(Theme::raised()))
@@ -244,6 +346,15 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// Opens a listed session in the pane; one no node lists any more opens in Memory instead.
+    fn open_filed(&mut self, session: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sessions.iter().any(|known| known.id == session.id) {
+            self.open(session, window, cx);
+        } else {
+            cx.emit(ViewInMemory(Focus::Session(Box::new(session))));
+        }
+    }
+
     /// A preview as the line under a session's title.
     pub(super) fn preview_line(preview: &Preview) -> String {
         let prose = || model::markdown::plain(&preview.text);
@@ -271,15 +382,21 @@ impl Workspace {
         }
     }
 
-    /// "Claude · Opus · ct115 · Memory": the harness, its model, the node, and the subtopic it sits
-    /// in when that's below the step.
+    /// "Claude · Opus · ct115 · Memory": the harness, its model, the node it runs on (this one's
+    /// name for a session listed here, the capturing node's for one only memory keeps), and the
+    /// subtopic it sits in when that's below the step.
     fn session_meta(&self, session: &SessionSummary, step: &TopicId) -> String {
         let mut parts = vec![session.id.harness().display_name().to_owned()];
         if session.model.is_some() {
             parts.push(self.model_name(session));
         }
-        if let Some(node) = &session.node {
-            parts.push(node.clone());
+        let listed = self.sessions.iter().any(|known| known.id == session.id);
+        if let Some(node) = session
+            .node
+            .clone()
+            .or_else(|| listed.then(|| self.hub.local_node()).flatten())
+        {
+            parts.push(node);
         }
         let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
         if let Some(own) = atlas.topic_of(session).filter(|own| *own != step)

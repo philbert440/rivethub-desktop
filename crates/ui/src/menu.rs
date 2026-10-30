@@ -1,3 +1,7 @@
+mod words;
+
+pub use words::Noun;
+
 use std::future::Future;
 
 use app::Hub;
@@ -6,15 +10,25 @@ use gpui::{
     AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, IntoElement, MouseDownEvent, ParentElement,
     Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred, div, prelude::*, px,
 };
-use model::session::SessionSummary;
-use model::{SessionId, TopicId};
+use model::plugin::view::Action;
+use model::plugin::{PluginRef, SessionAction};
+use model::session::{SessionSummary, TaskStop};
+use model::trash::Deletion;
+use model::{SessionId, TaskId, TopicId};
 
+use words::Doomed;
+
+use crate::brand;
 use crate::memory::Focus;
 use crate::theme::Theme;
 
 pub enum MenuEvent {
     ViewInMemory(Focus),
     Deleted(TopicId),
+    /// rh deleted the session, which leaves the lists until it is used again.
+    SessionDeleted(SessionId),
+    /// The delegated task the session ran was stopped.
+    TaskStopped,
     /// A topic was closed, reopened or moved to the top level, or a session marked as history or
     /// made active.
     Filed,
@@ -24,6 +38,12 @@ pub enum MenuEvent {
     Open(Box<SessionSummary>),
     MoveSession(SessionId),
     Unplace(SessionId),
+    /// A plug-in's session-menu entry, to run on the session.
+    PluginAction {
+        plugin: PluginRef,
+        action: Action,
+        session: SessionId,
+    },
     Closed,
 }
 
@@ -33,16 +53,19 @@ pub enum MenuEvent {
 pub struct Lift(pub Option<TopicId>);
 
 /// The right-click menu on a topic or session: show it in Memory; rename, move, merge, close or
-/// delete a topic; open, move or file a session.
+/// delete a topic; open, move or file a session, or run a plug-in's entry on it.
 pub struct Menu {
     hub: Hub,
     view: Option<Focus>,
-    delete: Option<(TopicId, String)>,
+    delete: Option<Doomed>,
+    stop: Option<Doomed>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
     edits: Option<(TopicId, Option<Lift>, bool)>,
     moves: Option<(SessionSummary, bool)>,
-    confirming: bool,
+    noun: Noun,
+    plugin_actions: Vec<(PluginRef, SessionAction)>,
+    confirming: Option<Doomed>,
     busy: bool,
     problem: Option<String>,
 }
@@ -69,15 +92,24 @@ impl Menu {
         Self {
             hub,
             view,
-            delete,
+            delete: delete.map(|(topic, name)| Doomed::Topic(topic, name)),
+            stop: None,
             close: None,
             history: None,
             edits: None,
             moves: None,
-            confirming: false,
+            noun: Noun::Topic,
+            plugin_actions: Vec::new(),
+            confirming: None,
             busy: false,
             problem: None,
         }
+    }
+
+    /// Words the moves and the delete for a type or an entity rather than a topic.
+    pub fn naming(mut self, noun: Noun) -> Self {
+        self.noun = noun;
+        self
     }
 
     /// Offers Close topic, or Reopen topic when the topic is `closed`.
@@ -102,6 +134,24 @@ impl Menu {
     /// Offers Open and Move to topic, and Remove from topic for a session `placed` in one.
     pub fn moving(mut self, session: SessionSummary, placed: bool) -> Self {
         self.moves = Some((session, placed));
+        self
+    }
+
+    /// Offers Delete session, which asks first.
+    pub fn deleting(mut self, session: SessionSummary) -> Self {
+        self.delete = Some(Doomed::Session(Box::new(session)));
+        self
+    }
+
+    /// Offers Stop task for a session running a delegated task, which asks first.
+    pub fn stopping(mut self, session: SessionSummary, task: TaskId) -> Self {
+        self.stop = Some(Doomed::Task(Box::new(session), task));
+        self
+    }
+
+    /// Offers the entries plug-ins add to the menu of the session `moving` names.
+    pub fn plugin_actions(mut self, actions: Vec<(PluginRef, SessionAction)>) -> Self {
+        self.plugin_actions = actions;
         self
     }
 
@@ -132,9 +182,11 @@ impl Menu {
         .detach();
     }
 
-    fn delete(&mut self, cx: &mut Context<Self>) {
-        let Some((topic, _)) = self.delete.clone() else {
-            return;
+    fn carry_out(&mut self, doomed: Doomed, cx: &mut Context<Self>) {
+        let topic = match doomed {
+            Doomed::Topic(topic, _) => topic,
+            Doomed::Session(session) => return self.delete_session(*session, cx),
+            Doomed::Task(session, task) => return self.stop_task(*session, task, cx),
         };
         self.busy = true;
         self.problem = None;
@@ -148,6 +200,53 @@ impl Menu {
                     Ok(()) => cx.emit(MenuEvent::Deleted(topic)),
                     Err(GatewayError::Conflict(message)) => this.problem = Some(message),
                     Err(err) => this.problem = Some(format!("deleting failed: {err}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn delete_session(&mut self, session: SessionSummary, cx: &mut Context<Self>) {
+        self.busy = true;
+        self.problem = None;
+        cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let deleted = hub.delete_session(&session).await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match deleted {
+                    Ok(Deletion::Deleted) => cx.emit(MenuEvent::SessionDeleted(session.id.clone())),
+                    Ok(stayed) => {
+                        let why = stayed.refusal().unwrap_or_default();
+                        this.problem = Some(format!("It stays: {why}."));
+                    }
+                    Err(err) => this.problem = Some(format!("deleting failed: {err}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn stop_task(&mut self, session: SessionSummary, task: TaskId, cx: &mut Context<Self>) {
+        self.busy = true;
+        self.problem = None;
+        cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let stopped = hub.stop_task(&session, task).await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match stopped {
+                    Ok(TaskStop::Stopped) => cx.emit(MenuEvent::TaskStopped),
+                    Ok(TaskStop::AlreadyOver) => {
+                        this.problem = Some("That task had already ended.".to_owned());
+                    }
+                    Err(err) => this.problem = Some(format!("stopping failed: {err}")),
                 }
                 cx.notify();
             })
@@ -209,7 +308,7 @@ impl Menu {
         if movable {
             items.push(Self::emits(
                 "move-topic",
-                "Move into…",
+                self.noun.moves(),
                 move || MenuEvent::MoveInto(moved.clone()),
                 cx,
             ));
@@ -266,10 +365,55 @@ impl Menu {
         items
     }
 
+    /// Each plug-in's entry, labelled by the node it runs on.
+    fn plugin_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some((session, _)) = &self.moves else {
+            return Vec::new();
+        };
+        self.plugin_actions
+            .iter()
+            .enumerate()
+            .map(|(index, (plugin, entry))| {
+                let (plugin, action, session) = (plugin.clone(), entry.action.clone(), session.id.clone());
+                div()
+                    .id(("plugin-action", index))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|item| item.bg(Theme::selected()).text_color(Theme::on_selected()))
+                    .child(brand::icon(
+                        brand::symbol(entry.icon.as_deref()),
+                        16.,
+                        Theme::ink_dim(),
+                    ))
+                    .child(div().flex_1().child(entry.title.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .child(plugin.node.clone()),
+                    )
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(MenuEvent::PluginAction {
+                            plugin: plugin.clone(),
+                            action: action.clone(),
+                            session: session.clone(),
+                        });
+                    }))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn items(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut open = self.session_moves(cx);
         let moves = open.split_off(open.len().min(1));
         let edits = self.topic_edits(cx);
+        let plugged = self.plugin_items(cx);
         let grouped = !open.is_empty() || !edits.is_empty();
         div()
             .flex()
@@ -285,6 +429,9 @@ impl Menu {
             })
             .children(moves)
             .children(edits)
+            .when(!plugged.is_empty(), |items| {
+                items.child(Self::divider()).children(plugged)
+            })
             .when(
                 grouped && (self.close.is_some() || self.history.is_some()),
                 |items| items.child(Self::divider()),
@@ -319,40 +466,48 @@ impl Menu {
                     )))
                 },
             )
-            .when(self.delete.is_some(), |items| {
-                items.child(
-                    Self::item("delete-topic", "Delete topic")
-                        .text_color(Theme::warn())
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.confirming = true;
-                            cx.notify();
-                        })),
-                )
-            })
-            .children(self.problem.clone().filter(|_| !self.confirming).map(|problem| {
-                div()
-                    .max_w(px(280.))
-                    .px_3()
-                    .py_2()
-                    .text_xs()
-                    .text_color(Theme::warn())
-                    .child(problem)
-            }))
+            .children(
+                [("stop", &self.stop), ("delete", &self.delete)]
+                    .into_iter()
+                    .filter_map(|(id, doomed)| Some((id, doomed.clone()?)))
+                    .map(|(id, doomed)| {
+                        Self::item(id, doomed.label(self.noun))
+                            .text_color(Theme::warn())
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.confirming = Some(doomed.clone());
+                                cx.notify();
+                            }))
+                    }),
+            )
+            .children(
+                self.problem
+                    .clone()
+                    .filter(|_| self.confirming.is_none())
+                    .map(|problem| {
+                        div()
+                            .max_w(px(280.))
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(Theme::warn())
+                            .child(problem)
+                    }),
+            )
             .into_any_element()
     }
 
-    fn confirm(&self, name: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn confirm(&self, doomed: &Doomed, cx: &mut Context<Self>) -> AnyElement {
         div()
             .max_w(px(320.))
             .p_3()
             .flex()
             .flex_col()
             .gap_3()
-            .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name.to_owned()))
+            .child(div().font_weight(gpui::FontWeight::MEDIUM).child(doomed.name()))
             .child(
                 div()
                     .text_color(Theme::ink_dim())
-                    .child("Delete this topic? Its sessions go back to Uncategorized, and any subtopics move up a level."),
+                    .child(doomed.warning(self.noun)),
             )
             .children(
                 self.problem
@@ -371,17 +526,18 @@ impl Menu {
                             .hover(|button| button.text_color(Theme::ink()))
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(MenuEvent::Closed))),
                     )
-                    .child(
-                        Self::button("delete-topic-confirm", "Delete")
+                    .child({
+                        let doomed = doomed.clone();
+                        Self::button("delete-topic-confirm", doomed.verb())
                             .bg(Theme::warn_container())
                             .text_color(Theme::warn())
                             .when(self.busy, |button| button.opacity(0.5))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if !this.busy {
-                                    this.delete(cx);
+                                    this.carry_out(doomed.clone(), cx);
                                 }
-                            })),
-                    ),
+                            }))
+                    }),
             )
             .into_any_element()
     }
@@ -389,9 +545,9 @@ impl Menu {
 
 impl Render for Menu {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let body = match (&self.delete, self.confirming) {
-            (Some((_, name)), true) => self.confirm(name, cx),
-            _ => self.items(cx),
+        let body = match self.confirming.clone() {
+            Some(doomed) => self.confirm(&doomed, cx),
+            None => self.items(cx),
         };
         div()
             .min_w(px(200.))

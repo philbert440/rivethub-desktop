@@ -4,7 +4,7 @@ use model::memory::{TagChange, Verdict};
 use super::MemoryPage;
 use crate::theme::Theme;
 
-const COLUMN: f32 = 900.;
+pub(super) const COLUMN: f32 = 900.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
@@ -133,19 +133,33 @@ impl MemoryPage {
             .child(div().text_xs().text_color(Theme::ink_dim()).child(note))
     }
 
-    pub(super) fn tidy(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// What the tagger proposed and is waiting on a person for.
+    pub(super) fn tidy_section(&self, cx: &mut Context<Self>) -> AnyElement {
+        let trash = self.trash_review(cx);
         let body = match &self.tidy {
             None => div().text_color(Theme::ink_dim()).child("Loading…"),
-            Some(tidy) if tidy.tags.is_empty() && tidy.terms.is_empty() => div()
-                .pt_10()
-                .flex()
-                .justify_center()
+            Some(tidy) if tidy.waiting() == 0 && trash.is_none() => div()
+                .pt_4()
                 .text_color(Theme::ink_dim())
                 .child("All tidy. Memory adds things here when it needs you."),
             Some(tidy) => div()
                 .flex()
                 .flex_col()
                 .gap_2()
+                .when(!tidy.batches.is_empty(), |list| {
+                    list.child(Self::group(
+                        "Topics, entities and types",
+                        "changes to the trees and the wiki's pages, in the batches they were proposed in",
+                    ))
+                    .children(self.batches(cx))
+                })
+                .when_some(trash, |list, trash| {
+                    list.child(Self::group(
+                        "Sessions",
+                        "what the nodes count as obvious trash: nothing said, or one prompt with a one-word reply",
+                    ))
+                    .child(trash)
+                })
                 .when(!tidy.tags.is_empty(), |list| {
                     list.child(Self::group("Tags", "the tagger's proposals for conversations"))
                         .children(tidy.tags.iter().enumerate().map(|(index, tag)| {
@@ -170,40 +184,23 @@ impl MemoryPage {
                 }),
         };
         div()
-            .id("memory-tidy")
-            .size_full()
-            .overflow_y_scroll()
-            .py_8()
             .flex()
-            .justify_center()
+            .flex_col()
+            .gap_3()
             .child(
                 div()
-                    .w_full()
-                    .max_w(px(COLUMN))
-                    .px_8()
                     .flex()
-                    .flex_col()
+                    .items_baseline()
                     .gap_3()
+                    .child(div().text_xl().text_color(Theme::ink()).child("To tidy"))
                     .child(
                         div()
-                            .flex()
-                            .items_baseline()
-                            .gap_3()
-                            .child(div().text_xl().text_color(Theme::ink()).child("To tidy"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child("memory works on its own; these need a person"),
-                            ),
-                    )
-                    .children(
-                        self.problem
-                            .clone()
-                            .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
-                    )
-                    .child(body),
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .child("memory works on its own; these need a person"),
+                    ),
             )
+            .child(body)
             .into_any_element()
     }
 }

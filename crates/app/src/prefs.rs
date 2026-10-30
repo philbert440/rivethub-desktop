@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use model::HarnessId;
-use model::prefs::{LastLaunch, Preferences};
+use model::prefs::{Appearance, LastLaunch, Preferences, SessionView};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Hub;
@@ -9,12 +10,45 @@ use crate::Hub;
 /// The file's shape: every field optional, so a file from an older or newer build still loads.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+#[expect(clippy::struct_excessive_bools, reason = "each switch in Settings is a bool")]
 struct Stored {
+    notifications: bool,
     notify_finished: bool,
     notify_needs_you: bool,
+    notify_sound: bool,
     jump_to_newest: bool,
     #[serde(deserialize_with = "or_none")]
     last_launch: Option<StoredLaunch>,
+    #[serde(deserialize_with = "or_default")]
+    appearance: StoredAppearance,
+    #[serde(deserialize_with = "or_default")]
+    opens_in: StoredView,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredAppearance {
+    #[default]
+    Dark,
+    Light,
+    System,
+    Omarchy,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredView {
+    #[default]
+    Chat,
+    Terminal,
+}
+
+/// A value this build doesn't know, such as an appearance from a newer one, keeps the default.
+fn or_default<'de, D: Deserializer<'de>, T: Default + DeserializeOwned>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,8 +81,10 @@ impl Default for Stored {
 impl From<&Preferences> for Stored {
     fn from(prefs: &Preferences) -> Self {
         Self {
+            notifications: prefs.notifications,
             notify_finished: prefs.notify_finished,
             notify_needs_you: prefs.notify_needs_you,
+            notify_sound: prefs.notify_sound,
             jump_to_newest: prefs.jump_to_newest,
             last_launch: prefs.last_launch.as_ref().map(|launch| match launch {
                 LastLaunch::Agent { id, name } => StoredLaunch::Agent {
@@ -61,6 +97,16 @@ impl From<&Preferences> for Stored {
                     model: model.clone(),
                 },
             }),
+            appearance: match prefs.appearance {
+                Appearance::Dark => StoredAppearance::Dark,
+                Appearance::Light => StoredAppearance::Light,
+                Appearance::System => StoredAppearance::System,
+                Appearance::Omarchy => StoredAppearance::Omarchy,
+            },
+            opens_in: match prefs.opens_in {
+                SessionView::Chat => StoredView::Chat,
+                SessionView::Terminal => StoredView::Terminal,
+            },
         }
     }
 }
@@ -68,8 +114,10 @@ impl From<&Preferences> for Stored {
 impl From<Stored> for Preferences {
     fn from(stored: Stored) -> Self {
         Self {
+            notifications: stored.notifications,
             notify_finished: stored.notify_finished,
             notify_needs_you: stored.notify_needs_you,
+            notify_sound: stored.notify_sound,
             jump_to_newest: stored.jump_to_newest,
             last_launch: stored.last_launch.map(|launch| match launch {
                 StoredLaunch::Agent { id, name } => LastLaunch::Agent { id, name },
@@ -79,6 +127,16 @@ impl From<Stored> for Preferences {
                     model,
                 },
             }),
+            appearance: match stored.appearance {
+                StoredAppearance::Dark => Appearance::Dark,
+                StoredAppearance::Light => Appearance::Light,
+                StoredAppearance::System => Appearance::System,
+                StoredAppearance::Omarchy => Appearance::Omarchy,
+            },
+            opens_in: match stored.opens_in {
+                StoredView::Chat => SessionView::Chat,
+                StoredView::Terminal => SessionView::Terminal,
+            },
         }
     }
 }
@@ -125,6 +183,11 @@ fn save(prefs: &Preferences) -> std::io::Result<()> {
 }
 
 impl Hub {
+    /// Where the preferences are kept.
+    pub fn preferences_path(&self) -> Option<PathBuf> {
+        path()
+    }
+
     pub fn preferences(&self) -> Preferences {
         self.inner.prefs.read().clone()
     }
@@ -145,7 +208,7 @@ impl Hub {
 
 #[cfg(test)]
 mod tests {
-    use model::prefs::{LastLaunch, Preferences};
+    use model::prefs::{LastLaunch, Preferences, SessionView};
 
     use super::Stored;
 
@@ -154,16 +217,18 @@ mod tests {
         let older: Stored = serde_json::from_str(r#"{"notifyFinished":false}"#).unwrap_or_default();
         let older = Preferences::from(older);
         assert!(!older.notify_finished);
+        assert!(older.notifications && !older.notify_sound);
         assert!(older.jump_to_newest);
         assert_eq!(older.last_launch, None);
 
         let newer: Stored = serde_json::from_str(
-            r#"{"jumpToNewest":false,"lastLaunch":{"kind":"workflow","id":"w1"},"theme":"light"}"#,
+            r#"{"jumpToNewest":false,"lastLaunch":{"kind":"workflow","id":"w1"},"appearance":"sepia"}"#,
         )
         .unwrap_or_default();
         let newer = Preferences::from(newer);
         assert!(!newer.jump_to_newest);
         assert_eq!(newer.last_launch, None);
+        assert_eq!(newer.appearance, model::prefs::Appearance::Dark);
 
         let saved = Preferences {
             last_launch: Some(LastLaunch::Harness {
@@ -171,6 +236,10 @@ mod tests {
                 harness: model::HarnessId::new("codex"),
                 model: None,
             }),
+            appearance: model::prefs::Appearance::Omarchy,
+            opens_in: SessionView::Terminal,
+            notifications: false,
+            notify_sound: true,
             ..Preferences::default()
         };
         let json = serde_json::to_string(&Stored::from(&saved)).unwrap_or_default();

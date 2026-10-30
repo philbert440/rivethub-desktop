@@ -122,6 +122,10 @@ impl TerminalView {
         self.handle.end();
     }
 
+    pub fn exited(&self) -> bool {
+        self.handle.state() == TerminalState::Exited
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         let mods = Modifiers {

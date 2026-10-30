@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/model", "crates/term", "crates/gateway", "crates/app", "crates/ui"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
@@ -27,14 +27,16 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "1c9b4439edfe11346f462939156f2c0c09edf72f" }
+wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "3dc64cbd7d9885f69e5003fc6264d9a1cdea2792" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pki-types = "1"
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures = "0.3"
+base64 = "0.22"
 notify-rust = { version = "4.18", default-features = false, features = ["z"] }
 x509-parser = { version = "0.18", default-features = false }
+cpal = "0.16"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -57,3 +59,4 @@ missing_panics_doc = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+

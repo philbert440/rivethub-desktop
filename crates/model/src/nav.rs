@@ -1,11 +1,13 @@
+use crate::plugin::PageKey;
 use crate::{SessionId, TopicId};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Page {
     #[default]
     Workspace,
     Memory,
     Settings,
+    Plugin(PageKey),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

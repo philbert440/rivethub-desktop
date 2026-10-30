@@ -1,18 +1,13 @@
+mod stream;
+
 use model::{
-    HarnessId, NativeSessionId, SessionId,
-    plan::{Plan, Step, StepStatus},
-    session::{
-        Activity, Approval, ContextUsage, Role, SessionEvent, SessionStatus, SessionSummary, ToolCall,
-        ToolState, Turn,
-    },
-    usage::Usage,
+    HarnessId, NativeSessionId, SessionId, TaskId,
+    session::{SessionStatus, SessionSummary},
 };
-use wire::gateway::sessions::{
-    HarnessTranscriptTurn, MessageUsage, SessionMessageRole, TranscriptBlock, TranscriptToolStatus,
-};
-use wire::harness::{HarnessEvent, HarnessSessionStatus, HarnessSessionSummary, HarnessStatus};
+use wire::harness::{HarnessSessionStatus, HarnessSessionSummary};
 
 use crate::GatewayError;
+pub use stream::{Running, event};
 
 pub fn session(id: &wire::session_id::SessionId) -> SessionId {
     let raw = id.as_str();
@@ -63,6 +58,13 @@ pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::R
     model::agents::Roster {
         node: raw.node,
         agents,
+        storage: model::agents::AgentStorage {
+            shared_presets: raw
+                .backend
+                .map(|backend| backend == wire::gateway::agents::AgentStoreBackend::Postgres),
+            folder_root: raw.directory_root,
+            shared_folder: raw.shared_dir,
+        },
     }
 }
 
@@ -218,6 +220,21 @@ pub fn page(raw: wire::gateway::wiki::WikiPageResponse) -> model::wiki::Page {
         tags: raw.tags,
         updated_ms: raw.updated_at.timestamp_millis(),
         markdown: raw.markdown,
+        current_state: raw.current_state,
+        article: raw.article,
+        citations: raw
+            .citations
+            .into_iter()
+            .map(|citation| model::wiki::Citation {
+                summary: citation.summary_id,
+                at_ms: citation.date.map(|date| date.timestamp_millis()),
+                conversation: citation.conversation_id,
+                session: citation.session_id.as_ref().map(session),
+                title: citation.title,
+                channel: citation.channel,
+                topic: citation.topic_id.map(model::TopicId::new),
+            })
+            .collect(),
     }
 }
 
@@ -251,6 +268,7 @@ pub fn listing(raw: wire::gateway::wiki::WikiTopic) -> model::wiki::Listing {
         slug: raw.slug,
         title: raw.title,
         updated_ms: raw.updated_at.timestamp_millis(),
+        owner: raw.topic_id.map(model::TopicId::new),
     }
 }
 
@@ -342,174 +360,14 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
         cwd: raw.cwd,
         updated_at_ms: raw.updated_at.timestamp_millis(),
         parent: raw.parent_session_id.as_ref().map(session),
+        task: raw.task_id.map(TaskId::new),
         node: None,
         blocked: raw.blocked.unwrap_or(false),
     }
 }
 
-fn plan(entries: Vec<wire::harness::PlanEntry>) -> Plan {
-    Plan {
-        steps: entries
-            .into_iter()
-            .map(|entry| Step {
-                id: None,
-                content: entry.content,
-                status: match entry.status {
-                    wire::harness::PlanStatus::Pending => StepStatus::Pending,
-                    wire::harness::PlanStatus::InProgress => StepStatus::InProgress,
-                    wire::harness::PlanStatus::Completed => StepStatus::Completed,
-                },
-            })
-            .collect(),
-    }
-}
-
-/// What a turn reports as it ends. rh counts cache reads and writes in its prompt tokens.
-fn reported(raw: &wire::stream::LlmUsage) -> Usage {
-    Usage {
-        input: raw.prompt_tokens,
-        cached: raw.cached_tokens.or(raw.cache_read_tokens).unwrap_or(0),
-        output: raw.completion_tokens,
-    }
-}
-
-fn usage(raw: &MessageUsage) -> Usage {
-    Usage {
-        input: raw.prompt_tokens,
-        cached: raw.cached_tokens,
-        output: raw.completion_tokens,
-    }
-}
-
-fn turn(raw: HarnessTranscriptTurn) -> Turn {
-    let ends_with_text = raw.last_block.is_none_or(|block| block == TranscriptBlock::Text);
-    Turn {
-        ends_with_text,
-        role: match raw.role {
-            SessionMessageRole::User => Role::User,
-            SessionMessageRole::Assistant => Role::Assistant,
-        },
-        text: raw.text,
-        thinking: raw.thinking.unwrap_or_default(),
-        model: raw.model,
-        usage: raw.usage.as_ref().map(usage).unwrap_or_default(),
-        started_at_ms: raw.started_at_ms,
-        ended_at_ms: raw.ended_at_ms,
-        files: raw
-            .attachments
-            .unwrap_or_default()
-            .into_iter()
-            .map(|file| model::prompt::SentFile {
-                media_type: file.media_type,
-                name: file.name,
-                upload: file.upload_id,
-            })
-            .collect(),
-        tools: raw
-            .tools
-            .unwrap_or_default()
-            .into_iter()
-            .map(|tool| {
-                let state = match tool.status {
-                    TranscriptToolStatus::Running => ToolState::Running,
-                    TranscriptToolStatus::Done => ToolState::Done,
-                    TranscriptToolStatus::Error => ToolState::Failed,
-                };
-                let input = crate::tool_input::parse(&tool.name, tool.input.as_ref().or(tool.args.as_ref()));
-                let output = tool
-                    .result_text
-                    .as_deref()
-                    .map(|text| crate::tool_input::output(&tool.name, text, state == ToolState::Failed));
-                ToolCall {
-                    id: tool.id,
-                    name: tool.name,
-                    state,
-                    input,
-                    output,
-                }
-            })
-            .collect(),
-    }
-}
-
-fn context(turns: &[HarnessTranscriptTurn], window: Option<u64>) -> Option<ContextUsage> {
-    let window = window?;
-    let used = turns
-        .iter()
-        .rev()
-        .find_map(|turn| turn.usage.as_ref())
-        .map(|usage| usage.prompt_tokens + usage.completion_tokens)?;
-    Some(ContextUsage { used, window })
-}
-
-pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
-    Some(match raw {
-        HarnessEvent::AssistantDelta { text, .. } => SessionEvent::AssistantText(text),
-        HarnessEvent::ReasoningDelta { text, .. } => SessionEvent::Reasoning(text),
-        HarnessEvent::ToolUse {
-            tool_call_id,
-            name,
-            input,
-            ..
-        } => SessionEvent::ToolStarted {
-            id: tool_call_id,
-            input: crate::tool_input::parse(&name, Some(&input)),
-            name,
-        },
-        HarnessEvent::ToolResult {
-            tool_call_id,
-            name,
-            output,
-            is_error,
-            ..
-        } => {
-            let failed = is_error.unwrap_or(false);
-            SessionEvent::ToolFinished {
-                id: tool_call_id,
-                failed,
-                output: crate::tool_input::output(&name, &output, failed),
-            }
-        }
-        HarnessEvent::ApprovalRequest {
-            request_id,
-            name,
-            reason,
-            ..
-        } => SessionEvent::ApprovalRequested(Approval {
-            request_id,
-            tool: name,
-            reason,
-        }),
-        HarnessEvent::ApprovalResolved { request_id, .. } => SessionEvent::ApprovalResolved { request_id },
-        HarnessEvent::Plan { entries, .. } => SessionEvent::Plan(plan(entries)),
-        HarnessEvent::TurnComplete { usage, .. } => SessionEvent::TurnComplete(usage.as_ref().map(reported)),
-        HarnessEvent::Error { message, .. } => SessionEvent::Error(message),
-        HarnessEvent::Transcript {
-            turns,
-            context_window,
-            ..
-        } => {
-            let usage = context(&turns, context_window);
-            SessionEvent::Snapshot {
-                turns: turns.into_iter().map(turn).collect(),
-                context: usage,
-            }
-        }
-        HarnessEvent::Status(frame) => SessionEvent::Activity(match frame.status {
-            HarnessStatus::Working => Activity::Working,
-            HarnessStatus::Blocked => Activity::Blocked,
-            HarnessStatus::Idle => Activity::Idle,
-        }),
-        HarnessEvent::SessionCreated { .. }
-        | HarnessEvent::SessionUpdated { .. }
-        | HarnessEvent::Prompt { .. } => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn every_effort_the_composer_offers_is_one_rh_takes() {
         for effort in model::agents::EFFORTS {
@@ -518,14 +376,5 @@ mod tests {
                 "rh has no {effort} effort"
             );
         }
-    }
-
-    #[test]
-    fn context_counts_cached_prompt_tokens_once() {
-        let turn: HarnessTranscriptTurn = serde_json::from_str(
-            r#"{"role":"assistant","text":"hi","usage":{"promptTokens":15,"completionTokens":3,"cachedTokens":5}}"#,
-        )
-        .unwrap_or_else(|err| unreachable!("fixture: {err}"));
-        assert_eq!(context(&[turn], Some(100)).map(|usage| usage.used), Some(18));
     }
 }

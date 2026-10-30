@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gateway::{TermInput, TermOutput};
 use model::SessionId;
@@ -8,9 +7,9 @@ use term::{GridSize, Screen};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 
-const FIRST_RETRY: Duration = Duration::from_millis(500);
-const LAST_RETRY: Duration = Duration::from_secs(15);
 const INPUT_BUFFER: usize = 256;
+/// Keys typed while the terminal reconnects wait for it, up to this many bytes.
+const HELD_INPUT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalState {
@@ -91,13 +90,18 @@ impl Actor {
     }
 
     async fn run(self, mut commands: mpsc::Receiver<Command>) {
-        let mut retry = FIRST_RETRY;
+        let mut retry = self.hub.backoff(self.node.as_deref());
+        // Keys typed while no stream was attached, sent as soon as one is.
+        let mut held = Vec::new();
         loop {
             let size = self.screen.read().size();
             let attached = self.attach(size).await;
             match attached {
                 Ok(mut stream) => {
-                    retry = FIRST_RETRY;
+                    retry.reset();
+                    // The node replays the terminal's output to every attach, so the screen starts
+                    // over rather than showing it twice after a reconnect.
+                    *self.screen.write() = Screen::new(size);
                     let _ = stream
                         .input
                         .send(TermInput::Claim {
@@ -105,6 +109,12 @@ impl Actor {
                             rows: size.rows,
                         })
                         .await;
+                    if !held.is_empty() {
+                        let _ = stream
+                            .input
+                            .send(TermInput::Bytes(std::mem::take(&mut held)))
+                            .await;
+                    }
                     self.set_state(TerminalState::Live);
                     loop {
                         tokio::select! {
@@ -125,7 +135,11 @@ impl Actor {
                             },
                             command = commands.recv() => match command {
                                 Some(Command::Bytes(bytes)) => {
-                                    let _ = stream.input.send(TermInput::Bytes(bytes)).await;
+                                    if let Err(unsent) = stream.input.send(TermInput::Bytes(bytes)).await
+                                        && let TermInput::Bytes(bytes) = unsent.0
+                                    {
+                                        hold(&mut held, &bytes);
+                                    }
                                 }
                                 Some(Command::Resize(size)) => {
                                     self.screen.write().resize(size);
@@ -143,17 +157,29 @@ impl Actor {
                 Err(err) => tracing::warn!(%err, session = %self.session, "terminal attach failed"),
             }
             self.set_state(TerminalState::Connecting);
-            tokio::select! {
-                () = tokio::time::sleep(retry) => {}
-                command = commands.recv() => match command {
-                    Some(Command::Resize(size)) => self.screen.write().resize(size),
-                    Some(Command::Bytes(_) | Command::End) => {}
-                    None => return,
-                },
+            let wait = tokio::time::sleep(retry.next_wait());
+            tokio::pin!(wait);
+            loop {
+                tokio::select! {
+                    () = &mut wait => break,
+                    command = commands.recv() => match command {
+                        Some(Command::Bytes(bytes)) => hold(&mut held, &bytes),
+                        Some(Command::Resize(size)) => {
+                            self.screen.write().resize(size);
+                            break;
+                        }
+                        Some(Command::End) => break,
+                        None => return,
+                    },
+                }
             }
-            retry = (retry * 2).min(LAST_RETRY);
         }
     }
+}
+
+fn hold(held: &mut Vec<u8>, bytes: &[u8]) {
+    let room = HELD_INPUT.saturating_sub(held.len());
+    held.extend_from_slice(&bytes[..bytes.len().min(room)]);
 }
 
 pub fn spawn(

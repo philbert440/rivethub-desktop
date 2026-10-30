@@ -1,12 +1,15 @@
 mod agent_editor;
+mod appearance;
 mod brand;
 mod copy;
 mod input;
 mod instance;
+mod launch_choice;
 mod launcher;
 mod markdown_view;
 mod memory;
 mod menu;
+mod plugin;
 mod question_card;
 mod session_pane;
 mod settings;
@@ -15,6 +18,7 @@ mod side_panel;
 mod terminal_view;
 mod text;
 mod theme;
+mod tip;
 mod tool_view;
 mod topic_picker;
 mod topic_rail;
@@ -84,6 +88,16 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", workspace::CancelRetitle, Some("TopicRetitle")),
         KeyBinding::new("escape", topic_rail::CancelDecision, Some("RailDecision")),
         KeyBinding::new("ctrl-shift-t", ToggleTerminal, Some("Session")),
+        KeyBinding::new("escape", session_pane::EscapeComposer, Some("Composer")),
+        KeyBinding::new("ctrl-shift-enter", session_pane::SteerDraft, Some("Composer")),
+        KeyBinding::new("ctrl-,", shell::OpenSettings, None),
+        KeyBinding::new("delete", plugin::DeleteSelection, Some("PluginCanvas")),
+        KeyBinding::new("backspace", plugin::DeleteSelection, Some("PluginCanvas")),
+        KeyBinding::new("enter", plugin::Activate, Some("PluginCanvas")),
+        KeyBinding::new("escape", plugin::ClearSelection, Some("PluginCanvas")),
+        KeyBinding::new("ctrl-=", plugin::ZoomIn, Some("PluginCanvas")),
+        KeyBinding::new("ctrl--", plugin::ZoomOut, Some("PluginCanvas")),
+        KeyBinding::new("ctrl-0", plugin::FitView, Some("PluginCanvas")),
         KeyBinding::new("enter", input::Submit, Some("TextInput")),
         KeyBinding::new("shift-enter", input::Newline, Some("TextInput")),
         KeyBinding::new("up", input::Up, Some("TextInput")),
@@ -115,13 +129,18 @@ fn state_dir() -> Option<PathBuf> {
     Some(state.join("rivethub-desktop"))
 }
 
+/// Where this app writes its log.
+pub fn log_path() -> Option<PathBuf> {
+    Some(state_dir()?.join("rivethub-desktop.log"))
+}
+
 fn log_file() -> Option<std::fs::File> {
-    let dir = state_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
+    let path = log_path()?;
+    std::fs::create_dir_all(path.parent()?).ok()?;
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("rivethub-desktop.log"))
+        .open(path)
         .ok()
 }
 

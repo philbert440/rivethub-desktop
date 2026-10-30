@@ -213,7 +213,7 @@ pub fn row(tool: &ToolCall, fold: Fold, cx: &Context<'_>) -> AnyElement {
     if !can_open {
         header = header.cursor_default();
     }
-    let header = if running {
+    let header = if running && !cx.lost {
         header
             .with_animation(
                 id,

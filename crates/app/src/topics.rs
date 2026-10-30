@@ -2,8 +2,9 @@ use gateway::GatewayError;
 use std::collections::HashMap;
 
 use model::decisions::{Decision, Group, on_page};
+use model::entities::Catalog;
 use model::preview::StartupPreview;
-use model::topics::{Filing, Suggestion, Topic};
+use model::topics::{Filing, Suggestion, Topic, TopicFiling};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -72,34 +73,58 @@ impl Hub {
         .await
     }
 
+    /// The topics and what is filed under them: two requests to a node with rh's bulk route, else
+    /// one per topic.
     pub async fn topics(&self) -> Result<Filing, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
-            let topics = gateway.topics().await?;
-            let filed =
-                futures::future::try_join_all(topics.iter().map(|topic| gateway.topic_sessions(&topic.id)))
-                    .await?;
-            let placements = topics
-                .iter()
-                .zip(filed)
-                .flat_map(|(topic, sessions)| sessions.into_iter().map(|session| (session, topic.id.clone())))
-                .collect();
-            let marks = gateway.history_marks().await?;
-            Ok(Filing {
-                topics,
-                placements,
+            let (topics, bulk) = futures::future::try_join(gateway.topics(), gateway.filing()).await?;
+            let (filed, marks) = if let Some(bulk) = bulk {
+                bulk
+            } else {
+                let each = futures::future::try_join_all(
+                    topics.iter().map(|topic| gateway.topic_sessions(&topic.id)),
+                )
+                .await?;
+                let filed = each.into_iter().fold(TopicFiling::default(), |mut all, one| {
+                    all.sessions.extend(one.sessions);
+                    all.conversations.extend(one.conversations);
+                    all
+                });
+                (filed, gateway.history_marks().await?)
+            };
+            let mut filing = Filing {
                 marks,
-            })
+                conversations: filed.conversations,
+                ..Filing::default()
+            };
+            for placed in filed.sessions {
+                filing
+                    .placements
+                    .insert(placed.session.clone(), placed.topic.clone());
+                filing.filed_by.insert(placed.session.clone(), placed.by);
+                filing.remembered.push(placed.summary());
+            }
+            filing.topics = topics;
+            Ok(filing)
         })
         .await
     }
 
+    /// Where each of `sessions` might go: one request to a node with rh's bulk route, else one per
+    /// session.
     pub async fn suggestions(
         &self,
         sessions: Vec<SessionId>,
     ) -> Result<HashMap<SessionId, Suggestion>, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
+            if let Some(mut all) = gateway.suggestions().await? {
+                return Ok(sessions
+                    .into_iter()
+                    .filter_map(|session| Some((session.clone(), all.remove(&session)?)))
+                    .collect());
+            }
             let found =
                 futures::future::try_join_all(sessions.iter().map(|session| gateway.suggestion(session)))
                     .await?;
@@ -110,6 +135,31 @@ impl Hub {
                 .collect())
         })
         .await
+    }
+
+    /// The entity types and the entities under them.
+    pub async fn catalog(&self) -> Result<Catalog, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.catalog().await }).await
+    }
+
+    pub async fn create_type(&self, name: String, parent: Option<TopicId>) -> Result<Topic, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.create_type(&name, parent.as_ref()).await })
+            .await
+    }
+
+    pub async fn set_aliases(&self, topic: TopicId, aliases: Vec<String>) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.set_aliases(&topic, aliases).await })
+            .await
+    }
+
+    /// Takes a conversation back out of its topic; one the categorizer filed is kept as a correction.
+    pub async fn unfile_conversation(&self, conversation: String) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.unfile_conversation(&conversation).await })
+            .await
     }
 
     pub async fn search_topics(&self, query: String) -> Result<Vec<Topic>, GatewayError> {

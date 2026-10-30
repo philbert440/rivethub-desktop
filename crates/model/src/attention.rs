@@ -32,6 +32,7 @@ mod tests {
             cwd: None,
             updated_at_ms,
             parent: None,
+            task: None,
             node: None,
             blocked,
         }

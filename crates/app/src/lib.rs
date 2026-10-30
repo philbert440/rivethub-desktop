@@ -1,18 +1,27 @@
+mod backoff;
+mod chime;
 mod feed;
+mod listing;
 mod memory;
 mod notify;
+pub mod omarchy;
+mod plugins;
 mod prefs;
 mod session;
 mod status;
 mod terminal;
 mod topics;
+mod trash;
 
 pub use feed::WorkspaceFeed;
+pub use listing::{AllSessions, Missing, SessionListing};
 pub use memory::{Library, Tidy};
+pub use plugins::{Installed, NodeNotice, PluginWatch};
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
+pub use trash::TrashReview;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,8 +32,8 @@ use model::prefs::Preferences;
 use model::preview::Previews;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
-use model::session::{Described, SessionSummary};
-use model::{HarnessId, TopicId};
+use model::session::{Described, SessionSummary, TaskStop};
+use model::{HarnessId, TaskId, TopicId};
 use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 
@@ -84,6 +93,11 @@ impl Hub {
         Ok(gateway)
     }
 
+    /// The reconnect backoff for a stream that follows `node`, or this client's own node.
+    fn backoff(&self, node: Option<&str>) -> backoff::Backoff {
+        backoff::Backoff::new(node.is_none_or(|node| self.is_local(node)))
+    }
+
     fn is_local(&self, node: &str) -> bool {
         self.inner
             .local_node
@@ -137,6 +151,35 @@ impl Hub {
             let mut renamed = gateway.rename(&session, &title).await?;
             renamed.node = node;
             Ok(renamed)
+        })
+        .await
+    }
+
+    /// Stops the delegated task the session runs, asking the node it runs on.
+    pub async fn stop_task(&self, summary: &SessionSummary, task: TaskId) -> Result<TaskStop, GatewayError> {
+        let hub = self.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            gateway.stop_task(&task).await
+        })
+        .await
+    }
+
+    /// A new chat on the session's node that carries its conversation up to the reply to its
+    /// `prompts`th prompt.
+    pub async fn fork(&self, summary: &SessionSummary, prompts: u32) -> Result<SessionSummary, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let mut forked = hub
+                .gateway_for(node.as_deref())
+                .await?
+                .fork(&session, prompts)
+                .await?;
+            forked.node = node;
+            Ok(forked)
         })
         .await
     }
@@ -270,63 +313,6 @@ impl Hub {
         })
         .await
         .unwrap_or_default()
-    }
-
-    /// Every session every reachable node lists, across all of its harnesses, newest first.
-    pub async fn all_sessions(&self) -> Result<AllSessions, GatewayError> {
-        let hub = self.clone();
-        self.on_runtime(async move {
-            let local = hub.inner.local_node.read().clone();
-            let mut nodes = vec![(None, hub.inner.local.clone())];
-            let mesh = hub.inner.local.mesh().await.ok();
-            for node in mesh.iter().flatten() {
-                let is_local = local.as_deref().is_some_and(|name| node.answers_to(name));
-                if node.online
-                    && !is_local
-                    && let Ok(gateway) = hub.gateway_for(Some(&node.name)).await
-                {
-                    nodes.push((Some(node.name.clone()), gateway));
-                }
-            }
-            let other_nodes = mesh.map(|_| nodes.iter().filter_map(|(node, _)| node.clone()).collect());
-            let listed = futures::future::join_all(nodes.into_iter().map(|(node, gateway)| {
-                let hub = hub.clone();
-                async move {
-                    let sessions = match hub.offers(node.as_deref(), &gateway).await {
-                        Ok(offers) => node_sessions(&gateway, &offers).await,
-                        Err(err) => Err(err),
-                    };
-                    (node, sessions)
-                }
-            }))
-            .await;
-            let mut all = AllSessions {
-                other_nodes,
-                ..AllSessions::default()
-            };
-            let mut seen = HashSet::new();
-            for (node, sessions) in listed {
-                match sessions {
-                    Ok(sessions) => {
-                        for mut session in sessions {
-                            if seen.insert(session.id.clone()) {
-                                if session.node.is_none() {
-                                    session.node.clone_from(&node);
-                                }
-                                all.sessions.push(session);
-                            }
-                        }
-                    }
-                    Err(_) => all
-                        .unreachable
-                        .push(node.unwrap_or_else(|| "this node".to_owned())),
-                }
-            }
-            all.sessions
-                .sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-            Ok(all)
-        })
-        .await
     }
 
     pub async fn agents(&self) -> Result<Roster, GatewayError> {
@@ -472,30 +458,4 @@ impl Hub {
         self.inner.offers.write().insert(key, offers.clone());
         Ok(offers)
     }
-}
-
-#[derive(Debug, Default)]
-pub struct AllSessions {
-    pub sessions: Vec<SessionSummary>,
-    pub unreachable: Vec<String>,
-    /// The other online nodes, or `None` when the mesh couldn't be read.
-    pub other_nodes: Option<Vec<String>>,
-}
-
-async fn node_sessions(
-    gateway: &Gateway,
-    offers: &[model::harness::HarnessOffer],
-) -> Result<Vec<SessionSummary>, GatewayError> {
-    let lists = futures::future::join_all(
-        offers
-            .iter()
-            .filter(|offer| offer.lists_sessions)
-            .map(|offer| gateway.sessions(&offer.id)),
-    )
-    .await;
-    let mut sessions = Vec::new();
-    for list in lists {
-        sessions.extend(list?);
-    }
-    Ok(sessions)
 }

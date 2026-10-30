@@ -137,6 +137,7 @@ mod tests {
             cwd: None,
             updated_at_ms: 0,
             parent: None,
+            task: None,
             node: None,
             blocked: false,
         }

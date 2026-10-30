@@ -109,6 +109,42 @@ fn todos(input: &JsonObject) -> Option<Todos> {
     })
 }
 
+/// Claude's `TaskCreate` adds one task, numbered after the ones `created` before it, and
+/// `TaskUpdate` moves one by that number; a deleted task leaves the list. Read from a transcript
+/// only: while Claude streams, the harness sends the whole list as a plan.
+pub fn claude_task(name: &str, input: Option<&JsonObject>, created: &mut u32) -> Option<ToolInput> {
+    let input = input?;
+    let item = match name {
+        "TaskCreate" => {
+            *created += 1;
+            Todo {
+                id: Some(created.to_string()),
+                content: text(input, &["subject"])?,
+                status: Some(StepStatus::Pending),
+            }
+        }
+        "TaskUpdate" => Todo {
+            id: Some(match input.get("taskId")? {
+                Value::String(id) => id.clone(),
+                other => other.to_string(),
+            }),
+            content: text(input, &["subject"]).unwrap_or_default(),
+            status: match input.get("status").and_then(Value::as_str)? {
+                "pending" => Some(StepStatus::Pending),
+                "in_progress" => Some(StepStatus::InProgress),
+                "completed" => Some(StepStatus::Completed),
+                "deleted" => None,
+                _ => return None,
+            },
+        },
+        _ => return None,
+    };
+    Some(ToolInput::Todos(Todos {
+        items: vec![item],
+        merge: true,
+    }))
+}
+
 fn fields(input: &JsonObject) -> ToolInput {
     let shown: Vec<(String, String)> = input
         .as_map()
@@ -270,6 +306,30 @@ mod tests {
             ),
             (Some("uptime"), None, "")
         );
+    }
+
+    #[test]
+    fn claude_tasks_read_as_the_list_they_keep() {
+        let mut created = 1;
+        let added = object(r#"{"subject":"Print the date","activeForm":"Printing the date"}"#);
+        let Some(ToolInput::Todos(added)) = claude_task("TaskCreate", Some(&added), &mut created) else {
+            unreachable!("TaskCreate adds a task");
+        };
+        assert_eq!(
+            (
+                added.items[0].id.as_deref(),
+                added.items[0].content.as_str(),
+                added.merge
+            ),
+            (Some("2"), "Print the date", true)
+        );
+        let moved = object(r#"{"taskId":"2","status":"in_progress"}"#);
+        let Some(ToolInput::Todos(update)) = claude_task("TaskUpdate", Some(&moved), &mut created) else {
+            unreachable!("TaskUpdate moves a task");
+        };
+        assert_eq!(update.items[0].status, Some(StepStatus::InProgress));
+        assert_eq!(claude_task("Bash", Some(&moved), &mut created), None);
+        assert_eq!(created, 2);
     }
 
     #[test]

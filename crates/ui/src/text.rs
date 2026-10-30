@@ -60,7 +60,11 @@ pub fn clock(at_ms: i64) -> String {
     }
 }
 
+/// How long ago `at_ms` was, such as "5m"; nothing for a time memory doesn't know, which is 0.
 pub fn ago(now_ms: i64, at_ms: i64) -> String {
+    if at_ms <= 0 {
+        return String::new();
+    }
     let minutes = (now_ms - at_ms).max(0) / 60_000;
     match minutes {
         0 => "now".to_owned(),
@@ -78,6 +82,32 @@ pub fn ago_phrase(now_ms: i64, at_ms: i64) -> String {
     } else {
         format!("{} ago", ago(now_ms, at_ms))
     }
+}
+
+/// A length of time as a person says it: "850 ms", "1m 12s", "2h 5m".
+pub fn duration(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0 => format!("{ms} ms"),
+        1..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m {}s", seconds / 60, seconds % 60),
+        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
+/// A size in bytes, to one decimal past a kilobyte: "512 B", "4.1 KB", "17.8 MB".
+pub fn bytes(count: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if count < 1024 {
+        return format!("{count} B");
+    }
+    let mut tenths = count * 10 / 1024;
+    let mut unit = 0;
+    while tenths >= 10_240 && unit + 1 < UNITS.len() {
+        tenths /= 1024;
+        unit += 1;
+    }
+    format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[unit])
 }
 
 #[cfg(test)]

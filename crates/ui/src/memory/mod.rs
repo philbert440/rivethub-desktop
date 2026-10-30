@@ -1,9 +1,17 @@
 mod ask;
+mod conversation;
 mod decisions;
+mod entities;
+mod entity_edit;
+mod members;
+mod mentions;
+mod proposals;
 mod session;
 mod sessions;
+mod stats;
 mod tidy;
 mod topics;
+mod trash;
 
 use std::sync::Arc;
 
@@ -13,9 +21,12 @@ use gpui::{
     ScrollHandle, Styled, Subscription, Window, div, prelude::*, px,
 };
 use model::decisions::Group;
+use model::entities::Catalog;
 use model::markdown::Block;
-use model::memory::{Found, Period};
+use model::memory::{Found, Period, Stats};
 use model::session::SessionSummary;
+use model::tidy::Upkeep;
+use model::topics::FiledConversation;
 use model::wiki::{Listing, Page};
 use model::{SessionId, TopicId};
 
@@ -31,17 +42,19 @@ enum Tab {
     #[default]
     Ask,
     Topics,
-    Tidy,
+    Entities,
+    Stats,
 }
 
 impl Tab {
-    const ALL: [Self; 3] = [Self::Ask, Self::Topics, Self::Tidy];
+    const ALL: [Self; 4] = [Self::Ask, Self::Topics, Self::Entities, Self::Stats];
 
     fn label(self) -> &'static str {
         match self {
             Self::Ask => "Ask",
             Self::Topics => "Topics",
-            Self::Tidy => "To tidy",
+            Self::Entities => "Entities",
+            Self::Stats => "Stats",
         }
     }
 
@@ -49,7 +62,8 @@ impl Tab {
         match self {
             Self::Ask => "icons/search.svg",
             Self::Topics => "icons/book-open.svg",
-            Self::Tidy => "icons/tags.svg",
+            Self::Entities => "icons/library.svg",
+            Self::Stats => "icons/tags.svg",
         }
     }
 }
@@ -59,12 +73,18 @@ impl Tab {
 pub enum Focus {
     Topic(TopicId),
     Session(Box<SessionSummary>),
+    /// A filed conversation that is no harness session.
+    Conversation(Box<FiledConversation>),
 }
 
 pub enum MemoryEvent {
     OpenSession(SessionId),
     OpenTopic(TopicId),
     TopicDeleted(TopicId),
+    /// Memory filed or unfiled something, so the workspace lists topics again.
+    Refiled,
+    /// The trash review deleted these sessions, which leave the workspace's lists too.
+    SessionsDeleted(Vec<SessionId>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,12 +117,20 @@ pub struct MemoryPage {
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
+    review: proposals::Review,
+    trash: trash::Sweep,
+    stats: Option<Stats>,
+    upkeep: Option<Upkeep>,
+    catalog: Option<Catalog>,
+    browse: entities::Browse,
+    entity_find: Entity<TextInput>,
     viewing: Option<session::Viewing>,
+    remembering: Option<conversation::Remembered>,
     listed: Arc<Listed>,
     all_sessions: bool,
     shown: bool,
     menu: Option<OpenMenu>,
-    _submitted: [Subscription; 2],
+    _submitted: [Subscription; 3],
 }
 
 impl EventEmitter<MemoryEvent> for MemoryPage {}
@@ -111,7 +139,8 @@ impl Focusable for MemoryPage {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match self.tab {
             Tab::Topics => self.find.focus_handle(cx),
-            Tab::Ask | Tab::Tidy => self.query.focus_handle(cx),
+            Tab::Entities => self.entity_find.focus_handle(cx),
+            Tab::Ask | Tab::Stats => self.query.focus_handle(cx),
         }
     }
 }
@@ -127,7 +156,11 @@ impl MemoryPage {
             this.finding = Some(text.clone());
             this.load_pages(cx);
         });
-        let page = Self {
+        let entity_find = cx.new(|cx| TextInput::new("Find an entity by name or alias", cx));
+        let sought = cx.subscribe(&entity_find, |this, _, Submitted(text), cx| {
+            this.find_entities(text, cx);
+        });
+        let mut page = Self {
             hub,
             tab: Tab::Ask,
             problem: None,
@@ -145,14 +178,23 @@ impl MemoryPage {
             deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
+            review: proposals::Review::default(),
+            trash: trash::Sweep::default(),
+            stats: None,
+            upkeep: None,
+            catalog: None,
+            browse: entities::Browse::default(),
+            entity_find,
             viewing: None,
+            remembering: None,
             listed: Arc::default(),
             all_sessions: false,
             shown: false,
             menu: None,
-            _submitted: [asked, found],
+            _submitted: [asked, found, sought],
         };
         page.load_tidy(cx);
+        page.load_trash(cx);
         page
     }
 
@@ -163,6 +205,7 @@ impl MemoryPage {
                 self.open_topic(topic, cx);
             }
             Focus::Session(session) => self.open_session(*session, cx),
+            Focus::Conversation(conversation) => self.open_conversation(*conversation, true, cx),
         }
     }
 
@@ -196,6 +239,7 @@ impl MemoryPage {
     fn select(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;
         self.viewing = None;
+        self.remembering = None;
         self.problem = None;
         match tab {
             Tab::Ask => {}
@@ -205,7 +249,13 @@ impl MemoryPage {
                     self.load_pages(cx);
                 }
             }
-            Tab::Tidy => self.load_tidy(cx),
+            Tab::Entities => self.load_catalog(cx),
+            Tab::Stats => {
+                self.load_tidy(cx);
+                self.load_trash(cx);
+                self.load_stats(cx);
+                self.load_catalog(cx);
+            }
         }
         cx.notify();
     }
@@ -216,10 +266,7 @@ impl MemoryPage {
     }
 
     fn tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let waiting = self
-            .tidy
-            .as_ref()
-            .map_or(0, |tidy| tidy.tags.len() + tidy.terms.len());
+        let waiting = self.tidy.as_ref().map_or(0, app::Tidy::waiting) + self.trash.waiting();
         div()
             .flex()
             .items_center()
@@ -228,7 +275,7 @@ impl MemoryPage {
             .rounded(px(18.))
             .bg(Theme::panel())
             .children(Tab::ALL.map(|tab| {
-                let here = tab == self.tab && self.viewing.is_none();
+                let here = tab == self.tab && self.viewing.is_none() && self.remembering.is_none();
                 let ink = if here {
                     Theme::on_selected()
                 } else {
@@ -256,7 +303,7 @@ impl MemoryPage {
                     }))
                     .child(brand::icon(tab.icon(), 14., ink))
                     .child(tab.label())
-                    .when(tab == Tab::Tidy && waiting > 0, |chip| {
+                    .when(tab == Tab::Stats && waiting > 0, |chip| {
                         chip.child(
                             div()
                                 .px_2()
@@ -275,9 +322,11 @@ impl Render for MemoryPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.tab {
             _ if self.viewing.is_some() => self.session_page(window, cx),
+            _ if self.remembering.is_some() => self.conversation_page(window, cx),
             Tab::Ask => self.ask(cx),
             Tab::Topics => self.topics(window, cx),
-            Tab::Tidy => self.tidy(cx),
+            Tab::Entities => self.entities(window, cx),
+            Tab::Stats => self.stats(cx),
         };
         div()
             .size_full()
@@ -286,5 +335,6 @@ impl Render for MemoryPage {
             .child(shell::header().child(shell::title("Memory")).child(self.tabs(cx)))
             .child(shell::tile().flex().flex_col().child(content))
             .children(self.menu.as_ref().map(OpenMenu::overlay))
+            .children(self.choosing_overlay(cx))
     }
 }

@@ -2,16 +2,22 @@ mod chat;
 mod error;
 mod events;
 mod memory;
+mod pairing;
+mod plugins;
 mod previews;
+mod socket;
+mod tasks;
 mod terminal;
+mod tidy;
 mod tls;
 mod tool_input;
 mod topics;
 mod translate;
+mod trash;
 
 pub use chat::SessionStream;
 pub use error::GatewayError;
-pub use events::WorkspaceEvent;
+pub use events::{PluginEvent, WorkspaceEvent};
 pub use terminal::{TermInput, TermOutput, TerminalStream};
 pub use tls::certificates;
 
@@ -25,6 +31,10 @@ use serde::{Deserialize, Serialize};
 
 /// The roles a memory search leaves out, so it finds only what people and agents said.
 const SAID_ONLY: &str = "tool,system";
+
+/// How long reaching a node may take before it counts as out of reach. Without it, a node that
+/// dropped off the network holds every request to it for as long as the OS keeps retrying.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct Identity {
@@ -77,6 +87,7 @@ impl Gateway {
         let tls = Arc::new(tls::client_config(&endpoint.ca_pem, endpoint.identity.as_ref())?);
         let http = reqwest::Client::builder()
             .tls_backend_preconfigured(ClientConfig::clone(&tls))
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(GatewayError::Http)?;
         Ok(Self {
@@ -84,6 +95,10 @@ impl Gateway {
             tls,
             base_url: endpoint.base_url.trim_end_matches('/').to_owned(),
         })
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub async fn sessions(&self, harness: &HarnessId) -> Result<Vec<SessionSummary>, GatewayError> {
@@ -323,6 +338,17 @@ impl Gateway {
         let renamed: wire::harness::HarnessSessionSummary =
             Self::read_json(self.http.put(url).json(&Retitle { title }).send().await)?.await?;
         Ok(translate::summary(renamed))
+    }
+
+    /// Starts a new chat that carries this session's conversation up to the reply to its
+    /// `prompts`th prompt.
+    pub async fn fork(&self, session: &SessionId, prompts: u32) -> Result<SessionSummary, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = format!("{}/api/harness-sessions/{segment}/fork", self.base_url);
+        let body = wire::gateway::sessions::HarnessSessionForkRequest { prompts };
+        let forked: wire::harness::HarnessSessionSummary =
+            Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
+        Ok(translate::summary(forked))
     }
 
     pub async fn create_agent(

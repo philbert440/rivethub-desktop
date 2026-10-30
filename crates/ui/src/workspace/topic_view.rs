@@ -10,7 +10,8 @@ use model::session::SessionSummary;
 use model::shelf::Shelf;
 use model::topics::{Directory, Topic};
 
-use super::{Launch, ViewInMemory, Workspace};
+use super::launch::Launch;
+use super::{ViewInMemory, Workspace};
 use crate::brand;
 use crate::memory::Focus;
 use crate::side_panel::{DraggedAgent, DraggedSession};
@@ -165,8 +166,9 @@ impl Workspace {
                     .text_color(Theme::ink_dim())
                     .children(step.directory.as_ref().map(Self::directory))
                     .child(format!(
-                        "{} sessions · {} active",
+                        "{} {} · {} active",
                         inside.len(),
+                        if inside.len() == 1 { "session" } else { "sessions" },
                         inside.active.len()
                     ))
                     .children(last.map(|at| format!("last active {}", ago_phrase(now, at)))),

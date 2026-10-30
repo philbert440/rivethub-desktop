@@ -277,3 +277,15 @@ mod tests {
         );
     }
 }
+
+/// How much the mesh's memory holds, and how far embedding is behind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stats {
+    pub conversations: u64,
+    pub messages: u64,
+    pub tool_calls: u64,
+    pub summaries: u64,
+    pub embedded_messages: u64,
+    pub embed_queue: u64,
+    pub failed_embeddings: u64,
+}

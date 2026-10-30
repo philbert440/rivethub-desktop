@@ -317,7 +317,7 @@ impl Workspace {
                     Err(GatewayError::Conflict(message)) => this.failed = Some(message),
                     Err(err) => this.failed = Some(format!("{failure}: {err}")),
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
