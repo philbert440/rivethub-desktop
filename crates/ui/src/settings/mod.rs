@@ -190,6 +190,12 @@ impl SettingsPage {
                         }
                     })
                     .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                        // Plug-ins clicked while on it goes back to the list, as a page's sidebar
+                        // entry goes back to the page's start; arriving from elsewhere keeps the
+                        // plug-in that was open.
+                        if tab == Tab::Plugins && this.tab == tab {
+                            this.plugin = None;
+                        }
                         this.tab = tab;
                         cx.notify();
                     }))

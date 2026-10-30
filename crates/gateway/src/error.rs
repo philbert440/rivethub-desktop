@@ -26,8 +26,13 @@ pub enum GatewayError {
     Conflict(String),
     #[error("refused: {0}")]
     Refused(String),
-    #[error("the plug-in {0}")]
-    Plugin(&'static str),
+    /// A plug-in couldn't answer, or rh refused what it answered; `detail` is rh's word on it,
+    /// such as the field it refused.
+    #[error("the plug-in {why}{}", .detail.as_ref().map_or_else(String::new, |detail| format!(": {detail}")))]
+    Plugin {
+        why: &'static str,
+        detail: Option<String>,
+    },
     #[error("not a session id: {0}")]
     SessionId(String),
 }
