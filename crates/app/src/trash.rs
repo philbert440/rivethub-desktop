@@ -42,6 +42,17 @@ impl Hub {
         .await
     }
 
+    /// Keeps the session out of its node's trash review until it is used again.
+    pub async fn keep_trash(&self, trash: &Trash) -> Result<(), GatewayError> {
+        let hub = self.clone();
+        let (session, node) = (trash.session.clone(), trash.node.clone());
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(node.as_deref()).await?;
+            gateway.keep_session(&session).await
+        })
+        .await
+    }
+
     /// Deletes the session on its node: what memory holds of it goes, and the lists leave it out
     /// until it is used again.
     pub async fn delete_session(&self, summary: &SessionSummary) -> Result<Deletion, GatewayError> {

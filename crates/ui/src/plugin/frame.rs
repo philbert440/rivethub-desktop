@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use app::Hub;
+use gateway::GatewayError;
 use gpui::{
     Context, Entity, EventEmitter, IntoElement, ParentElement, Pixels, Point, Render, ScrollHandle, Styled,
     Subscription, Window, div, prelude::*,
@@ -41,7 +42,29 @@ pub struct Pressed {
 enum Shown {
     Waiting,
     Ready(View),
-    Failed(String),
+    Failed(Refusal),
+}
+
+/// Why a view couldn't be shown: rh's sentence, and apart from it what rh names, such as the
+/// field it refused in the plug-in's answer.
+pub(super) struct Refusal {
+    pub(super) said: String,
+    pub(super) detail: Option<String>,
+}
+
+impl Refusal {
+    fn of(err: &GatewayError) -> Self {
+        match err {
+            GatewayError::Plugin { why, detail } => Self {
+                said: format!("The plug-in {why}."),
+                detail: detail.clone(),
+            },
+            other => Self {
+                said: other.to_string(),
+                detail: None,
+            },
+        }
+    }
 }
 
 pub(super) struct FormState {
@@ -175,7 +198,7 @@ impl Frame {
                         this.shown = Shown::Ready(view);
                     }
                     Err(err) if matches!(this.shown, Shown::Ready(_)) => this.problem = Some(err.to_string()),
-                    Err(err) => this.shown = Shown::Failed(err.to_string()),
+                    Err(err) => this.shown = Shown::Failed(Refusal::of(&err)),
                 }
                 cx.notify();
             })
@@ -276,7 +299,9 @@ impl Frame {
                         state.refusal = Some(message);
                         state.view.update(cx, |form, cx| form.refused(fields, cx));
                     }
-                    (Ok(Answer::Refused { message, .. }), None) => this.problem = Some(message),
+                    (Ok(Answer::Refused { message, fields }), None) => {
+                        this.problem = Some(refused(message, &fields));
+                    }
                     (Err(err), _) => this.problem = Some(err.to_string()),
                 }
                 cx.notify();
@@ -311,4 +336,16 @@ impl Render for Frame {
             .child(content)
             .children(self.menu_overlay(cx))
     }
+}
+
+/// A refusal no form is there to show beside its fields: the message, then each field it names.
+fn refused(message: String, fields: &BTreeMap<String, String>) -> String {
+    if fields.is_empty() {
+        return message;
+    }
+    let named: Vec<String> = fields
+        .iter()
+        .map(|(field, why)| format!("{field}: {why}"))
+        .collect();
+    format!("{message} ({})", named.join("; "))
 }

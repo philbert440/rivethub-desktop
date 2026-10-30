@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use gateway::{Endpoint, Gateway, GatewayError, PluginEvent};
 use model::plugin::canvas::{Event, Reply};
 use model::plugin::view::{Answer, Value, View};
-use model::plugin::{Context, Notice, Params, Permission, Plugin, PluginRef, Settings};
+use model::plugin::{Context, LogLine, Notice, Params, Permission, Plugin, PluginRef, Settings};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
@@ -142,6 +142,15 @@ impl Hub {
         self.on_runtime(async move {
             let gateway = hub.gateway_for(Some(&plugin.node)).await?;
             gateway.plugin_file(&plugin.id, &path).await
+        })
+        .await
+    }
+
+    pub async fn plugin_logs(&self, plugin: PluginRef) -> Result<Vec<LogLine>, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(Some(&plugin.node)).await?;
+            gateway.plugin_logs(&plugin.id).await
         })
         .await
     }

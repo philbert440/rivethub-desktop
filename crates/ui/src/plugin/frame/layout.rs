@@ -48,7 +48,7 @@ impl Frame {
                     .child("Loading…")
                     .into_any_element(),
             ),
-            Shown::Failed(problem) => body.push(
+            Shown::Failed(refusal) => body.push(
                 div()
                     .p_4()
                     .rounded(px(16.))
@@ -56,7 +56,14 @@ impl Frame {
                     .flex()
                     .flex_col()
                     .gap_3()
-                    .child(div().text_color(Theme::danger()).child(problem.clone()))
+                    .child(div().text_color(Theme::danger()).child(refusal.said.clone()))
+                    .children(refusal.detail.clone().map(|detail| {
+                        div()
+                            .font_family(Theme::MONO)
+                            .text_xs()
+                            .text_color(Theme::ink())
+                            .child(detail)
+                    }))
                     .child(
                         div().flex().child(
                             div()

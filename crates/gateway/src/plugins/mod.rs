@@ -5,33 +5,38 @@ use std::sync::Arc;
 
 use model::plugin::canvas::{Event, Reply};
 use model::plugin::view::{Answer, Value, View};
-use model::plugin::{Context, Listing, Params, Permission, Settings};
+use model::plugin::{Context, Listing, LogLine, LogStream, Params, Permission, Settings};
 use wire::plugin::action::{ViewActionRefusal, ViewActionRequest, ViewActionResult};
 use wire::plugin::canvas::{CanvasEventRequest, CanvasResponse};
-use wire::plugin::host::{PluginEnableRequest, PluginList, PluginSettings, PluginSettingsUpdate};
+use wire::plugin::host::{
+    PluginEnableRequest, PluginList, PluginLogStream, PluginLogs, PluginSettings, PluginSettingsUpdate,
+};
 use wire::plugin::view::ViewRequest;
 
 use crate::events::{self, PluginEvent};
 use crate::topics::rh_message;
 use crate::{Gateway, GatewayError};
 
-/// rh's answer for a plug-in that couldn't answer, in words; any other failure as it is.
+/// rh's answer for a plug-in that couldn't answer, in words, with what rh says went wrong: the
+/// field it refused in an answer, or the status and body of a failed one. Any other failure as
+/// it is.
 fn failure(err: GatewayError) -> GatewayError {
-    let GatewayError::Status { detail, .. } = &err else {
+    let GatewayError::Status { detail: body, .. } = &err else {
         return err;
     };
-    let why = [
-        ("plugin_unavailable", "isn't running"),
-        ("plugin_timeout", "didn't answer in time"),
-        (
-            "plugin_invalid_response",
-            "answered with something the contract doesn't allow",
-        ),
-        ("plugin_error", "failed"),
-    ]
-    .into_iter()
-    .find_map(|(code, why)| detail.contains(code).then_some(why));
-    why.map_or(err, GatewayError::Plugin)
+    let Ok(said) = serde_json::from_str::<wire::gateway::GatewayError>(body) else {
+        return err;
+    };
+    let (why, detail) = match said.code.as_deref() {
+        Some("plugin_unavailable") => ("isn't running", None),
+        Some("plugin_timeout") => ("didn't answer in time", None),
+        Some("plugin_invalid_response") => {
+            ("answered with something the contract doesn't allow", said.detail)
+        }
+        Some("plugin_error") => ("failed", Some(said.error)),
+        _ => return err,
+    };
+    GatewayError::Plugin { why, detail }
 }
 
 impl Gateway {
@@ -142,6 +147,26 @@ impl Gateway {
             .map(|value| value.split(';').next().unwrap_or(value).trim().to_owned());
         let bytes = reply.bytes().await.map_err(GatewayError::Http)?.to_vec();
         Ok((bytes, media_type))
+    }
+
+    /// The newest lines of a plug-in's log, oldest first: what it printed and what rh said about
+    /// it. Only its node's owner may read it.
+    pub async fn plugin_logs(&self, plugin: &str) -> Result<Vec<LogLine>, GatewayError> {
+        let url = self.api_url(&["api", "plugins", plugin, "logs"])?;
+        let logs: PluginLogs = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(logs
+            .lines
+            .into_iter()
+            .map(|line| LogLine {
+                at_ms: line.at.timestamp_millis(),
+                stream: match line.stream {
+                    PluginLogStream::Stdout => LogStream::Stdout,
+                    PluginLogStream::Stderr => LogStream::Stderr,
+                    PluginLogStream::Host => LogStream::Host,
+                },
+                text: line.text,
+            })
+            .collect())
     }
 
     pub async fn plugin_settings(&self, plugin: &str) -> Result<Settings, GatewayError> {
