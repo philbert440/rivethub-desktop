@@ -6,6 +6,7 @@ use model::TopicId;
 use model::plugin::view::{
     Action, Align, Block, Button, ButtonStyle, CanvasBlock, Choice, Column, Confirm, Crumb, Empty, Field,
     FileValue, Form, Inline, Input, ListItem, Property, Row, Tab, TimeStyle, Tone, Value, View,
+    WebPanelBlock,
 };
 use wire::plugin::action::ViewAction;
 use wire::plugin::view::{
@@ -135,7 +136,17 @@ fn block(block: ViewBlock) -> Block {
             read_only,
             menu: menu.into_iter().map(menu_item).collect(),
         }),
-        ViewBlock::WebPanel { .. } => Block::WebPanel,
+        ViewBlock::WebPanel {
+            id,
+            entry,
+            height,
+            params: given,
+        } => Block::WebPanel(WebPanelBlock {
+            id: id.into(),
+            entry,
+            height: height.map(|height| units(f64::from(height))),
+            params: params(given),
+        }),
     }
 }
 

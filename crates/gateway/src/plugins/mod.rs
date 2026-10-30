@@ -1,3 +1,4 @@
+pub mod panel;
 mod translate;
 
 use std::collections::BTreeMap;

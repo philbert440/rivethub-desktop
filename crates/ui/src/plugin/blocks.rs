@@ -186,7 +186,10 @@ impl Frame {
                 || div().into_any_element(),
                 |(view, _)| view.clone().into_any_element(),
             ),
-            Block::WebPanel => Self::web_panel(level),
+            Block::WebPanel(panel) => self.panels.get(&panel.id).map_or_else(
+                || div().into_any_element(),
+                |(view, _)| view.clone().into_any_element(),
+            ),
         }
     }
 

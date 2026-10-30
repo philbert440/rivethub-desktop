@@ -5,6 +5,7 @@ mod frame;
 mod overlay;
 mod run;
 mod settings;
+mod web_panel;
 
 pub use canvas::{Activate, ClearSelection, DeleteSelection, FitView, ZoomIn, ZoomOut};
 pub use frame::Frame;
