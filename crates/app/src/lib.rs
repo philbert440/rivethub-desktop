@@ -288,6 +288,12 @@ impl Hub {
                     nodes.push((Some(node.name.clone()), gateway));
                 }
             }
+            // Without this node's mesh, such as while it restarts, the nodes already reached are
+            // still asked directly, so their sessions stay listed.
+            if mesh.is_none() {
+                let known = hub.inner.remote.read().clone();
+                nodes.extend(known.into_iter().map(|(name, gateway)| (Some(name), gateway)));
+            }
             let other_nodes = mesh.map(|_| nodes.iter().filter_map(|(node, _)| node.clone()).collect());
             let listed = futures::future::join_all(nodes.into_iter().map(|(node, gateway)| {
                 let hub = hub.clone();

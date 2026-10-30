@@ -1280,7 +1280,11 @@ fn missing_note(missing: &[app::Missing], local: Option<&str>) -> Option<String>
     for gap in missing {
         let node = name(&gap.node);
         match &gap.harness {
-            None if gap.error.is_unreachable() => away.push(node),
+            _ if gap.error.is_unreachable() => {
+                if !away.contains(&node) {
+                    away.push(node);
+                }
+            }
             None if gap.error.is_refused_device() => refused.push(node),
             None => failed.push(format!("{node}: {}", gap.error)),
             Some(harness) => failed.push(format!("{} on {node}: {}", harness.display_name(), gap.error)),
