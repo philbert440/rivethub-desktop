@@ -83,6 +83,8 @@ pub struct SessionPane {
     uploading: usize,
     attach_problem: Option<String>,
     renaming: Option<Renaming>,
+    /// The exchange a fork is being started after, until the fork opens or fails.
+    forking: Option<usize>,
     awaiting_title: bool,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -139,6 +141,7 @@ impl SessionPane {
             uploading: 0,
             attach_problem: None,
             renaming: None,
+            forking: None,
             awaiting_title: false,
             _revisions: watcher,
             _submitted: submitted,
@@ -776,14 +779,23 @@ impl SessionPane {
             .take(index + 1)
             .filter(|view| view.exchange.prompt.is_some())
             .count();
+        if self.forking.is_some() {
+            return;
+        }
         let prompts = u32::try_from(asked).unwrap_or(u32::MAX);
         let hub = self.hub.clone();
         let summary = self.summary.clone();
+        self.forking = Some(index);
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let forked = hub.fork(&summary, prompts).await;
-            this.update(cx, |_, cx| match forked {
-                Ok(forked) => cx.emit(PaneEvent::Forked(Box::new(forked))),
-                Err(err) => cx.emit(PaneEvent::Failed(format!("forking failed: {err}"))),
+            this.update(cx, |this, cx| {
+                this.forking = None;
+                cx.notify();
+                match forked {
+                    Ok(forked) => cx.emit(PaneEvent::Forked(Box::new(forked))),
+                    Err(err) => cx.emit(PaneEvent::Failed(format!("forking failed: {err}"))),
+                }
             })
             .ok();
         })
@@ -819,6 +831,7 @@ impl SessionPane {
         let fetched = Arc::clone(&self.fetched);
         let previews = Arc::clone(&self.previews);
         let plan = view.plan().clone();
+        let forking = self.forking;
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -838,6 +851,7 @@ impl SessionPane {
                             fetched: &fetched,
                             previews: &previews,
                             plan: &plan,
+                            forking: forking == Some(index),
                         };
                         transcript::exchange(exchange, &context, window)
                     },

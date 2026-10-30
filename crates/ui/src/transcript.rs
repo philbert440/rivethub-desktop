@@ -98,6 +98,8 @@ pub struct Context<'a> {
     pub previews: &'a HashMap<String, Arc<gpui::Image>>,
     /// The agent's plan as it stands, which names the items a todo update changes.
     pub plan: &'a model::plan::Plan,
+    /// Whether a fork after this exchange is starting.
+    pub forking: bool,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
@@ -377,12 +379,16 @@ fn actions(exchange: &Exchange, cx: &Context<'_>) -> Option<impl IntoElement> {
         .gap_3()
         .text_xs()
         .text_color(Theme::ink_dim())
-        .invisible()
-        .group_hover("exchange", gpui::Styled::visible)
+        .when(!cx.forking, |row| {
+            row.invisible().group_hover("exchange", gpui::Styled::visible)
+        })
         .when(!reply.is_empty(), |row| {
             row.child(CopyIcon::new(format!("copy-reply-{ix}"), reply))
         })
-        .when(forks, |row| {
+        .when(forks && cx.forking, |row| {
+            row.child(div().text_color(Theme::accent()).child("Forking…"))
+        })
+        .when(forks && !cx.forking, |row| {
             row.child(
                 div()
                     .id(SharedString::from(format!("fork-{ix}")))
