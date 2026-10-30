@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use app::{Hub, SessionHandle};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, ExternalPaths, Focusable, ImageFormat, IntoElement,
-    ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
-    Window, div, list, prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Context, Entity, ExternalPaths, FocusHandle, Focusable, ImageFormat,
+    IntoElement, ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled,
+    Subscription, Task, Window, div, list, prelude::*, px, relative,
 };
 use model::chat::{ExchangeState, arrived, exchanges, totals};
 use model::harness::{HarnessOffer, ModelChoice};
@@ -915,7 +915,7 @@ impl SessionPane {
                     .children(self.plan_panel(&view, cx))
                     .children(self.queue_dock(cx))
                     .child(
-                        self.approval_card(&view)
+                        self.approval_card(&view, &self.composer.focus_handle(cx))
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
                     ),
             )
@@ -1026,15 +1026,19 @@ impl SessionPane {
         )
     }
 
+    /// One answer to an approval; answering hands the keyboard back to the composer the card stood
+    /// in for.
     fn decision_button(
         &self,
         label: &'static str,
         decision: Decision,
         primary: bool,
         request_id: &str,
+        composer: &FocusHandle,
     ) -> impl IntoElement {
         let handle = self.handle.clone();
         let request_id = request_id.to_owned();
+        let composer = composer.clone();
         div()
             .id(label)
             .h(px(34.))
@@ -1052,11 +1056,14 @@ impl SessionPane {
                     .border_color(Theme::line())
                     .text_color(Theme::ink())
             })
-            .on_click(move |_, _, _| handle.decide(request_id.clone(), decision))
+            .on_click(move |_, window, cx| {
+                handle.decide(request_id.clone(), decision);
+                window.focus(&composer, cx);
+            })
             .child(label)
     }
 
-    fn approval_card(&self, view: &SessionView) -> Option<AnyElement> {
+    fn approval_card(&self, view: &SessionView, composer: &FocusHandle) -> Option<AnyElement> {
         let approval = view.approvals().first()?;
         let request_id = approval.request_id.clone();
         Some(
@@ -1094,14 +1101,21 @@ impl SessionPane {
                         .flex()
                         .gap_2()
                         .justify_end()
-                        .child(self.decision_button("Reject", Decision::Deny, false, &request_id))
+                        .child(self.decision_button("Reject", Decision::Deny, false, &request_id, composer))
                         .child(self.decision_button(
                             "Allow for session",
                             Decision::AllowForSession,
                             false,
                             &request_id,
+                            composer,
                         ))
-                        .child(self.decision_button("Allow once", Decision::Allow, true, &request_id)),
+                        .child(self.decision_button(
+                            "Allow once",
+                            Decision::Allow,
+                            true,
+                            &request_id,
+                            composer,
+                        )),
                 )
                 .into_any_element(),
         )
