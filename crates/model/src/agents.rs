@@ -16,7 +16,7 @@ pub struct Agent {
 }
 
 /// An agent as typed into the editor: everything needed to create or update one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDraft {
     pub name: String,
     pub color: u32,
@@ -26,6 +26,22 @@ pub struct AgentDraft {
     pub effort: Option<String>,
     pub directory: Option<String>,
     pub instructions: Option<String>,
+}
+
+/// A new agent starts in the app's own colour, not black.
+impl Default for AgentDraft {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            color: DEFAULT_COLOR,
+            harness: None,
+            node: None,
+            model: None,
+            effort: None,
+            directory: None,
+            instructions: None,
+        }
+    }
 }
 
 impl AgentDraft {
