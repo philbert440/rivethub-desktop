@@ -469,7 +469,10 @@ fn context(turns: &[HarnessTranscriptTurn], window: Option<u64>) -> Option<Conte
         .rev()
         .find_map(|turn| turn.usage.as_ref())
         .map(|usage| usage.prompt_tokens + usage.completion_tokens)?;
-    Some(ContextUsage { used, window })
+    Some(ContextUsage {
+        used,
+        window: Some(window),
+    })
 }
 
 /// The names of the tools a session stream has running, so a later update to one's input parses as
@@ -530,10 +533,14 @@ pub fn event(raw: HarnessEvent, running: &mut Running) -> Option<SessionEvent> {
         }),
         HarnessEvent::ApprovalResolved { request_id, .. } => SessionEvent::ApprovalResolved { request_id },
         HarnessEvent::Plan { entries, .. } => SessionEvent::Plan(plan(entries)),
-        HarnessEvent::TurnComplete { usage, .. } => {
+        HarnessEvent::TurnComplete { usage, model_ms, .. } => {
             running.0.clear();
-            SessionEvent::TurnComplete(usage.as_ref().map(reported))
+            SessionEvent::TurnComplete {
+                usage: usage.as_ref().map(reported),
+                model_ms,
+            }
         }
+        HarnessEvent::Context { used, window, .. } => SessionEvent::Context(ContextUsage { used, window }),
         HarnessEvent::Error { message, .. } => SessionEvent::Error(message),
         HarnessEvent::Transcript {
             turns,

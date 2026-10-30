@@ -52,35 +52,6 @@ impl AddAssign for Pace {
     }
 }
 
-/// Times the model's share of a turn: from the prompt, and again from each tool's result, to the
-/// next tool call or the turn's end, leaving out the time tools take.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Stopwatch {
-    since: Option<u64>,
-    ms: u64,
-}
-
-impl Stopwatch {
-    /// The model is at work from `at_ms` on a monotonic clock: a prompt went in, a tool's result
-    /// came back, or its output is streaming.
-    pub fn resume(&mut self, at_ms: u64) {
-        self.since.get_or_insert(at_ms);
-    }
-
-    /// The model handed off at `at_ms`, to run a tool or wait on an approval.
-    pub fn pause(&mut self, at_ms: u64) {
-        if let Some(since) = self.since.take() {
-            self.ms += at_ms.saturating_sub(since);
-        }
-    }
-
-    /// The turn ended at `at_ms`: the pace of its `output` tokens over the model's time.
-    pub fn stop(&mut self, at_ms: u64, output: u64) -> Option<Pace> {
-        self.pause(at_ms);
-        Pace::of(output, std::mem::take(&mut self.ms))
-    }
-}
-
 /// A token count as people read it: "812", "1.2k", "24k", "1.3M".
 pub fn tokens(count: u64) -> String {
     match count {
@@ -103,20 +74,6 @@ mod tests {
         }
         assert_eq!(pace.tokens_per_second(), Some(40));
         assert_eq!(Pace::default().tokens_per_second(), None);
-    }
-
-    #[test]
-    fn the_stopwatch_times_the_model_and_not_the_tools_it_runs() {
-        let mut watch = Stopwatch::default();
-        watch.resume(0);
-        watch.resume(500);
-        watch.pause(2_000);
-        watch.resume(60_000);
-        assert_eq!(
-            watch.stop(61_000, 150).and_then(|pace| pace.tokens_per_second()),
-            Some(50)
-        );
-        assert_eq!(watch.stop(70_000, 150), None);
     }
 
     #[test]

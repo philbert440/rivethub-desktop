@@ -58,27 +58,43 @@ impl Turn {
     }
 }
 
+/// How many tokens the session's context holds, and the size of the model's window when the
+/// harness says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextUsage {
     pub used: u64,
-    pub window: u64,
+    pub window: Option<u64>,
 }
 
 impl ContextUsage {
-    pub fn fraction(self) -> f32 {
-        if self.window == 0 {
-            return 0.0;
-        }
+    fn window(self) -> Option<u64> {
+        self.window.filter(|window| *window > 0)
+    }
+
+    pub fn fraction(self) -> Option<f32> {
+        let window = self.window()?;
         #[expect(
             clippy::cast_precision_loss,
             reason = "token counts stay far below f32's exact range"
         )]
-        let ratio = self.used as f32 / self.window as f32;
-        ratio.clamp(0.0, 1.0)
+        let ratio = self.used as f32 / window as f32;
+        Some(ratio.clamp(0.0, 1.0))
+    }
+
+    /// The share of the window in use, as a whole percent.
+    pub fn percent(self) -> Option<u64> {
+        let window = self.window()?;
+        Some(
+            self.used
+                .min(window)
+                .saturating_mul(100)
+                .saturating_add(window / 2)
+                / window,
+        )
     }
 
     pub fn nearly_full(self) -> bool {
-        self.fraction() >= 0.8
+        self.fraction().is_some_and(|fraction| fraction >= 0.8)
     }
 }
 
@@ -241,8 +257,14 @@ pub enum SessionEvent {
     },
     /// The agent's to-do list, whole, each time it changes.
     Plan(Plan),
-    /// The turn ended, with the tokens it used when the harness reported them.
-    TurnComplete(Option<Usage>),
+    /// How full the session's context is now, as its harness counts it.
+    Context(ContextUsage),
+    /// The turn ended, with the tokens it used and the time the model spent on it, where the
+    /// node reported them.
+    TurnComplete {
+        usage: Option<Usage>,
+        model_ms: Option<u64>,
+    },
     Activity(Activity),
     Error(String),
 }
@@ -253,6 +275,8 @@ pub struct SessionView {
     live: Option<Turn>,
     approvals: Vec<Approval>,
     context: Option<ContextUsage>,
+    /// The harness's own count, which outranks the one read from the transcript.
+    counted: Option<ContextUsage>,
     activity: Activity,
     error: Option<String>,
     /// The stream to the session's node is down, so a turn it showed running can't be followed.
@@ -262,11 +286,6 @@ pub struct SessionView {
 }
 
 impl SessionView {
-    /// A turn streamed here wrote at this pace.
-    pub fn paced(&mut self, pace: Pace) {
-        self.paced += pace;
-    }
-
     /// How fast the turns streamed here wrote, all told.
     pub fn pace(&self) -> Pace {
         self.paced
@@ -352,12 +371,19 @@ impl SessionView {
             SessionEvent::ApprovalResolved { request_id } => {
                 self.approvals.retain(|pending| pending.request_id != request_id);
             }
-            SessionEvent::TurnComplete(_) => {
+            SessionEvent::TurnComplete { usage, model_ms } => {
                 if let Some(turn) = self.live.take() {
                     self.turns.push(turn);
                 }
                 self.activity = Activity::Idle;
+                if let Some(pace) = usage
+                    .zip(model_ms)
+                    .and_then(|(usage, ms)| Pace::of(usage.output, ms))
+                {
+                    self.paced += pace;
+                }
             }
+            SessionEvent::Context(counted) => self.counted = Some(counted),
             SessionEvent::Plan(plan) => self.plan = plan,
             SessionEvent::Activity(activity) => self.activity = activity,
             SessionEvent::Error(message) => self.error = Some(message),
@@ -461,7 +487,7 @@ impl SessionView {
     }
 
     pub fn context(&self) -> Option<ContextUsage> {
-        self.context
+        self.counted.or(self.context)
     }
 
     pub fn activity(&self) -> Activity {
