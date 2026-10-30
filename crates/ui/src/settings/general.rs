@@ -1,8 +1,8 @@
 use gpui::{ClickEvent, Context, Div, IntoElement, ParentElement, Styled, div, prelude::*, px};
-use model::prefs::LastLaunch;
+use model::prefs::{LastLaunch, SessionView};
 
 use super::SettingsPage;
-use super::parts::{button, dim, labelled, row, section, toggle};
+use super::parts::{button, dim, labelled, row, section, segment, segments, toggle};
 use crate::launch_choice::{LaunchChoices, Picked};
 use crate::theme::Theme;
 
@@ -11,19 +11,22 @@ impl SettingsPage {
         vec![
             section("New sessions", self.new_sessions(cx)),
             section(
-                "Chat",
-                vec![toggle(
-                    "jump-to-newest",
-                    "Jump to newest",
-                    "A send or a finished reply brings an open chat to its end, even when scrolled up.",
-                    self.hub.preferences().jump_to_newest,
-                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                        let mut prefs = this.hub.preferences();
-                        prefs.jump_to_newest = !prefs.jump_to_newest;
-                        this.hub.set_preferences(prefs);
-                        cx.notify();
-                    }),
-                )],
+                "Sessions",
+                vec![
+                    self.opens_in(cx),
+                    toggle(
+                        "jump-to-newest",
+                        "Jump to newest",
+                        "A send or a finished reply brings an open chat to its end, even when scrolled up.",
+                        self.hub.preferences().jump_to_newest,
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            let mut prefs = this.hub.preferences();
+                            prefs.jump_to_newest = !prefs.jump_to_newest;
+                            this.hub.set_preferences(prefs);
+                            cx.notify();
+                        }),
+                    ),
+                ],
             ),
             section("Notifications", self.notifications(cx)),
         ]
@@ -109,6 +112,31 @@ impl SettingsPage {
             cx.notify();
         });
         (choices, picked)
+    }
+
+    /// Which view a session opens on. The terminal is the session's own: rh attaches to the
+    /// one running, or, at a click, resumes the session there instead of in chat.
+    fn opens_in(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let chosen = self.hub.preferences().opens_in;
+        let options = [
+            (SessionView::Chat, "opens-in-chat", "Chat"),
+            (SessionView::Terminal, "opens-in-terminal", "Terminal"),
+        ]
+        .map(|(view, id, label)| {
+            segment(id, label, view == chosen).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                let mut prefs = this.hub.preferences();
+                prefs.opens_in = view;
+                this.hub.set_preferences(prefs);
+                cx.notify();
+            }))
+        });
+        row()
+            .child(labelled(
+                "Open sessions in",
+                "The terminal attaches to the session's own, or offers to start it there.",
+            ))
+            .child(segments().children(options))
+            .into_any_element()
     }
 
     fn notifications(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {

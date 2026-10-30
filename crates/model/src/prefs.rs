@@ -11,6 +11,16 @@ pub struct Preferences {
     /// What the launcher preselects; `None` leaves it to the built-in choice.
     pub last_launch: Option<LastLaunch>,
     pub appearance: Appearance,
+    /// The view a session opens on.
+    pub opens_in: SessionView,
+}
+
+/// A session's chat, or its terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionView {
+    #[default]
+    Chat,
+    Terminal,
 }
 
 /// The app's colours: the dark or light theme, whichever the desktop is using, or the active
@@ -36,6 +46,7 @@ impl Default for Preferences {
             jump_to_newest: true,
             last_launch: None,
             appearance: Appearance::Dark,
+            opens_in: SessionView::Chat,
         }
     }
 }

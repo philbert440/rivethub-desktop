@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use model::HarnessId;
-use model::prefs::{Appearance, LastLaunch, Preferences};
+use model::prefs::{Appearance, LastLaunch, Preferences, SessionView};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -18,6 +18,8 @@ struct Stored {
     last_launch: Option<StoredLaunch>,
     #[serde(deserialize_with = "or_default")]
     appearance: StoredAppearance,
+    #[serde(deserialize_with = "or_default")]
+    opens_in: StoredView,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -28,6 +30,14 @@ enum StoredAppearance {
     Light,
     System,
     Omarchy,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredView {
+    #[default]
+    Chat,
+    Terminal,
 }
 
 /// A value this build doesn't know, such as an appearance from a newer one, keeps the default.
@@ -88,6 +98,10 @@ impl From<&Preferences> for Stored {
                 Appearance::System => StoredAppearance::System,
                 Appearance::Omarchy => StoredAppearance::Omarchy,
             },
+            opens_in: match prefs.opens_in {
+                SessionView::Chat => StoredView::Chat,
+                SessionView::Terminal => StoredView::Terminal,
+            },
         }
     }
 }
@@ -111,6 +125,10 @@ impl From<Stored> for Preferences {
                 StoredAppearance::Light => Appearance::Light,
                 StoredAppearance::System => Appearance::System,
                 StoredAppearance::Omarchy => Appearance::Omarchy,
+            },
+            opens_in: match stored.opens_in {
+                StoredView::Chat => SessionView::Chat,
+                StoredView::Terminal => SessionView::Terminal,
             },
         }
     }
@@ -183,7 +201,7 @@ impl Hub {
 
 #[cfg(test)]
 mod tests {
-    use model::prefs::{LastLaunch, Preferences};
+    use model::prefs::{LastLaunch, Preferences, SessionView};
 
     use super::Stored;
 
@@ -211,6 +229,7 @@ mod tests {
                 model: None,
             }),
             appearance: model::prefs::Appearance::Omarchy,
+            opens_in: SessionView::Terminal,
             ..Preferences::default()
         };
         let json = serde_json::to_string(&Stored::from(&saved)).unwrap_or_default();

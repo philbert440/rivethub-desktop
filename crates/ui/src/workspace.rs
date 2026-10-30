@@ -19,6 +19,7 @@ use gpui::{
 };
 use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
+use model::prefs::SessionView;
 use model::preview::Previews;
 use model::session::SessionSummary;
 use model::shelf::Shelf;
@@ -519,8 +520,14 @@ impl Workspace {
         }
         let topic = self.home_of(&summary);
         let session = summary.id.clone();
+        // A child session is a transcript inside its parent's, with no terminal of its own.
+        let terminal = self.hub.preferences().opens_in == SessionView::Terminal && summary.parent.is_none();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
-        window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
+        if terminal {
+            pane.update(cx, |pane, cx| pane.show_terminal(window, cx));
+        } else {
+            window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
+        }
         self.pane_events = Some(
             cx.subscribe(&pane, |this, pane, event: &PaneEvent, cx| match event {
                 PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
