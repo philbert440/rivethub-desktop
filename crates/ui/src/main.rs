@@ -24,6 +24,7 @@ mod topic_picker;
 mod topic_rail;
 mod transcript;
 mod turn_rail;
+mod visibility;
 mod window_state;
 mod workspace;
 

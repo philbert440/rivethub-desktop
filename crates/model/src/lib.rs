@@ -29,6 +29,7 @@ pub mod topics;
 pub mod trash;
 pub mod trust;
 pub mod usage;
+pub mod visibility;
 pub mod wiki;
 
 pub use ids::{HarnessId, NativeSessionId, SessionId, TaskId, TopicId};

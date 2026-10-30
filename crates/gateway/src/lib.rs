@@ -7,6 +7,7 @@ mod plugins;
 mod previews;
 mod socket;
 mod tasks;
+mod tenancy;
 mod terminal;
 mod tidy;
 mod tls;

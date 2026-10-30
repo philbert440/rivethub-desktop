@@ -12,6 +12,7 @@ mod status;
 mod terminal;
 mod topics;
 mod trash;
+mod visibility;
 
 pub use feed::WorkspaceFeed;
 pub use listing::{AllSessions, Missing, SessionListing};
@@ -48,6 +49,7 @@ struct Inner {
     offers: RwLock<HashMap<String, Vec<model::harness::HarnessOffer>>>,
     prefs: RwLock<Preferences>,
     saving: Mutex<()>,
+    me: RwLock<Option<model::visibility::Me>>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +70,7 @@ impl Hub {
                 offers: RwLock::new(HashMap::new()),
                 prefs: RwLock::new(prefs::load()),
                 saving: Mutex::new(()),
+                me: RwLock::new(None),
             }),
         }
     }

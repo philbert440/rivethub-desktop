@@ -54,7 +54,11 @@ impl Workspace {
             Focus::Topic(_) | Focus::Conversation(_) => None,
         };
         let delete = topic.as_ref().map(|(id, name, ..)| (id.clone(), name.clone()));
+        let sharing = self.sharing(&focus);
         let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
+        if let Some((item, offer)) = sharing {
+            menu = menu.sharing(item, offer);
+        }
         if let Some((id, _, parent, closed)) = topic {
             let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
             let movable = self
