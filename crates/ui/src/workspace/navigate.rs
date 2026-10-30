@@ -9,6 +9,16 @@ use crate::session_pane::{PaneEvent, SessionPane};
 
 impl Workspace {
     pub(super) fn open(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_pane(summary, false, window, cx);
+    }
+
+    /// Opens a session started or forked here. With Settings on Terminal its terminal starts at once,
+    /// without the confirm an existing session gets: the person just asked for this session.
+    pub(super) fn open_new(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_pane(summary, true, window, cx);
+    }
+
+    fn open_pane(&mut self, summary: SessionSummary, new: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Rebuilding the pane on show would drop its draft and terminal.
         if self
             .pane
@@ -22,7 +32,9 @@ impl Workspace {
         // A child session is a transcript inside its parent's, with no terminal of its own.
         let terminal = self.hub.preferences().opens_in == SessionView::Terminal && summary.parent.is_none();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
-        if terminal {
+        if terminal && new {
+            pane.update(cx, |pane, cx| pane.start_terminal(window, cx));
+        } else if terminal {
             pane.update(cx, |pane, cx| pane.show_terminal(window, cx));
         } else {
             window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
@@ -67,7 +79,7 @@ impl Workspace {
         if let Some(topic) = topic {
             self.place(session, topic, cx);
         }
-        self.open(forked, window, cx);
+        self.open_new(forked, window, cx);
     }
 
     pub(super) fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {

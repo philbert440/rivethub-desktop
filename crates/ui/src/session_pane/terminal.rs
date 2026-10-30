@@ -19,6 +19,12 @@ impl SessionPane {
         self.show(Mode::Terminal, window, cx);
     }
 
+    /// Opens on the session's terminal and starts it without asking first.
+    pub fn start_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = Mode::Terminal;
+        self.attach_terminal(window, cx);
+    }
+
     pub(super) fn show(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = mode;
         match (mode, &self.terminal) {
