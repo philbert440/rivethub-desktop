@@ -9,7 +9,7 @@ use model::notice::NoticeKind;
 use model::{Page, SessionId};
 
 use crate::memory::{MemoryEvent, MemoryPage};
-use crate::settings::SettingsPage;
+use crate::settings::{SettingsEvent, SettingsPage};
 use crate::text::one_line;
 use crate::tip::Tip;
 use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
@@ -26,7 +26,7 @@ pub struct Shell {
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
-    _routes: [Subscription; 5],
+    _routes: [Subscription; 6],
 }
 
 impl Shell {
@@ -69,6 +69,11 @@ impl Shell {
                 }
             },
         );
+        let from_settings = cx.subscribe(&settings, |this, _, event: &SettingsEvent, cx| match event {
+            SettingsEvent::AgentsChanged => {
+                this.workspace.update(cx, Workspace::agents_changed);
+            }
+        });
         let notices = cx.subscribe_in(
             &workspace,
             window,
@@ -83,7 +88,14 @@ impl Shell {
             workspace,
             memory,
             settings,
-            _routes: [to_memory, deleted_in_workspace, listed, from_memory, notices],
+            _routes: [
+                to_memory,
+                deleted_in_workspace,
+                listed,
+                from_memory,
+                notices,
+                from_settings,
+            ],
         }
     }
 

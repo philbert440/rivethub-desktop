@@ -63,6 +63,13 @@ pub fn roster(raw: wire::gateway::agents::AgentListResponse) -> model::agents::R
     model::agents::Roster {
         node: raw.node,
         agents,
+        storage: model::agents::AgentStorage {
+            shared_presets: raw
+                .backend
+                .map(|backend| backend == wire::gateway::agents::AgentStoreBackend::Postgres),
+            folder_root: raw.directory_root,
+            shared_folder: raw.shared_dir,
+        },
     }
 }
 

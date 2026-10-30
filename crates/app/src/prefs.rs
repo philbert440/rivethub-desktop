@@ -125,6 +125,11 @@ fn save(prefs: &Preferences) -> std::io::Result<()> {
 }
 
 impl Hub {
+    /// Where the preferences are kept.
+    pub fn preferences_path(&self) -> Option<PathBuf> {
+        path()
+    }
+
     pub fn preferences(&self) -> Preferences {
         self.inner.prefs.read().clone()
     }

@@ -108,6 +108,19 @@ pub const EFFORTS: [&str; 5] = ["off", "low", "medium", "high", "xhigh"];
 pub struct Roster {
     pub node: String,
     pub agents: Vec<Agent>,
+    pub storage: AgentStorage,
+}
+
+/// Where a node keeps its agents and the folders they work in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentStorage {
+    /// Whether the presets live in the memory database, shared by every node on it, or in files on
+    /// the node; `None` when the node doesn't say.
+    pub shared_presets: Option<bool>,
+    /// An agent without a working folder of its own works in a folder named for it under here.
+    pub folder_root: Option<String>,
+    /// The mesh's shared folder, linked into each agent's working folder.
+    pub shared_folder: Option<String>,
 }
 
 impl Agent {

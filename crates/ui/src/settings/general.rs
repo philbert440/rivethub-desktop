@@ -1,0 +1,163 @@
+use gpui::{ClickEvent, Context, Div, IntoElement, ParentElement, Styled, div, prelude::*, px};
+use model::prefs::LastLaunch;
+
+use super::SettingsPage;
+use super::parts::{button, dim, labelled, row, section, toggle};
+use crate::launch_choice::{LaunchChoices, Picked};
+use crate::theme::Theme;
+
+impl SettingsPage {
+    pub(super) fn general(&self, cx: &mut Context<Self>) -> Vec<Div> {
+        vec![
+            section("New sessions", self.new_sessions(cx)),
+            section(
+                "Chat",
+                vec![toggle(
+                    "jump-to-newest",
+                    "Jump to newest",
+                    "A send or a finished reply brings an open chat to its end, even when scrolled up.",
+                    self.hub.preferences().jump_to_newest,
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        let mut prefs = this.hub.preferences();
+                        prefs.jump_to_newest = !prefs.jump_to_newest;
+                        this.hub.set_preferences(prefs);
+                        cx.notify();
+                    }),
+                )],
+            ),
+            section("Notifications", self.notifications(cx)),
+        ]
+    }
+
+    /// What the launcher preselects: the last thing started, which can also be picked here.
+    fn new_sessions(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let prefs = self.hub.preferences();
+        let (choice, detail) = prefs.last_launch.as_ref().map_or(
+            (
+                "Claude on this node".to_owned(),
+                "The built-in choice, until you start a session or pick one.",
+            ),
+            |last| {
+                (
+                    launch_label(&self.hub, last),
+                    "The last one you started or picked.",
+                )
+            },
+        );
+        let choosing = self.choosing.is_some();
+        let controls = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(prefs.last_launch.is_some() && !choosing, |line| {
+                line.child(button("reset-new-session", "Reset").on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        let mut prefs = this.hub.preferences();
+                        prefs.last_launch = None;
+                        this.hub.set_preferences(prefs);
+                        cx.notify();
+                    },
+                )))
+            })
+            .child(
+                button("change-new-session", if choosing { "Done" } else { "Change" }).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.choosing = match this.choosing.take() {
+                            Some(_) => None,
+                            None => Some(this.choices(cx)),
+                        };
+                        cx.notify();
+                    },
+                )),
+            );
+        let mut rows = vec![
+            row()
+                .child(labelled("Start with", detail))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .min_w_0()
+                        .child(dim(choice).truncate())
+                        .child(controls),
+                )
+                .into_any_element(),
+        ];
+        if let Some((choices, _)) = &self.choosing {
+            rows.push(
+                div()
+                    .mx_3()
+                    .mb_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .bg(Theme::surface())
+                    .child(choices.clone())
+                    .into_any_element(),
+            );
+        }
+        rows
+    }
+
+    /// A pick here is kept at once, as starting a session with it would keep it.
+    fn choices(&self, cx: &mut Context<Self>) -> (gpui::Entity<LaunchChoices>, gpui::Subscription) {
+        let choices = cx.new(|cx| LaunchChoices::new(&self.hub, cx));
+        let picked = cx.subscribe(&choices, |this, choices, _: &Picked, cx| {
+            if let Some(choice) = choices.read(cx).choice() {
+                choice.remember(&this.hub);
+            }
+            cx.notify();
+        });
+        (choices, picked)
+    }
+
+    fn notifications(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let prefs = self.hub.preferences();
+        vec![
+            toggle(
+                "notify-finished",
+                "An agent finished a reply",
+                "When you're in another window or another session.",
+                prefs.notify_finished,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.notify_finished = !prefs.notify_finished;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+            toggle(
+                "notify-needs-you",
+                "A session needs you",
+                "When an agent waits on an approval or an answer.",
+                prefs.notify_needs_you,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.notify_needs_you = !prefs.notify_needs_you;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+        ]
+    }
+}
+
+/// "Grok · grok-4 on ct115" for a harness, "Scout (agent)" for an agent, with the model's name
+/// when its node has said what it is.
+fn launch_label(hub: &app::Hub, last: &LastLaunch) -> String {
+    match last {
+        LastLaunch::Agent { name, .. } => format!("{name} (agent)"),
+        LastLaunch::Harness { node, harness, model } => {
+            let place = node.as_deref().unwrap_or("this node");
+            match model {
+                Some(model) => {
+                    let model = hub
+                        .model_label(node.as_deref(), harness, model)
+                        .unwrap_or_else(|| model.clone());
+                    format!("{} · {model} on {place}", harness.display_name())
+                }
+                None => format!("{} on {place}", harness.display_name()),
+            }
+        }
+    }
+}

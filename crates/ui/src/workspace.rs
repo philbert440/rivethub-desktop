@@ -256,6 +256,11 @@ impl Workspace {
     }
 
     /// The session open in the pane, if the workspace is showing one.
+    /// Settings added, changed or removed an agent, so the agent list reads them again.
+    pub fn agents_changed(&mut self, cx: &mut Context<Self>) {
+        self.panel.update(cx, |panel, cx| panel.load_agents(cx));
+    }
+
     pub fn on_screen(&self) -> Option<&SessionId> {
         match &self.altitude {
             Altitude::Session { session, .. } => Some(session),
