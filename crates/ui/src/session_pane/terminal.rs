@@ -4,7 +4,7 @@ use gpui::{
 };
 use term::GridSize;
 
-use super::{Mode, PaneEvent, SessionPane, ToggleTerminal};
+use super::{Mode, Origin, PaneEvent, SessionPane, ToggleTerminal};
 use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 
@@ -14,6 +14,12 @@ const FIRST_TERMINAL: GridSize = GridSize {
 };
 
 impl SessionPane {
+    /// The session was started or forked here, so its terminal can't open until a first turn has
+    /// given it a conversation to resume.
+    pub fn started_here(&mut self) {
+        self.origin = Origin::StartedHere;
+    }
+
     /// Opens on the session's terminal: attached when one is running, else offered.
     pub fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show(Mode::Terminal, window, cx);
@@ -75,7 +81,37 @@ impl SessionPane {
             .items_center()
             .justify_center()
             .gap_3()
-            .when(self.confirm_spawn, |prompt| {
+            .when(self.confirm_spawn && self.awaits_first_turn(), |prompt| {
+                prompt
+                    .child(
+                        div()
+                            .text_color(Theme::ink())
+                            .child("This session can't open in a terminal yet."),
+                    )
+                    .child(div().max_w(px(520.)).text_color(Theme::ink_dim()).child(format!(
+                        "Its terminal resumes the session's conversation in {}, and there is none until its \
+                         first turn has run. Send the first message in Chat; after that its terminal opens \
+                         here.",
+                        self.summary.id.harness().display_name()
+                    )))
+                    .child(
+                        div()
+                            .id("write-in-chat")
+                            .h(px(34.))
+                            .px_4()
+                            .rounded(px(17.))
+                            .bg(Theme::accent())
+                            .text_color(Theme::on_accent())
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.show(Mode::Chat, window, cx);
+                            }))
+                            .child("Write in Chat"),
+                    )
+            })
+            .when(self.confirm_spawn && !self.awaits_first_turn(), |prompt| {
                 prompt
                     .child(
                         div()
@@ -105,6 +141,11 @@ impl SessionPane {
                     )
             })
             .into_any_element()
+    }
+
+    /// A session started here with no turn yet: rh would resume a conversation that doesn't exist.
+    fn awaits_first_turn(&self) -> bool {
+        self.origin == Origin::StartedHere && self.exchanges.is_empty()
     }
 
     pub(super) fn end_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {

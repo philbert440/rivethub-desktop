@@ -42,6 +42,15 @@ pub enum PaneEvent {
     Failed(String),
 }
 
+/// Where the pane's session came from, which decides whether its terminal can open before a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Listed,
+    /// Started or forked here: until its first turn has run, its terminal has no conversation to
+    /// resume.
+    StartedHere,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Chat,
@@ -77,6 +86,7 @@ pub struct SessionPane {
     forking: Option<usize>,
     /// Whether the session's stream was down when the transcript was last folded.
     lost: bool,
+    origin: Origin,
     awaiting_title: bool,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -135,6 +145,7 @@ impl SessionPane {
             renaming: None,
             forking: None,
             lost: false,
+            origin: Origin::Listed,
             awaiting_title: false,
             _revisions: watcher,
             _submitted: submitted,
