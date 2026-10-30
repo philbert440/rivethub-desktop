@@ -221,6 +221,47 @@ pub struct Approval {
     pub reason: Option<String>,
 }
 
+/// Which of a session's two views holds it: rh lets one run its harness at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Driver {
+    Chat,
+    Terminal,
+}
+
+/// A permission prompt the session's terminal shows, which only the terminal can answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalApproval {
+    pub tool: String,
+    pub input: ToolInput,
+}
+
+/// Who holds the session as its node reports it, and what waits for them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Driving {
+    pub driver: Option<Driver>,
+    /// A turn runs, as the node knows: a chat turn, or a prompt submitted in the terminal whose
+    /// end it hasn't heard of.
+    pub busy: bool,
+    /// Chat messages the node holds until the turn running in the other view ends, oldest first.
+    pub queued: Vec<String>,
+    pub approval: Option<TerminalApproval>,
+}
+
+impl Driving {
+    pub fn by_terminal(&self) -> bool {
+        self.driver == Some(Driver::Terminal)
+    }
+}
+
+/// The messages that left the front of `before`'s queue to give `after`'s: each one started.
+fn started<'a>(before: &'a [String], after: &[String]) -> &'a [String] {
+    let kept = (0..=before.len().min(after.len()))
+        .rev()
+        .find(|kept| after.starts_with(&before[before.len() - kept..]))
+        .unwrap_or(0);
+    &before[..before.len() - kept]
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Allow,
@@ -266,6 +307,7 @@ pub enum SessionEvent {
         model_ms: Option<u64>,
     },
     Activity(Activity),
+    Driving(Driving),
     Error(String),
 }
 
@@ -283,6 +325,7 @@ pub struct SessionView {
     lost: bool,
     paced: Pace,
     plan: Plan,
+    driving: Driving,
 }
 
 impl SessionView {
@@ -386,6 +429,12 @@ impl SessionView {
             SessionEvent::Context(counted) => self.counted = Some(counted),
             SessionEvent::Plan(plan) => self.plan = plan,
             SessionEvent::Activity(activity) => self.activity = activity,
+            SessionEvent::Driving(driving) => {
+                let before = std::mem::replace(&mut self.driving, driving);
+                for text in started(&before.queued, &self.driving.queued) {
+                    self.prompted(text.clone(), Vec::new(), None);
+                }
+            }
             SessionEvent::Error(message) => self.error = Some(message),
         }
     }
@@ -416,27 +465,32 @@ impl SessionView {
     /// The harness took `prompt` at `at_ms`: it shows as sent until a transcript that records it
     /// arrives, and an earlier failure no longer stands.
     pub fn accepted(&mut self, prompt: &Prompt, at_ms: i64) {
+        let files = prompt
+            .attachments
+            .iter()
+            .map(|attachment| SentFile {
+                media_type: attachment.media_type.clone(),
+                name: Some(attachment.name.clone()),
+                upload: None,
+            })
+            .collect();
+        self.prompted(prompt.text.clone(), files, Some(at_ms));
+    }
+
+    fn prompted(&mut self, text: String, files: Vec<SentFile>, at_ms: Option<i64>) {
         self.error = None;
         self.activity = Activity::Working;
         self.turns.push(Turn {
             role: Role::User,
-            text: prompt.text.clone(),
+            text,
             thinking: String::new(),
             tools: Vec::new(),
             ends_with_text: true,
             model: None,
             usage: Usage::default(),
-            files: prompt
-                .attachments
-                .iter()
-                .map(|attachment| SentFile {
-                    media_type: attachment.media_type.clone(),
-                    name: Some(attachment.name.clone()),
-                    upload: None,
-                })
-                .collect(),
-            started_at_ms: Some(at_ms),
-            ended_at_ms: Some(at_ms),
+            files,
+            started_at_ms: at_ms,
+            ended_at_ms: at_ms,
         });
     }
 
@@ -484,6 +538,10 @@ impl SessionView {
 
     pub fn approvals(&self) -> &[Approval] {
         &self.approvals
+    }
+
+    pub fn driving(&self) -> &Driving {
+        &self.driving
     }
 
     pub fn context(&self) -> Option<ContextUsage> {

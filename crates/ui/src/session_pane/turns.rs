@@ -162,6 +162,7 @@ impl SessionPane {
                 footer
                     .children(self.questions.read(cx).waiting().then(|| self.questions.clone()))
                     .children(self.plan_panel(&view, cx))
+                    .children(self.driving_dock(&view, cx))
                     .children(self.queue_dock(cx))
                     .child(
                         self.approval_card(&view, &self.composer.focus_handle(cx))

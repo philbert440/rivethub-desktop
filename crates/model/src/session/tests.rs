@@ -1,4 +1,7 @@
-use super::{Activity, Approval, ContextUsage, Role, SessionEvent, SessionView, ToolCall, ToolState, Turn};
+use super::{
+    Activity, Approval, ContextUsage, Driver, Driving, Role, SessionEvent, SessionView, ToolCall, ToolState,
+    Turn,
+};
 use crate::plan::{StepStatus, Todo, Todos};
 use crate::prompt::Prompt;
 use crate::tools::{ToolInput, ToolOutput};
@@ -311,4 +314,23 @@ fn the_harness_count_outranks_the_transcript_and_an_unknown_window_has_no_share(
         window: None,
     };
     assert_eq!((unknown.percent(), unknown.nearly_full()), (None, false));
+}
+
+#[test]
+fn a_message_the_node_held_for_the_terminal_shows_as_sent_once_it_starts() {
+    let mut view = SessionView::default();
+    let held = |driver, queued: &[&str]| {
+        SessionEvent::Driving(Driving {
+            driver: Some(driver),
+            busy: true,
+            queued: queued.iter().map(|text| (*text).to_owned()).collect(),
+            approval: None,
+        })
+    };
+    view.apply(held(Driver::Terminal, &["first", "second"]));
+    assert_eq!(view.turns(), []);
+    view.apply(held(Driver::Chat, &["second", "third"]));
+    let texts: Vec<_> = view.turns().iter().map(|turn| turn.text.as_str()).collect();
+    assert_eq!(texts, ["first"]);
+    assert_eq!(view.driving().queued, ["second", "third"]);
 }

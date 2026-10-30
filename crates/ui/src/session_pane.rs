@@ -19,6 +19,7 @@ use crate::transcript::{ExchangeView, Folds};
 
 mod attach;
 mod composer;
+mod driving;
 mod header;
 mod keys;
 pub(crate) mod plan;
@@ -240,7 +241,10 @@ impl SessionPane {
         let (folded, lost) = {
             let view = self.handle.view();
             let view = view.read();
-            (exchanges(view.turns(), view.live(), view.busy()), view.lost())
+            (
+                exchanges(view.turns(), view.live(), view.busy() || view.driving().busy),
+                view.lost(),
+            )
         };
         let previous = Arc::clone(&self.exchanges);
         let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
@@ -367,7 +371,7 @@ impl Render for SessionPane {
             self.header(&view, cx)
         };
         let prompt = self.spawn_prompt(cx);
-        let body = match (self.mode, &self.terminal) {
+        let body = match (self.mode, self.live_terminal(cx)) {
             (Mode::Terminal, None) => div().flex_1().w_full().child(prompt),
             (Mode::Terminal, Some(terminal)) => div()
                 .flex_1()
@@ -376,7 +380,7 @@ impl Render for SessionPane {
                 .flex_col()
                 .items_center()
                 .px_4()
-                .child(div().flex_1().w_full().child(terminal.clone()))
+                .child(div().flex_1().w_full().child(terminal))
                 .child(footer),
             _ => self.chat_body(column, behind, footer, body_width > px(900.), cx),
         };

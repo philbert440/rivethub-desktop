@@ -60,3 +60,8 @@ missing_panics_doc = "allow"
 lto = "thin"
 codegen-units = 1
 
+
+# Local development only: the driver event lives on rh branch feat/view-sync. Repin `wire` above to
+# that branch's merged rev and drop this patch before any PR.
+[patch."https://github.com/philbert440/rivethub-runtime"]
+wire = { path = "/home/phil/work/rh-viewsync/crates/wire" }
