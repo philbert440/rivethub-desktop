@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use gateway::GatewayError;
-use gpui::Context;
-use model::SessionId;
+use gpui::{Context, Window};
 use model::topics::Filing;
+use model::{Altitude, SessionId};
 
 use super::{Arrival, Listed, Workspace};
 
@@ -212,6 +212,25 @@ impl Workspace {
             .iter()
             .filter(|session| !listed.contains(&session.id));
         self.filed_sessions = self.sessions.iter().chain(remembered).cloned().collect();
+    }
+
+    /// Deleted sessions leave every list at once, and the page showing one; the listing that
+    /// follows has rh's word on them, which lists a session again once it is used.
+    pub fn sessions_deleted(&mut self, deleted: &[SessionId], window: &mut Window, cx: &mut Context<Self>) {
+        self.sessions.retain(|session| !deleted.contains(&session.id));
+        self.remembered.retain(|session| !deleted.contains(&session.id));
+        for session in deleted {
+            self.placements.remove(session);
+            self.suggestions.remove(session);
+        }
+        self.show_listing(cx);
+        match &self.altitude {
+            Altitude::Session { session, .. } if deleted.contains(session) => {
+                let out = self.altitude.zoom_out();
+                self.leave_to(out, window, cx);
+            }
+            _ => self.load(cx),
+        }
     }
 
     /// Something was filed or unfiled elsewhere, such as from Memory: list topics again.

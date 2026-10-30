@@ -1,3 +1,7 @@
+mod words;
+
+pub use words::Noun;
+
 use std::future::Future;
 
 use app::Hub;
@@ -9,7 +13,10 @@ use gpui::{
 use model::plugin::view::Action;
 use model::plugin::{PluginRef, SessionAction};
 use model::session::SessionSummary;
+use model::trash::Deletion;
 use model::{SessionId, TopicId};
+
+use words::Doomed;
 
 use crate::brand;
 use crate::memory::Focus;
@@ -18,6 +25,8 @@ use crate::theme::Theme;
 pub enum MenuEvent {
     ViewInMemory(Focus),
     Deleted(TopicId),
+    /// rh deleted the session, which leaves the lists until it is used again.
+    SessionDeleted(SessionId),
     /// A topic was closed, reopened or moved to the top level, or a session marked as history or
     /// made active.
     Filed,
@@ -36,44 +45,6 @@ pub enum MenuEvent {
     Closed,
 }
 
-/// What the menu's topic is, which words its moves and its delete use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Noun {
-    #[default]
-    Topic,
-    Type,
-    Entity,
-}
-
-impl Noun {
-    fn moves(self) -> &'static str {
-        match self {
-            Self::Topic | Self::Type => "Move into…",
-            Self::Entity => "Change type…",
-        }
-    }
-
-    fn deletes(self) -> &'static str {
-        match self {
-            Self::Topic => "Delete topic",
-            Self::Type => "Delete type",
-            Self::Entity => "Delete entity",
-        }
-    }
-
-    fn warning(self) -> &'static str {
-        match self {
-            Self::Topic => {
-                "Delete this topic? Its sessions go back to Uncategorized, and any subtopics move up a level."
-            }
-            Self::Type => {
-                "Delete this type? Its subtypes and entities move up a level, so a top-level type's entities need another type first."
-            }
-            Self::Entity => "Delete this entity? Its page goes too, and the wiki won't make it again.",
-        }
-    }
-}
-
 /// Where Move up a level takes a subtopic: under its grandparent, or to the top level when it has
 /// none.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +55,7 @@ pub struct Lift(pub Option<TopicId>);
 pub struct Menu {
     hub: Hub,
     view: Option<Focus>,
-    delete: Option<(TopicId, String)>,
+    delete: Option<Doomed>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
     edits: Option<(TopicId, Option<Lift>, bool)>,
@@ -118,7 +89,7 @@ impl Menu {
         Self {
             hub,
             view,
-            delete,
+            delete: delete.map(|(topic, name)| Doomed::Topic(topic, name)),
             close: None,
             history: None,
             edits: None,
@@ -162,6 +133,12 @@ impl Menu {
         self
     }
 
+    /// Offers Delete session, which asks first.
+    pub fn deleting(mut self, session: SessionSummary) -> Self {
+        self.delete = Some(Doomed::Session(Box::new(session)));
+        self
+    }
+
     /// Offers the entries plug-ins add to the menu of the session `moving` names.
     pub fn plugin_actions(mut self, actions: Vec<(PluginRef, SessionAction)>) -> Self {
         self.plugin_actions = actions;
@@ -196,8 +173,10 @@ impl Menu {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
-        let Some((topic, _)) = self.delete.clone() else {
-            return;
+        let topic = match self.delete.clone() {
+            Some(Doomed::Topic(topic, _)) => topic,
+            Some(Doomed::Session(session)) => return self.delete_session(*session, cx),
+            None => return,
         };
         self.busy = true;
         self.problem = None;
@@ -210,6 +189,30 @@ impl Menu {
                 match deleted {
                     Ok(()) => cx.emit(MenuEvent::Deleted(topic)),
                     Err(GatewayError::Conflict(message)) => this.problem = Some(message),
+                    Err(err) => this.problem = Some(format!("deleting failed: {err}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn delete_session(&mut self, session: SessionSummary, cx: &mut Context<Self>) {
+        self.busy = true;
+        self.problem = None;
+        cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let deleted = hub.delete_session(&session).await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match deleted {
+                    Ok(Deletion::Deleted) => cx.emit(MenuEvent::SessionDeleted(session.id.clone())),
+                    Ok(stayed) => {
+                        let why = stayed.refusal().unwrap_or_default();
+                        this.problem = Some(format!("It stays: {why}."));
+                    }
                     Err(err) => this.problem = Some(format!("deleting failed: {err}")),
                 }
                 cx.notify();
@@ -430,9 +433,9 @@ impl Menu {
                     )))
                 },
             )
-            .when(self.delete.is_some(), |items| {
+            .when_some(self.delete.as_ref(), |items, doomed| {
                 items.child(
-                    Self::item("delete-topic", self.noun.deletes())
+                    Self::item("delete", doomed.label(self.noun))
                         .text_color(Theme::warn())
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.confirming = true;
@@ -452,15 +455,19 @@ impl Menu {
             .into_any_element()
     }
 
-    fn confirm(&self, name: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn confirm(&self, doomed: &Doomed, cx: &mut Context<Self>) -> AnyElement {
         div()
             .max_w(px(320.))
             .p_3()
             .flex()
             .flex_col()
             .gap_3()
-            .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name.to_owned()))
-            .child(div().text_color(Theme::ink_dim()).child(self.noun.warning()))
+            .child(div().font_weight(gpui::FontWeight::MEDIUM).child(doomed.name()))
+            .child(
+                div()
+                    .text_color(Theme::ink_dim())
+                    .child(doomed.warning(self.noun)),
+            )
             .children(
                 self.problem
                     .clone()
@@ -497,7 +504,7 @@ impl Menu {
 impl Render for Menu {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match (&self.delete, self.confirming) {
-            (Some((_, name)), true) => self.confirm(name, cx),
+            (Some(doomed), true) => self.confirm(doomed, cx),
             _ => self.items(cx),
         };
         div()

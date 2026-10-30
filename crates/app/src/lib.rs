@@ -11,6 +11,7 @@ mod session;
 mod status;
 mod terminal;
 mod topics;
+mod trash;
 
 pub use feed::WorkspaceFeed;
 pub use listing::{AllSessions, Missing, SessionListing};
@@ -18,6 +19,7 @@ pub use memory::{Library, Tidy};
 pub use plugins::{Installed, NodeNotice, PluginWatch};
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
+pub use trash::TrashReview;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

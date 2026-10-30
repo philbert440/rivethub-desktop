@@ -129,42 +129,49 @@ impl AllSessions {
 }
 
 impl Hub {
+    /// The nodes to ask, this client's own first, then every other online node the mesh names, and
+    /// whether the mesh could be read. Runs on the hub's runtime.
+    pub(crate) async fn reachable(&self) -> (Vec<(Option<String>, Gateway)>, bool) {
+        // Until this node has named itself, its own mesh entry would be asked again as another
+        // node's, over the network.
+        let unnamed = self.inner.local_node.read().is_none();
+        if unnamed && let Ok(roster) = self.inner.local.agents().await {
+            *self.inner.local_node.write() = Some(roster.node);
+        }
+        let local = self.inner.local_node.read().clone();
+        let mut nodes = vec![(None, self.inner.local.clone())];
+        let mesh = self.inner.local.mesh().await.ok();
+        for node in mesh.iter().flatten() {
+            let is_local = local.as_deref().is_some_and(|name| node.answers_to(name));
+            if node.online
+                && !is_local
+                && let Ok(gateway) = self.gateway_for(Some(&node.name)).await
+            {
+                nodes.push((Some(node.name.clone()), gateway));
+            }
+        }
+        // Without this node's mesh, such as while it restarts, the nodes already reached are
+        // still asked directly.
+        if mesh.is_none() {
+            let known = self.inner.remote.read().clone();
+            nodes.extend(
+                known
+                    .into_iter()
+                    .filter(|(name, _)| !self.is_local(name))
+                    .map(|(name, gateway)| (Some(name), gateway)),
+            );
+        }
+        (nodes, mesh.is_some())
+    }
+
     /// Every session every reachable node lists, across all of its harnesses. Each node's sessions
     /// join the listing as that node answers, so a slow or silent node holds back only its own.
     pub async fn all_sessions(&self) -> Result<SessionListing, GatewayError> {
         let hub = self.clone();
         self.on_runtime(async move {
-            // Until this node has named itself, its own mesh entry would be listed again as another
-            // node's, over the network.
-            let unnamed = hub.inner.local_node.read().is_none();
-            if unnamed && let Ok(roster) = hub.inner.local.agents().await {
-                *hub.inner.local_node.write() = Some(roster.node);
-            }
-            let local = hub.inner.local_node.read().clone();
-            let mut nodes = vec![(None, hub.inner.local.clone())];
-            let mesh = hub.inner.local.mesh().await.ok();
-            for node in mesh.iter().flatten() {
-                let is_local = local.as_deref().is_some_and(|name| node.answers_to(name));
-                if node.online
-                    && !is_local
-                    && let Ok(gateway) = hub.gateway_for(Some(&node.name)).await
-                {
-                    nodes.push((Some(node.name.clone()), gateway));
-                }
-            }
-            // Without this node's mesh, such as while it restarts, the nodes already reached are
-            // still asked directly, so their sessions stay listed.
-            if mesh.is_none() {
-                let known = hub.inner.remote.read().clone();
-                nodes.extend(
-                    known
-                        .into_iter()
-                        .filter(|(name, _)| !hub.is_local(name))
-                        .map(|(name, gateway)| (Some(name), gateway)),
-                );
-            }
+            let (nodes, mesh_read) = hub.reachable().await;
             let all = AllSessions {
-                other_nodes: mesh.map(|_| nodes.iter().filter_map(|(node, _)| node.clone()).collect()),
+                other_nodes: mesh_read.then(|| nodes.iter().filter_map(|(node, _)| node.clone()).collect()),
                 pending: nodes.iter().map(|(node, _)| node.clone()).collect(),
                 asked: nodes.iter().map(|(node, _)| node.clone()).collect(),
                 ..AllSessions::default()

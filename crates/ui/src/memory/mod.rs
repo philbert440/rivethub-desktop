@@ -11,6 +11,7 @@ mod sessions;
 mod stats;
 mod tidy;
 mod topics;
+mod trash;
 
 use std::sync::Arc;
 
@@ -82,6 +83,8 @@ pub enum MemoryEvent {
     TopicDeleted(TopicId),
     /// Memory filed or unfiled something, so the workspace lists topics again.
     Refiled,
+    /// The trash review deleted these sessions, which leave the workspace's lists too.
+    SessionsDeleted(Vec<SessionId>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +118,7 @@ pub struct MemoryPage {
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
     review: proposals::Review,
+    trash: trash::Sweep,
     stats: Option<Stats>,
     upkeep: Option<Upkeep>,
     catalog: Option<Catalog>,
@@ -175,6 +179,7 @@ impl MemoryPage {
             page_scroll: ScrollHandle::new(),
             tidy: None,
             review: proposals::Review::default(),
+            trash: trash::Sweep::default(),
             stats: None,
             upkeep: None,
             catalog: None,
@@ -189,6 +194,7 @@ impl MemoryPage {
             _submitted: [asked, found, sought],
         };
         page.load_tidy(cx);
+        page.load_trash(cx);
         page
     }
 
@@ -246,6 +252,7 @@ impl MemoryPage {
             Tab::Entities => self.load_catalog(cx),
             Tab::Stats => {
                 self.load_tidy(cx);
+                self.load_trash(cx);
                 self.load_stats(cx);
                 self.load_catalog(cx);
             }
@@ -259,7 +266,7 @@ impl MemoryPage {
     }
 
     fn tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let waiting = self.tidy.as_ref().map_or(0, app::Tidy::waiting);
+        let waiting = self.tidy.as_ref().map_or(0, app::Tidy::waiting) + self.trash.waiting();
         div()
             .flex()
             .items_center()

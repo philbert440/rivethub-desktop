@@ -12,6 +12,7 @@ mod tls;
 mod tool_input;
 mod topics;
 mod translate;
+mod trash;
 
 pub use chat::SessionStream;
 pub use error::GatewayError;

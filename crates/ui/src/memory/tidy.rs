@@ -135,9 +135,10 @@ impl MemoryPage {
 
     /// What the tagger proposed and is waiting on a person for.
     pub(super) fn tidy_section(&self, cx: &mut Context<Self>) -> AnyElement {
+        let trash = self.trash_review(cx);
         let body = match &self.tidy {
             None => div().text_color(Theme::ink_dim()).child("Loading…"),
-            Some(tidy) if tidy.waiting() == 0 => div()
+            Some(tidy) if tidy.waiting() == 0 && trash.is_none() => div()
                 .pt_4()
                 .text_color(Theme::ink_dim())
                 .child("All tidy. Memory adds things here when it needs you."),
@@ -151,6 +152,13 @@ impl MemoryPage {
                         "changes to the trees and the wiki's pages, in the batches they were proposed in",
                     ))
                     .children(self.batches(cx))
+                })
+                .when_some(trash, |list, trash| {
+                    list.child(Self::group(
+                        "Sessions",
+                        "what the nodes count as obvious trash: nothing said, or one prompt with a one-word reply",
+                    ))
+                    .child(trash)
                 })
                 .when(!tidy.tags.is_empty(), |list| {
                     list.child(Self::group("Tags", "the tagger's proposals for conversations"))

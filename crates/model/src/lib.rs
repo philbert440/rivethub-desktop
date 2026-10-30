@@ -26,6 +26,7 @@ pub mod shelf;
 pub mod tidy;
 pub mod tools;
 pub mod topics;
+pub mod trash;
 pub mod trust;
 pub mod usage;
 pub mod wiki;

@@ -60,30 +60,7 @@ impl Shell {
             this.memory
                 .update(cx, |memory, cx| memory.listed(Arc::clone(listed), cx));
         });
-        let from_memory = cx.subscribe_in(
-            &memory,
-            window,
-            |this, memory, event: &MemoryEvent, window, cx| match event {
-                MemoryEvent::OpenSession(session) => {
-                    if !this.open_listed(session, window, cx) {
-                        memory.update(cx, MemoryPage::unlisted);
-                    }
-                }
-                MemoryEvent::OpenTopic(topic) => {
-                    this.workspace.update(cx, |workspace, cx| {
-                        workspace.open_topic(topic.clone(), window, cx);
-                    });
-                    this.turn_to(Page::Workspace, cx);
-                }
-                MemoryEvent::TopicDeleted(topic) => {
-                    this.workspace
-                        .update(cx, |workspace, cx| workspace.topic_deleted(topic, window, cx));
-                }
-                MemoryEvent::Refiled => {
-                    this.workspace.update(cx, Workspace::refiled);
-                }
-            },
-        );
+        let from_memory = cx.subscribe_in(&memory, window, Self::memory_asked);
         let from_settings = cx.subscribe(&settings, |this, _, event: &SettingsEvent, cx| match event {
             SettingsEvent::AgentsChanged => {
                 this.workspace.update(cx, Workspace::agents_changed);
@@ -133,6 +110,41 @@ impl Shell {
                 from_plugins,
             ],
             _omarchy: omarchy,
+        }
+    }
+
+    /// What Memory asks of the workspace.
+    fn memory_asked(
+        &mut self,
+        memory: &Entity<MemoryPage>,
+        event: &MemoryEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            MemoryEvent::OpenSession(session) => {
+                if !self.open_listed(session, window, cx) {
+                    memory.update(cx, MemoryPage::unlisted);
+                }
+            }
+            MemoryEvent::OpenTopic(topic) => {
+                self.workspace.update(cx, |workspace, cx| {
+                    workspace.open_topic(topic.clone(), window, cx);
+                });
+                self.turn_to(Page::Workspace, cx);
+            }
+            MemoryEvent::TopicDeleted(topic) => {
+                self.workspace
+                    .update(cx, |workspace, cx| workspace.topic_deleted(topic, window, cx));
+            }
+            MemoryEvent::Refiled => {
+                self.workspace.update(cx, Workspace::refiled);
+            }
+            MemoryEvent::SessionsDeleted(sessions) => {
+                self.workspace.update(cx, |workspace, cx| {
+                    workspace.sessions_deleted(sessions, window, cx);
+                });
+            }
         }
     }
 

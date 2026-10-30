@@ -68,6 +68,7 @@ impl Workspace {
             let local = self.hub.local_node();
             let plugged = self.plugins.read(cx).session_actions(&latest, local.as_deref());
             menu = menu
+                .deleting(latest.clone())
                 .moving(latest, placed)
                 .filing(id, history)
                 .plugin_actions(plugged);
@@ -83,6 +84,9 @@ impl Workspace {
                 MenuEvent::Deleted(topic) => {
                     this.topic_deleted(topic, window, cx);
                     cx.emit(TopicDeleted(topic.clone()));
+                }
+                MenuEvent::SessionDeleted(session) => {
+                    this.sessions_deleted(std::slice::from_ref(session), window, cx);
                 }
                 MenuEvent::Filed => this.refile(cx),
                 MenuEvent::Rename(topic) => this.begin_retitle(topic.clone(), window, cx),

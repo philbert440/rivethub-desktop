@@ -63,7 +63,7 @@ pub(super) fn verdict_button(
         .child(label)
 }
 
-fn counted(count: usize, one: &str, many: &str) -> String {
+pub(super) fn counted(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
