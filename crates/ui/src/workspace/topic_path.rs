@@ -105,7 +105,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !current && let Some(field) = self.retitle_field(id, cx) {
-            return field;
+            return Self::pill_sized(field);
         }
         let (target, renamed) = (id.clone(), id.clone());
         let step = (id != root).then(|| id.clone());
@@ -147,7 +147,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(field) = self.retitle_field(&child.id, cx) {
-            return field;
+            return Self::pill_sized(field);
         }
         let clicked = child.id.clone();
         let pressed = self
@@ -206,6 +206,11 @@ impl Workspace {
                 )
             });
         Self::takes_drops(pill, child.id.clone(), cx).into_any_element()
+    }
+
+    /// A name field in the path or the pill row, about as wide as a pill rather than the whole row.
+    fn pill_sized(field: AnyElement) -> AnyElement {
+        div().w(px(260.)).child(field).into_any_element()
     }
 
     /// Steps into `topic` once a second click can no longer make the first a double-click.
