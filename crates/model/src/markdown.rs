@@ -265,7 +265,12 @@ pub fn plain(source: &str) -> String {
 }
 
 fn flatten(block: &Block, words: &mut Vec<String>) {
-    let runs = |runs: &[Run]| runs.iter().map(|run| run.text.as_str()).collect::<String>();
+    let runs = |runs: &[Run]| {
+        runs.iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>()
+            .replace('\n', " ")
+    };
     match block {
         Block::Heading { runs: line, .. } | Block::Paragraph(line) => words.push(runs(line)),
         Block::List { items, .. } => items.iter().flatten().for_each(|inner| flatten(inner, words)),
@@ -364,8 +369,7 @@ pub fn parse(source: &str) -> Vec<Block> {
             },
             Event::Text(text) => builder.push_text(&text, false),
             Event::Code(text) => builder.push_text(&text, true),
-            Event::SoftBreak => builder.push_text(" ", false),
-            Event::HardBreak => builder.push_text("\n", false),
+            Event::SoftBreak | Event::HardBreak => builder.push_text("\n", false),
             Event::Rule => builder.emit(Block::Rule),
             Event::TaskListMarker(done) => builder.push_text(if done { "☑ " } else { "☐ " }, false),
             _ => {}
@@ -522,6 +526,18 @@ mod tests {
                 ("here", None),
             ]
         );
+    }
+
+    #[test]
+    fn a_single_newline_breaks_the_line_as_written() {
+        let Block::Paragraph(runs) = &parse("Line one\nLine two")[0] else {
+            unreachable!("one paragraph")
+        };
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            "Line one\nLine two"
+        );
+        assert_eq!(super::plain("Line one\nLine two"), "Line one Line two");
     }
 
     #[test]
