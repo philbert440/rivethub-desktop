@@ -10,7 +10,7 @@ use gtk::gdk::ffi as gdk_ffi;
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 
-use crate::Button;
+use webview::Button;
 
 /// Milliseconds on one clock for every event, which `WebKit` uses to count double clicks.
 fn now() -> u32 {

@@ -15,8 +15,9 @@ use gpui::{
 use model::plugin::panel::{HostMessage, Message, Request, Theme as PanelTheme};
 use model::plugin::view::{Action, WebPanelBlock};
 use model::plugin::{Context as About, PluginRef};
-use webview::{Fetch, Fetched, Menu, Panel, Size, Update};
+use webview::{Fetched, Menu, Panel, Size, Update};
 
+use crate::brand;
 use crate::theme::Theme;
 
 /// A panel's height when neither its block nor its page says.
@@ -27,12 +28,23 @@ const HEIGHTS: (f32, f32) = (48., 2400.);
 /// The page asked for these actions.
 pub struct Asked(pub Vec<Action>);
 
+/// Why the page isn't showing.
+enum Trouble {
+    /// It can't, such as with `WebKitGTK` missing; why, in words.
+    Unavailable(String),
+    /// Its process kept stopping, so it waits on the person to start it again.
+    Stopped,
+}
+
 pub struct WebPanelView {
+    hub: Hub,
     plugin: PluginRef,
     block: WebPanelBlock,
     context: About,
     panel: Option<Panel>,
-    problem: Option<String>,
+    trouble: Option<Trouble>,
+    /// Tab took the keyboard past the page's last element (`true`) or its first.
+    left: Option<bool>,
     frame: Option<(Arc<RenderImage>, gpui::Size<Pixels>)>,
     /// Frames replaced since the last draw, whose textures the window lets go of.
     retired: Vec<Arc<RenderImage>>,
@@ -74,9 +86,9 @@ impl WebPanelView {
                 height,
                 scale: 1.,
             },
-            loader: loader(hub, &plugin),
+            faces: brand::FACES.to_vec(),
         };
-        let (panel, problem, updates) = match Panel::open(options) {
+        let (panel, trouble, updates) = match Panel::open(options) {
             Ok((panel, mut updates)) => {
                 let follow = cx.spawn(async move |this, cx| {
                     while let Some(update) = updates.next().await {
@@ -87,14 +99,16 @@ impl WebPanelView {
                 });
                 (Some(panel), None, follow)
             }
-            Err(err) => (None, Some(err.to_string()), Task::ready(())),
+            Err(err) => (None, Some(Trouble::Unavailable(err.to_string())), Task::ready(())),
         };
         Self {
+            hub: hub.clone(),
             plugin,
             block,
             context,
             panel,
-            problem,
+            trouble,
+            left: None,
             frame: None,
             retired: Vec::new(),
             height,
@@ -102,7 +116,7 @@ impl WebPanelView {
             bounds: None,
             cursor: CursorStyle::Arrow,
             menu: None,
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             theme: None,
             marked: None,
             caret_moved: false,
@@ -144,17 +158,68 @@ impl WebPanelView {
                     }
                 }
             }
-            Update::Loaded => self.greet(),
+            Update::Loaded => {
+                self.trouble = None;
+                self.greet();
+            }
+            Update::Fetch(request) => self.fetch(request, cx),
+            Update::FocusLeft { forward } => self.left = Some(forward),
             Update::Message(json) => self.heard(&json, cx),
             Update::Cursor(cursor) => self.cursor = cursor_style(cursor),
             Update::Menu(menu) => self.menu = menu,
             Update::Copied(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
             Update::Caret => self.caret_moved = true,
-            Update::Stopped => {
-                self.problem = Some("The panel's page stopped.".into());
-            }
+            Update::Stopped => self.trouble = Some(Trouble::Stopped),
         }
         cx.notify();
+    }
+
+    /// Answers a page's request through the plug-in's node, as the contract's proxy routes do.
+    fn fetch(&self, request: webview::Request, cx: &mut Context<Self>) {
+        let (hub, plugin, id) = (self.hub.clone(), self.plugin.clone(), request.id);
+        let request = Request {
+            method: request.method,
+            path: request.path,
+            headers: request.headers,
+            body: request.body,
+        };
+        cx.spawn(async move |this, cx| {
+            let fetched = match hub.plugin_page(plugin, request).await {
+                Ok(response) => Fetched {
+                    status: response.status,
+                    media_type: response.media_type,
+                    body: response.body,
+                },
+                Err(err) => Fetched {
+                    status: 502,
+                    media_type: Some("text/plain; charset=utf-8".into()),
+                    body: err.to_string().into_bytes(),
+                },
+            };
+            this.update(cx, |this, _| {
+                if let Some(panel) = &this.panel {
+                    panel.respond(id, &fetched);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Hands the keyboard on from a page Tab left: to the app's next or previous tab stop, or to
+    /// nothing when the panel is the only one.
+    fn hand_on(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            return;
+        }
+        if forward {
+            window.focus_next(cx);
+        } else {
+            window.focus_prev(cx);
+        }
+        if self.focus.is_focused(window) {
+            window.blur(cx);
+        }
     }
 
     /// Tells a page that has loaded the theme, its params and what its view is about.
@@ -205,7 +270,7 @@ impl WebPanelView {
             return;
         }
         if let Some(panel) = &self.panel {
-            panel.restyle(gateway::panel::style(&theme));
+            panel.restyle(&gateway::panel::style(&theme));
         }
         self.post(&HostMessage::Theme(theme.clone()));
         self.theme = Some(theme);
@@ -225,6 +290,29 @@ impl WebPanelView {
             panel.resize(size);
             self.size = Some(size);
         }
+    }
+
+    /// Why the page isn't showing, over the panel, with what the person can do about it.
+    fn notice(text: String, action: Option<gpui::AnyElement>) -> impl IntoElement {
+        div()
+            .absolute()
+            .inset_0()
+            .p_6()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .bg(Theme::surface())
+            .text_sm()
+            .text_color(Theme::ink_dim())
+            .child(brand::icon(
+                brand::symbol(Some("language")),
+                24.,
+                Theme::ink_dim(),
+            ))
+            .child(div().max_w(px(520.)).text_center().child(text))
+            .children(action)
     }
 
     fn menu_overlay(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
@@ -287,34 +375,6 @@ fn frame_logical(pixels: u32, scale: f32) -> f32 {
     pixels / scale
 }
 
-/// Answers a page's requests through the plug-in's node, as the contract's proxy routes do.
-fn loader(hub: &Hub, plugin: &PluginRef) -> webview::Loader {
-    let (hub, plugin) = (hub.clone(), plugin.clone());
-    Arc::new(move |fetch: Fetch| {
-        let (hub, plugin) = (hub.clone(), plugin.clone());
-        Box::pin(async move {
-            let request = Request {
-                method: fetch.method,
-                path: fetch.path,
-                headers: fetch.headers,
-                body: fetch.body,
-            };
-            match hub.plugin_page(plugin, request).await {
-                Ok(response) => Fetched {
-                    status: response.status,
-                    media_type: response.media_type,
-                    body: response.body,
-                },
-                Err(err) => Fetched {
-                    status: 502,
-                    media_type: Some("text/plain; charset=utf-8".into()),
-                    body: err.to_string().into_bytes(),
-                },
-            }
-        })
-    })
-}
-
 fn cursor_style(cursor: webview::Cursor) -> CursorStyle {
     use webview::Cursor;
     match cursor {
@@ -354,6 +414,9 @@ impl Render for WebPanelView {
             window.invalidate_character_coordinates();
         }
         self.follow_theme();
+        if let Some(forward) = self.left.take() {
+            cx.defer_in(window, move |this, window, cx| this.hand_on(forward, window, cx));
+        }
         let view = cx.entity();
         let cursor = self.cursor;
         let surface = canvas(
@@ -393,19 +456,32 @@ impl Render for WebPanelView {
                     .h(size.height)
             }))
             .child(surface)
-            .children(self.problem.clone().map(|problem| {
-                div()
-                    .absolute()
-                    .left(px(12.))
-                    .top(px(12.))
-                    .max_w(px(420.))
-                    .px_3()
-                    .py_1()
-                    .rounded(px(12.))
-                    .bg(Theme::danger_container())
-                    .text_xs()
-                    .text_color(Theme::danger())
-                    .child(problem)
+            .children(self.trouble.as_ref().map(|trouble| match trouble {
+                Trouble::Unavailable(why) => Self::notice(why.clone(), None),
+                Trouble::Stopped => {
+                    let restart = div()
+                        .id("web-panel-restart")
+                        .h(px(34.))
+                        .px_4()
+                        .rounded(px(17.))
+                        .flex()
+                        .items_center()
+                        .bg(Theme::accent())
+                        .text_color(Theme::on_accent())
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                            if let Some(panel) = &this.panel {
+                                panel.reload();
+                            }
+                            this.trouble = None;
+                            cx.notify();
+                        }))
+                        .child("Restart");
+                    Self::notice(
+                        "The panel's page stopped and kept stopping when started again.".into(),
+                        Some(restart.into_any_element()),
+                    )
+                }
             }))
             .children(self.menu_overlay(cx))
     }

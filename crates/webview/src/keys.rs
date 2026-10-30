@@ -1,6 +1,6 @@
 //! Keys by the names the app's toolkit gives them, as X keysyms (GDK's keyvals).
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "one flag per modifier key, as the app's toolkit reports them"
@@ -14,7 +14,7 @@ pub struct Modifiers {
 
 impl Modifiers {
     /// As a GDK modifier state.
-    pub(crate) fn state(self) -> u32 {
+    pub fn state(self) -> u32 {
         const SHIFT: u32 = 1;
         const CONTROL: u32 = 1 << 2;
         const ALT: u32 = 1 << 3;

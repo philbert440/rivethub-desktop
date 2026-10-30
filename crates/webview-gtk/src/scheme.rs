@@ -1,11 +1,15 @@
-//! The pages' scheme: every request a page makes of its own origin goes to that origin's loader,
-//! and every answer carries the page's security policy, whatever the server sent.
+//! The pages' scheme: every request a page makes of its own origin goes to the app, and every
+//! answer carries the page's security policy, whatever the server sent.
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use gtk::{gio, glib};
 use webkit2gtk::{URISchemeRequestExt, URISchemeResponseExt};
+use webview::protocol::FromEngine;
 
 use crate::engine::Origins;
-use crate::{Fetch, Fetched};
 
 pub(crate) const SCHEME: &str = "rhpanel";
 
@@ -15,28 +19,45 @@ pub(crate) const SCHEME: &str = "rhpanel";
 const POLICY: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
                       sandbox allow-scripts allow-same-origin allow-forms";
 
-pub(crate) fn answer(request: &webkit2gtk::URISchemeRequest, origins: &Origins) {
+/// Requests waiting on the app's answer, by the id the app was given.
+#[derive(Clone, Default)]
+pub(crate) struct Pending {
+    next: Rc<Cell<u64>>,
+    requests: Rc<RefCell<HashMap<u64, webkit2gtk::URISchemeRequest>>>,
+}
+
+impl Pending {
+    pub(crate) fn answer(&self, id: u64, status: u16, media_type: Option<&str>, body: Vec<u8>) {
+        let request = self.requests.borrow_mut().remove(&id);
+        if let Some(request) = request {
+            finish(&request, status, media_type, body);
+        }
+    }
+}
+
+/// Hands a page's request to the app, through a page open at its origin.
+pub(crate) fn ask(request: &webkit2gtk::URISchemeRequest, origins: &Origins, pending: &Pending) {
     let uri = request.uri().map(|uri| uri.to_string()).unwrap_or_default();
     let Some((host, path)) = split(&uri) else {
-        finish(request, &failed(400, "not a panel address"));
+        finish(request, 400, None, b"not a panel address".to_vec());
         return;
     };
-    let Some(loader) = origins.loader(host) else {
-        finish(request, &failed(404, "no panel at this address"));
+    let Some(panel) = origins.page(host) else {
+        finish(request, 404, None, b"no panel at this address".to_vec());
         return;
     };
-    let fetch = Fetch {
+    let id = pending.next.get() + 1;
+    pending.next.set(id);
+    pending.requests.borrow_mut().insert(id, request.clone());
+    crate::emit(&FromEngine::Fetch {
+        panel,
+        request: id,
         method: request
             .http_method()
             .map_or_else(|| "GET".to_owned(), |method| method.to_string()),
         path: path.to_owned(),
         headers: headers(request),
         body: body(request),
-    };
-    let request = request.clone();
-    let answered = loader(fetch);
-    glib::MainContext::default().spawn_local(async move {
-        finish(&request, &answered.await);
     });
 }
 
@@ -72,23 +93,12 @@ fn body(request: &webkit2gtk::URISchemeRequest) -> Vec<u8> {
     body
 }
 
-fn failed(status: u16, why: &str) -> Fetched {
-    Fetched {
-        status,
-        media_type: Some("text/plain; charset=utf-8".into()),
-        body: why.as_bytes().to_vec(),
-    }
-}
-
-fn finish(request: &webkit2gtk::URISchemeRequest, fetched: &Fetched) {
-    let length = i64::try_from(fetched.body.len()).unwrap_or(-1);
-    let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from(&fetched.body));
+fn finish(request: &webkit2gtk::URISchemeRequest, status: u16, media_type: Option<&str>, body: Vec<u8>) {
+    let length = i64::try_from(body.len()).unwrap_or(-1);
+    let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(body));
     let response = webkit2gtk::URISchemeResponse::new(&stream, length);
-    response.set_status(u32::from(fetched.status), None);
-    let media_type = fetched
-        .media_type
-        .as_deref()
-        .unwrap_or("application/octet-stream");
+    response.set_status(u32::from(status), None);
+    let media_type = media_type.unwrap_or("application/octet-stream");
     // WebKit takes the content type as a bare media type; its parameters (the charset) go in the
     // header, where `nosniff` checks the type.
     response.set_content_type(media_type.split(';').next().unwrap_or(media_type).trim());

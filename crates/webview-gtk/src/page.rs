@@ -3,28 +3,24 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use futures::channel::mpsc::UnboundedSender;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use javascriptcore::ValueExt;
 use webkit2gtk::{
-    HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, PolicyDecisionType,
-    UserContentInjectedFrames, UserContentManager, UserScript, UserScriptInjectionTime, UserStyleLevel,
-    UserStyleSheet, WebView,
+    HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NavigationPolicyDecisionExt,
+    OptionMenuExt, PolicyDecisionExt, PolicyDecisionType, SettingsExt, URIRequestExt,
+    UserContentInjectedFrames, UserContentManager, UserContentManagerExt, UserScript,
+    UserScriptInjectionTime, UserStyleLevel, UserStyleSheet, WebProcessTerminationReason, WebView,
+    WebViewExt,
 };
-use webkit2gtk::{
-    NavigationPolicyDecisionExt, OptionMenuExt, PolicyDecisionExt, SettingsExt, URIRequestExt,
-    UserContentManagerExt, WebViewExt,
-};
+use webview::protocol::{Command, Event};
+use webview::{Cursor, Menu, Modifiers, Pointer, Rect, Size};
 
 use crate::events;
 use crate::ime::Ime;
-use crate::keys::Modifiers;
-use crate::{Cursor, Frame, Menu, Options, Pointer, Rect, Shared, Size, Update, scheme};
+use crate::scheme;
 
 /// What the page sees of its host: `parent.postMessage(message)`, as an iframe would, reaching
 /// the app as JSON on the `rivethub` handler.
@@ -39,48 +35,26 @@ const BRIDGE: &str = r"(() => {
 /// The longest message a page may post; a longer one is dropped.
 const MESSAGE_LIMIT: usize = 256 * 1024;
 
-pub(crate) struct Opening {
-    pub(crate) id: u64,
-    pub(crate) options: Options,
-    pub(crate) shared: Arc<Shared>,
-    pub(crate) updates: UnboundedSender<Update>,
-}
-
-pub(crate) enum Command {
-    Resize(Size),
-    Pointer(Pointer, Modifiers),
-    Key {
-        press: bool,
-        keyval: u32,
-        modifiers: Modifiers,
-    },
-    Focus(bool),
-    Post(String),
-    Restyle(String),
-    Choose(Option<usize>),
-    Compose {
-        text: String,
-        cursor: usize,
-    },
-    Commit(String),
-    Paste(String),
-}
+/// How many times a page's process may stop within `CRASH_WINDOW` and be started again.
+const RESTARTS: usize = 2;
+const CRASH_WINDOW: Duration = Duration::from_secs(60);
 
 /// What the page's view and its signal handlers share.
 struct State {
-    shared: Arc<Shared>,
-    updates: UnboundedSender<Update>,
+    panel: u64,
     size: Cell<Size>,
     capturing: Cell<bool>,
     buttons: Cell<u32>,
     menu: RefCell<Option<webkit2gtk::OptionMenu>>,
     /// The clipboard text the page saw last, so only its own copies go to the app.
     clipboard: RefCell<Option<String>>,
+    /// When the page's process stopped lately.
+    crashes: RefCell<Vec<Instant>>,
 }
 
 impl State {
-    fn update(&self, update: Update) {
-        self.updates.unbounded_send(update).ok();
+    fn event(&self, event: Event) {
+        crate::event(self.panel, event);
     }
 
     /// Device pixels to the page's logical ones.
@@ -96,6 +70,23 @@ impl State {
     fn device(&self, logical: f32) -> f64 {
         f64::from(logical * self.size.get().scale)
     }
+
+    fn rect(&self, x: i32, y: i32, width: i32, height: i32) -> Rect {
+        Rect {
+            x: self.logical(x),
+            y: self.logical(y),
+            width: self.logical(width),
+            height: self.logical(height),
+        }
+    }
+
+    /// Whether a page whose process just stopped gets another: a few within a minute do.
+    fn may_restart(&self) -> bool {
+        let mut crashes = self.crashes.borrow_mut();
+        crashes.retain(|at| at.elapsed() < CRASH_WINDOW);
+        crashes.push(Instant::now());
+        crashes.len() <= RESTARTS
+    }
 }
 
 pub(crate) struct Page {
@@ -109,21 +100,23 @@ pub(crate) struct Page {
 }
 
 impl Page {
-    pub(crate) fn open(context: &webkit2gtk::WebContext, opening: Opening, host: &str) -> Self {
-        let Opening {
-            options,
-            shared,
-            updates,
-            ..
-        } = opening;
+    pub(crate) fn open(
+        context: &webkit2gtk::WebContext,
+        panel: u64,
+        host: &str,
+        entry: &str,
+        style: &str,
+        background: u32,
+        size: Size,
+    ) -> Self {
         let state = Rc::new(State {
-            shared,
-            updates,
-            size: Cell::new(options.size),
+            panel,
+            size: Cell::new(size),
             capturing: Cell::new(false),
             buttons: Cell::new(0),
             menu: RefCell::new(None),
             clipboard: RefCell::new(None),
+            crashes: RefCell::new(Vec::new()),
         });
         let manager = UserContentManager::new();
         manager.add_script(&UserScript::new(
@@ -133,7 +126,7 @@ impl Page {
             &[],
             &[],
         ));
-        manager.add_style_sheet(&style_sheet(&options.style));
+        manager.add_style_sheet(&style_sheet(style));
         manager.register_script_message_handler("rivethub");
         let posted = Rc::clone(&state);
         manager.connect_script_message_received(Some("rivethub"), move |_, result| {
@@ -141,13 +134,13 @@ impl Page {
                 return;
             };
             if json.len() > MESSAGE_LIMIT {
-                tracing::warn!(
-                    bytes = json.len(),
-                    "a web panel posted a message too long to take"
-                );
+                crate::warn(format!(
+                    "a page posted a message of {} bytes, too long to take",
+                    json.len()
+                ));
                 return;
             }
-            posted.update(Update::Message(json));
+            posted.event(Event::Message(json));
         });
         let view: WebView = glib::Object::builder()
             .property("web-context", context)
@@ -159,44 +152,35 @@ impl Page {
             settings.set_enable_developer_extras(false);
             settings.set_javascript_can_open_windows_automatically(false);
         }
-        view.set_background_color(&background(options.background));
+        view.set_background_color(&background_color(background));
         let ime = Ime::new(
             {
                 let state = Rc::clone(&state);
-                move |editing| {
-                    state.shared.editing.store(editing, Ordering::Relaxed);
-                    state.update(Update::Caret);
-                }
+                move |editing| state.event(Event::Editing(editing))
             },
             {
                 let state = Rc::clone(&state);
-                move |x, y, width, height| {
-                    let caret = Rect {
-                        x: state.logical(x),
-                        y: state.logical(y),
-                        width: state.logical(width),
-                        height: state.logical(height),
-                    };
-                    *state.shared.caret.lock().unwrap_or_else(PoisonError::into_inner) = Some(caret);
-                    state.update(Update::Caret);
-                }
+                move |x, y, width, height| state.event(Event::Caret(state.rect(x, y, width, height)))
             },
         );
         view.set_input_method_context(Some(ime.as_context()));
         let window = gtk::OffscreenWindow::new();
         window.add(&view);
-        let path = &options.entry;
-        let separator = if path.starts_with('/') { "" } else { "/" };
+        let separator = if entry.starts_with('/') { "" } else { "/" };
         let page = Self {
-            entry: format!("{}://{host}{separator}{path}", scheme::SCHEME),
+            entry: format!("{}://{host}{separator}{entry}", scheme::SCHEME),
             window,
             view,
             manager,
             ime,
             state,
         };
-        page.resize(options.size);
+        page.resize(size);
         page.window.show_all();
+        // Before it's realized GTK gives a widget the first monitor's scale, and WebKit keeps the
+        // scale it read then, rendering a HiDPI monitor's multiple of the pixels drawn here. Now
+        // the view has its window's scale; asking again makes WebKit read it.
+        page.view.notify("scale-factor");
         page.follow();
         page.view.load_uri(&page.entry);
         page
@@ -212,19 +196,26 @@ impl Page {
                 let window = window.clone();
                 glib::idle_add_local_once(move || {
                     state.capturing.set(false);
-                    if let Some(frame) = capture(&window, state.size.get())
-                        && state.shared.put_frame(frame)
-                    {
-                        state.update(Update::Frame);
-                    }
+                    capture(&window, state.panel, state.size.get().scale);
                 });
             }
             false
         });
+        // The view gives up the keyboard through its window when Tab leaves the page's last
+        // element (Shift+Tab its first): the app takes it on, and GTK doesn't wrap it around.
+        let state = Rc::clone(&self.state);
+        self.window.connect_focus(move |_, direction| {
+            match direction {
+                gtk::DirectionType::TabForward => state.event(Event::FocusLeft { forward: true }),
+                gtk::DirectionType::TabBackward => state.event(Event::FocusLeft { forward: false }),
+                _ => {}
+            }
+            glib::Propagation::Stop
+        });
         let state = Rc::clone(&self.state);
         self.view.connect_load_changed(move |_, event| {
             if event == LoadEvent::Finished {
-                state.update(Update::Loaded);
+                state.event(Event::Loaded);
             }
         });
         let entry = self.entry.clone();
@@ -258,20 +249,15 @@ impl Page {
             let selected = (0..menu.n_items())
                 .find(|&index| menu.item(index).is_some_and(|mut item| item.is_selected()))
                 .and_then(|index| usize::try_from(index).ok());
-            let anchor = Rect {
-                x: state.logical(anchor.x()),
-                y: state.logical(anchor.y()),
-                width: state.logical(anchor.width()),
-                height: state.logical(anchor.height()),
-            };
+            let anchor = state.rect(anchor.x(), anchor.y(), anchor.width(), anchor.height());
             let closed = Rc::clone(&state);
             menu.connect_close(move |_| {
                 if closed.menu.borrow_mut().take().is_some() {
-                    closed.update(Update::Menu(None));
+                    closed.event(Event::Menu(None));
                 }
             });
             *state.menu.borrow_mut() = Some(menu.clone());
-            state.update(Update::Menu(Some(Menu {
+            state.event(Event::Menu(Some(Menu {
                 items,
                 selected,
                 anchor,
@@ -279,15 +265,28 @@ impl Page {
             true
         });
         let state = Rc::clone(&self.state);
-        self.view.connect_web_process_terminated(move |_, reason| {
-            tracing::warn!(?reason, "a web panel's process stopped");
-            state.update(Update::Stopped);
+        self.view.connect_web_process_terminated(move |view, reason| {
+            if reason == WebProcessTerminationReason::TerminatedByApi {
+                return;
+            }
+            if state.may_restart() {
+                crate::warn(format!(
+                    "a page's process stopped ({reason:?}); starting it again"
+                ));
+                let view = view.clone();
+                glib::idle_add_local_once(move || view.reload());
+            } else {
+                crate::warn(format!(
+                    "a page's process stopped ({reason:?}) again; leaving it stopped"
+                ));
+                state.event(Event::Stopped);
+            }
         });
         if let Some(target) = self.view.window() {
             let cursors = Cursors::new();
             let state = Rc::clone(&self.state);
             target.connect_cursor_notify(move |target| {
-                state.update(Update::Cursor(cursors.find(target.cursor().as_ref())));
+                state.event(Event::Cursor(cursors.find(target.cursor().as_ref())));
             });
         }
     }
@@ -296,8 +295,7 @@ impl Page {
         self.state.size.set(size);
         let (width, height) = size.device();
         // The window is in device pixels and the page zoomed by the scale, so its CSS pixels are
-        // the app's logical ones at any fractional scale. WebKit also multiplies the page's
-        // `devicePixelRatio` by the screen scale it finds itself, which only HiDPI screens have.
+        // the app's logical ones and its `devicePixelRatio` the scale, fractional or not.
         self.view.set_zoom_level(f64::from(size.scale));
         self.view.set_size_request(width, height);
         self.window.set_default_size(width, height);
@@ -332,13 +330,19 @@ impl Page {
                     self.view.grab_focus();
                 }
             }
+            Command::Enter => {
+                if let Some(target) = self.window.window() {
+                    events::focus(&target, true);
+                }
+                self.view.child_focus(gtk::DirectionType::TabForward);
+            }
             Command::Post(json) => {
                 let script =
                     format!("window.dispatchEvent(new MessageEvent('message', {{ data: {json} }}));");
                 self.view
                     .evaluate_javascript(&script, None, None, gtk::gio::Cancellable::NONE, |done| {
                         if let Err(err) = done {
-                            tracing::warn!(%err, "posting to a web panel failed");
+                            crate::warn(format!("posting to a page failed: {err}"));
                         }
                     });
             }
@@ -366,6 +370,10 @@ impl Page {
                 gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD).set_text(&text);
                 self.state.clipboard.replace(Some(text));
                 self.view.execute_editing_command("Paste");
+            }
+            Command::Reload => {
+                self.state.crashes.borrow_mut().clear();
+                self.view.reload();
             }
         }
     }
@@ -411,7 +419,7 @@ impl Page {
                     };
                     if state.clipboard.borrow().as_deref() != Some(text) {
                         state.clipboard.replace(Some(text.to_owned()));
-                        state.update(Update::Copied(text.to_owned()));
+                        state.event(Event::Copied(text.to_owned()));
                     }
                 });
             });
@@ -439,34 +447,41 @@ fn style_sheet(css: &str) -> UserStyleSheet {
     )
 }
 
-fn background(rgb: u32) -> gdk::RGBA {
+fn background_color(rgb: u32) -> gdk::RGBA {
     let channel = |shift: u32| f64::from((rgb >> shift) & 0xff) / 255.;
     gdk::RGBA::new(channel(16), channel(8), channel(0), 1.)
 }
 
-/// The page's pixels, when its window has painted any.
-fn capture(window: &gtk::OffscreenWindow, size: Size) -> Option<Frame> {
-    let surface = gtk::cairo::ImageSurface::try_from(window.surface()?).ok()?;
-    let (width, height) = (surface.width(), surface.height());
-    let stride = usize::try_from(surface.stride()).ok()?;
-    let (columns, rows) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
+/// Hands the app the page's pixels, when its window has painted any.
+fn capture(window: &gtk::OffscreenWindow, panel: u64, scale: f32) {
+    let Some(surface) = window
+        .surface()
+        .and_then(|surface| gtk::cairo::ImageSurface::try_from(surface).ok())
+    else {
+        return;
+    };
+    let (Ok(width), Ok(height), Ok(stride)) = (
+        u32::try_from(surface.width()),
+        u32::try_from(surface.height()),
+        usize::try_from(surface.stride()),
+    ) else {
+        return;
+    };
+    let (Ok(columns), Ok(rows)) = (usize::try_from(width), usize::try_from(height)) else {
+        return;
+    };
     if columns == 0 || rows == 0 {
-        return None;
+        return;
     }
     let mut pixels = Vec::with_capacity(columns * rows * 4);
-    surface
-        .with_data(|data| {
-            for row in data.chunks(stride).take(rows) {
-                pixels.extend_from_slice(&row[..columns * 4]);
-            }
-        })
-        .ok()?;
-    Some(Frame {
-        width: u32::try_from(width).ok()?,
-        height: u32::try_from(height).ok()?,
-        scale: size.scale,
-        pixels,
-    })
+    let copied = surface.with_data(|data| {
+        for row in data.chunks(stride).take(rows) {
+            pixels.extend_from_slice(&row[..columns * 4]);
+        }
+    });
+    if copied.is_ok() {
+        crate::frame(panel, width, height, scale, &pixels);
+    }
 }
 
 /// The named cursors `WebKit` sets, found again by identity: GDK hands out one cursor per name.

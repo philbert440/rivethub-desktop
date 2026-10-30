@@ -7371,12 +7371,24 @@ name = "webview"
 version = "0.7.0"
 dependencies = [
  "futures",
- "gtk",
- "javascriptcore-rs",
- "soup3",
+ "libloading",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "webview-gtk"
+version = "0.7.0"
+dependencies = [
+ "futures",
+ "gtk",
+ "javascriptcore-rs",
+ "serde_json",
+ "soup3",
  "webkit2gtk",
+ "webview",
 ]
 
 [[package]]

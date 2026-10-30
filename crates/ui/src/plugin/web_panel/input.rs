@@ -172,7 +172,13 @@ impl WebPanelView {
         self.watch = vec![
             cx.on_focus(&self.focus, window, |this, _, _| {
                 if let Some(panel) = &this.panel {
-                    panel.focus(true);
+                    // A click places the page's focus itself; the keyboard arriving puts it on the
+                    // page's first element.
+                    if this.pressed {
+                        panel.focus(true);
+                    } else {
+                        panel.enter();
+                    }
                 }
             }),
             cx.on_blur(&self.focus, window, |this, _, _| {
