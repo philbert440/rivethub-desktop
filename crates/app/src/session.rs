@@ -236,6 +236,10 @@ impl Actor {
                     }
                     self.fail("Lost the connection to this session's node. Reconnecting…");
                 }
+                Err(err) if err.is_unreachable() => {
+                    tracing::debug!(%err, session = %self.id, "the session's node is out of reach");
+                    self.fail("Can't reach this session's node. Retrying…");
+                }
                 Err(err) => self.fail(&err.to_string()),
             }
             tokio::select! {
