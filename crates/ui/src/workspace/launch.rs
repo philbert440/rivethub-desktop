@@ -223,7 +223,7 @@ impl Workspace {
                 }
                 self.sessions.push(summary.clone());
                 self.refile_sessions();
-                self.open(summary, window, cx);
+                self.open_new(summary, window, cx);
             }
             Err(err) => {
                 self.failed = Some(err.to_string());

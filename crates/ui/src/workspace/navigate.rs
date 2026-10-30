@@ -8,7 +8,25 @@ use super::{NextNeedingYou, ToggleSidePanel, TopicScreen, Workspace, ZoomOut};
 use crate::session_pane::{PaneEvent, SessionPane};
 
 impl Workspace {
+    /// Opens a session in the view Settings picks for sessions.
     pub(super) fn open(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        let view = self.hub.preferences().opens_in;
+        self.open_in(summary, view, window, cx);
+    }
+
+    /// Opens a session started or forked here in Chat whatever Settings picks: rh runs it as a chat,
+    /// so its terminal page would only offer to start a terminal it doesn't have.
+    pub(super) fn open_new(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_in(summary, SessionView::Chat, window, cx);
+    }
+
+    fn open_in(
+        &mut self,
+        summary: SessionSummary,
+        view: SessionView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Rebuilding the pane on show would drop its draft and terminal.
         if self
             .pane
@@ -20,7 +38,7 @@ impl Workspace {
         let topic = self.home_of(&summary);
         let session = summary.id.clone();
         // A child session is a transcript inside its parent's, with no terminal of its own.
-        let terminal = self.hub.preferences().opens_in == SessionView::Terminal && summary.parent.is_none();
+        let terminal = view == SessionView::Terminal && summary.parent.is_none();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         if terminal {
             pane.update(cx, |pane, cx| pane.show_terminal(window, cx));
@@ -67,7 +85,7 @@ impl Workspace {
         if let Some(topic) = topic {
             self.place(session, topic, cx);
         }
-        self.open(forked, window, cx);
+        self.open_new(forked, window, cx);
     }
 
     pub(super) fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
