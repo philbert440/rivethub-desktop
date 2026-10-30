@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use model::SessionId;
 use model::prompt::Prompt;
@@ -10,8 +10,6 @@ use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 
-const FIRST_RETRY: Duration = Duration::from_millis(500);
-const LAST_RETRY: Duration = Duration::from_secs(15);
 const COMMAND_BUFFER: usize = 32;
 
 #[derive(Debug)]
@@ -210,7 +208,7 @@ impl Actor {
     }
 
     async fn run(self, mut commands: mpsc::Receiver<Command>) {
-        let mut retry = FIRST_RETRY;
+        let mut retry = self.hub.backoff(self.node.as_deref());
         loop {
             let opened = match self.gateway().await {
                 Ok(gateway) => gateway.open_session(&self.id).await,
@@ -218,7 +216,7 @@ impl Actor {
             };
             match opened {
                 Ok(mut stream) => {
-                    retry = FIRST_RETRY;
+                    retry.reset();
                     self.view.write().reconnected();
                     self.changed();
                     stream.resync();
@@ -243,13 +241,12 @@ impl Actor {
                 Err(err) => self.fail(&err.to_string()),
             }
             tokio::select! {
-                () = tokio::time::sleep(retry) => {}
+                () = tokio::time::sleep(retry.next_wait()) => {}
                 command = commands.recv() => match command {
                     Some(command) => self.handle(command).await,
                     None => return,
                 },
             }
-            retry = (retry * 2).min(LAST_RETRY);
         }
     }
 

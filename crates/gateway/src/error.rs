@@ -41,7 +41,13 @@ impl GatewayError {
 
     /// The node answered, but won't take requests from this device, which isn't paired with it.
     pub fn is_refused_device(&self) -> bool {
-        matches!(self, Self::Status { status: 401 | 403, .. })
+        matches!(
+            self,
+            Self::Status {
+                status: 401 | 403,
+                ..
+            }
+        )
     }
 
     /// Nothing answered: the node is down, gone from the network, or never listened there.

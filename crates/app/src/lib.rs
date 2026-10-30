@@ -1,3 +1,4 @@
+mod backoff;
 mod feed;
 mod memory;
 mod notify;
@@ -82,6 +83,11 @@ impl Hub {
         })?;
         self.inner.remote.write().insert(node.to_owned(), gateway.clone());
         Ok(gateway)
+    }
+
+    /// The reconnect backoff for a stream that follows `node`, or this client's own node.
+    fn backoff(&self, node: Option<&str>) -> backoff::Backoff {
+        backoff::Backoff::new(node.is_none_or(|node| self.is_local(node)))
     }
 
     fn is_local(&self, node: &str) -> bool {

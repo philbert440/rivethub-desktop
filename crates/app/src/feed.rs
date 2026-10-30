@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use gateway::{GatewayError, WorkspaceEvent};
 use model::SessionId;
@@ -11,9 +10,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::AbortHandle;
 
 use crate::Hub;
-
-const FIRST_RETRY: Duration = Duration::from_millis(500);
-const LAST_RETRY: Duration = Duration::from_secs(15);
+use crate::backoff::Backoff;
 
 /// A stream: the node it comes from (`None` is this client's own node) and which of its feeds.
 /// Each keeps its own live state, so one reconnecting doesn't wipe what another said.
@@ -192,6 +189,7 @@ impl Remote {
             let task = self.hub.inner.runtime.spawn(follow(
                 Arc::clone(&self.signals),
                 (Some(node.clone()), Feed::Registry),
+                self.hub.backoff(Some(node)),
                 move || {
                     let hub = hub.clone();
                     let name = name.clone();
@@ -221,19 +219,25 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
         activity: activity_tx,
     });
     let broadcast = hub.inner.local.clone();
-    hub.inner
-        .runtime
-        .spawn(follow(Arc::clone(&signals), (None, Feed::Sessions), move || {
+    hub.inner.runtime.spawn(follow(
+        Arc::clone(&signals),
+        (None, Feed::Sessions),
+        hub.backoff(None),
+        move || {
             let gateway = broadcast.clone();
             async move { gateway.watch().await }
-        }));
+        },
+    ));
     let registry = hub.inner.local.clone();
-    hub.inner
-        .runtime
-        .spawn(follow(Arc::clone(&signals), (None, Feed::Registry), move || {
+    hub.inner.runtime.spawn(follow(
+        Arc::clone(&signals),
+        (None, Feed::Registry),
+        hub.backoff(None),
+        move || {
             let gateway = registry.clone();
             async move { gateway.watch_registry().await }
-        }));
+        },
+    ));
     WorkspaceFeed {
         live,
         changes,
@@ -246,15 +250,14 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
     }
 }
 
-async fn follow<C, F>(signals: Arc<Signals>, source: Source, connect: C)
+async fn follow<C, F>(signals: Arc<Signals>, source: Source, mut retry: Backoff, connect: C)
 where
     C: Fn() -> F,
     F: Future<Output = Result<mpsc::Receiver<WorkspaceEvent>, GatewayError>>,
 {
-    let mut retry = FIRST_RETRY;
     loop {
         if let Ok(mut events) = connect().await {
-            retry = FIRST_RETRY;
+            retry.reset();
             signals.reset(&source);
             while let Some(event) = events.recv().await {
                 if event == WorkspaceEvent::Closed {
@@ -268,7 +271,6 @@ where
         if signals.closed() {
             return;
         }
-        tokio::time::sleep(retry).await;
-        retry = (retry * 2).min(LAST_RETRY);
+        tokio::time::sleep(retry.next_wait()).await;
     }
 }

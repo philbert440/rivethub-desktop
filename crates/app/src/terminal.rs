@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gateway::{TermInput, TermOutput};
 use model::SessionId;
@@ -8,8 +7,6 @@ use term::{GridSize, Screen};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 
-const FIRST_RETRY: Duration = Duration::from_millis(500);
-const LAST_RETRY: Duration = Duration::from_secs(15);
 const INPUT_BUFFER: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,13 +88,13 @@ impl Actor {
     }
 
     async fn run(self, mut commands: mpsc::Receiver<Command>) {
-        let mut retry = FIRST_RETRY;
+        let mut retry = self.hub.backoff(self.node.as_deref());
         loop {
             let size = self.screen.read().size();
             let attached = self.attach(size).await;
             match attached {
                 Ok(mut stream) => {
-                    retry = FIRST_RETRY;
+                    retry.reset();
                     let _ = stream
                         .input
                         .send(TermInput::Claim {
@@ -144,14 +141,13 @@ impl Actor {
             }
             self.set_state(TerminalState::Connecting);
             tokio::select! {
-                () = tokio::time::sleep(retry) => {}
+                () = tokio::time::sleep(retry.next_wait()) => {}
                 command = commands.recv() => match command {
                     Some(Command::Resize(size)) => self.screen.write().resize(size),
                     Some(Command::Bytes(_) | Command::End) => {}
                     None => return,
                 },
             }
-            retry = (retry * 2).min(LAST_RETRY);
         }
     }
 }
