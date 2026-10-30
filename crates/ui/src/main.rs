@@ -1,4 +1,5 @@
 mod agent_editor;
+mod appearance;
 mod brand;
 mod copy;
 mod input;

@@ -129,6 +129,39 @@ pub fn toggle(
         .into_any_element()
 }
 
+/// The strip that holds one choice of a few, as `segment`s.
+pub fn segments() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .p_1()
+        .rounded(px(18.))
+        .bg(Theme::panel())
+}
+
+/// One choice in `segments`, filled while it's the chosen one.
+pub fn segment(id: &'static str, label: &'static str, here: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(30.))
+        .px_4()
+        .rounded(px(15.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .map(|chip| {
+            if here {
+                chip.bg(Theme::selected()).text_color(Theme::on_selected())
+            } else {
+                chip.text_color(Theme::ink_dim())
+                    .hover(|chip| chip.bg(Theme::raised()))
+            }
+        })
+        .child(label)
+}
+
 /// An outlined pill button.
 pub fn button(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()

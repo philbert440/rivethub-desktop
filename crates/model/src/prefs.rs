@@ -13,26 +13,19 @@ pub struct Preferences {
     pub appearance: Appearance,
 }
 
-/// The app's colours: the dark or light theme, or whichever the desktop is using.
+/// The app's colours: the dark or light theme, whichever the desktop is using, or the active
+/// Omarchy theme's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Appearance {
     #[default]
     Dark,
     Light,
     System,
+    Omarchy,
 }
 
 impl Appearance {
-    pub const ALL: [Self; 3] = [Self::Dark, Self::Light, Self::System];
-
-    /// Whether the light theme shows, given whether the desktop is light.
-    pub fn is_light(self, desktop_light: bool) -> bool {
-        match self {
-            Self::Dark => false,
-            Self::Light => true,
-            Self::System => desktop_light,
-        }
-    }
+    pub const ALL: [Self; 4] = [Self::Dark, Self::Light, Self::System, Self::Omarchy];
 }
 
 impl Default for Preferences {

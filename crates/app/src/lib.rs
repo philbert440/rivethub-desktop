@@ -1,6 +1,7 @@
 mod feed;
 mod memory;
 mod notify;
+pub mod omarchy;
 mod prefs;
 mod session;
 mod status;

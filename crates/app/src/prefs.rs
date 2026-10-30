@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use model::HarnessId;
 use model::prefs::{Appearance, LastLaunch, Preferences};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Hub;
@@ -15,7 +16,7 @@ struct Stored {
     jump_to_newest: bool,
     #[serde(deserialize_with = "or_none")]
     last_launch: Option<StoredLaunch>,
-    #[serde(deserialize_with = "or_dark")]
+    #[serde(deserialize_with = "or_default")]
     appearance: StoredAppearance,
 }
 
@@ -26,10 +27,13 @@ enum StoredAppearance {
     Dark,
     Light,
     System,
+    Omarchy,
 }
 
-/// An appearance this build doesn't know keeps the dark theme.
-fn or_dark<'de, D: Deserializer<'de>>(deserializer: D) -> Result<StoredAppearance, D::Error> {
+/// A value this build doesn't know, such as an appearance from a newer one, keeps the default.
+fn or_default<'de, D: Deserializer<'de>, T: Default + DeserializeOwned>(
+    deserializer: D,
+) -> Result<T, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
@@ -82,6 +86,7 @@ impl From<&Preferences> for Stored {
                 Appearance::Dark => StoredAppearance::Dark,
                 Appearance::Light => StoredAppearance::Light,
                 Appearance::System => StoredAppearance::System,
+                Appearance::Omarchy => StoredAppearance::Omarchy,
             },
         }
     }
@@ -105,6 +110,7 @@ impl From<Stored> for Preferences {
                 StoredAppearance::Dark => Appearance::Dark,
                 StoredAppearance::Light => Appearance::Light,
                 StoredAppearance::System => Appearance::System,
+                StoredAppearance::Omarchy => Appearance::Omarchy,
             },
         }
     }
@@ -204,7 +210,7 @@ mod tests {
                 harness: model::HarnessId::new("codex"),
                 model: None,
             }),
-            appearance: model::prefs::Appearance::System,
+            appearance: model::prefs::Appearance::Omarchy,
             ..Preferences::default()
         };
         let json = serde_json::to_string(&Stored::from(&saved)).unwrap_or_default();

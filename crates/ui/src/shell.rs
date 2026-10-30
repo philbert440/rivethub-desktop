@@ -13,7 +13,7 @@ use crate::settings::{SettingsEvent, SettingsPage};
 use crate::text::one_line;
 use crate::tip::Tip;
 use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
-use crate::{brand, theme::Theme};
+use crate::{appearance, brand, theme::Theme};
 
 const OPEN_WIDTH: f32 = 224.;
 const RAIL_WIDTH: f32 = 48.;
@@ -27,14 +27,40 @@ pub struct Shell {
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
     _routes: [Subscription; 7],
+    /// Restyles the window when the followed Omarchy theme changes.
+    _omarchy: gpui::Task<()>,
 }
 
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        crate::theme::follow(hub.preferences().appearance, window);
+        appearance::read_omarchy(cx);
+        appearance::apply(&hub, window, cx);
         let desktop = cx.observe_window_appearance(window, |this, window, cx| {
-            crate::theme::follow(this.hub.preferences().appearance, window);
-            cx.notify();
+            appearance::apply(&this.hub, window, cx);
+        });
+        let omarchy = cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(appearance::WATCH).await;
+                let Ok(following) = this.update(cx, |this, _| appearance::follows_omarchy(&this.hub)) else {
+                    break;
+                };
+                if !following {
+                    continue;
+                }
+                let theme = cx
+                    .background_executor()
+                    .spawn(async { app::omarchy::current_theme() })
+                    .await;
+                let followed = this.update_in(cx, |this, window, cx| {
+                    if cx.global::<appearance::Omarchy>().0 != theme {
+                        cx.set_global(appearance::Omarchy(theme));
+                        appearance::apply(&this.hub, window, cx);
+                    }
+                });
+                if followed.is_err() {
+                    break;
+                }
+            }
         });
         let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
         let settings = cx.new(|cx| SettingsPage::new(hub.clone(), cx));
@@ -102,6 +128,7 @@ impl Shell {
                 from_settings,
                 desktop,
             ],
+            _omarchy: omarchy,
         }
     }
 
