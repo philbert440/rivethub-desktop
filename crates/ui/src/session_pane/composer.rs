@@ -10,6 +10,7 @@ use model::usage::tokens;
 use super::SessionPane;
 use crate::input::TextInput;
 use crate::theme::Theme;
+use crate::tip::Tip;
 
 impl SessionPane {
     /// One answer to an approval; answering hands the keyboard back to the composer the card stood
@@ -252,14 +253,36 @@ impl SessionPane {
                 }
             }));
         match (stop, busy) {
-            (true, _) => button.child(crate::brand::icon("icons/square.svg", 14., Theme::on_accent())),
-            (false, true) => button.px_3().child("Queue"),
+            (true, _) => button
+                .tooltip(Tip::text("Stop · Esc twice"))
+                .child(crate::brand::icon("icons/square.svg", 14., Theme::on_accent())),
+            (false, true) => button
+                .px_3()
+                .when(self.steers(), |button| {
+                    button.tooltip(Tip::text("Queue · Ctrl+Shift+Enter steers instead"))
+                })
+                .child("Queue"),
             (false, false) => button.child(crate::brand::icon("icons/arrow-up.svg", 18., Theme::on_accent())),
         }
     }
 
+    /// After a first Esc during a turn, what a second one does.
+    fn escape_hint(&self, busy: bool) -> Option<impl IntoElement> {
+        (busy && self.escaped.is_some()).then(|| {
+            div()
+                .flex_none()
+                .px_3()
+                .text_xs()
+                .text_color(Theme::ink_dim())
+                .child("Esc again stops the turn")
+        })
+    }
+
     pub(super) fn composer_card(&self, view: &SessionView, cx: &mut Context<Self>) -> AnyElement {
         div()
+            .key_context("Composer")
+            .on_action(cx.listener(Self::escape_composer))
+            .on_action(cx.listener(Self::steer_draft))
             .w_full()
             .rounded(px(28.))
             .bg(Theme::card())
@@ -285,6 +308,7 @@ impl SessionPane {
                     .when(self.takes_images(), |row| row.child(Self::attach_button(cx)))
                     .children(self.switch_chips(cx))
                     .child(div().flex_1())
+                    .children(self.escape_hint(view.busy()))
                     .children(self.session_stats(view))
                     .child(self.send_button(view.busy(), cx)),
             )

@@ -16,6 +16,8 @@ use crate::tip::Tip;
 use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
 use crate::{appearance, brand, theme::Theme};
 
+gpui::actions!(shell, [OpenSettings]);
+
 const OPEN_WIDTH: f32 = 224.;
 const RAIL_WIDTH: f32 = 48.;
 
@@ -292,8 +294,13 @@ impl Shell {
                 if self.sidebar_open {
                     item.px(px(16.)).gap(px(12.))
                 } else {
-                    item.justify_center().tooltip(Tip::text(label.clone()))
+                    item.justify_center()
                 }
+            })
+            .map(|item| match &page {
+                Page::Settings => item.tooltip(Tip::text(format!("{label} · Ctrl+,"))),
+                _ if !self.sidebar_open => item.tooltip(Tip::text(label.clone())),
+                _ => item,
             })
             .map(|item| {
                 if here {
@@ -428,6 +435,9 @@ impl Render for Shell {
             ),
         };
         div()
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                this.show(Page::Settings, window, cx);
+            }))
             .relative()
             .size_full()
             .flex()

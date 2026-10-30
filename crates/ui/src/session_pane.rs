@@ -20,6 +20,7 @@ use crate::transcript::{ExchangeView, Folds};
 mod attach;
 mod composer;
 mod header;
+mod keys;
 pub(crate) mod plan;
 mod rename;
 mod switch;
@@ -29,7 +30,7 @@ mod turns;
 use rename::Renaming;
 use switch::Picker;
 
-gpui::actions!(session, [ToggleTerminal]);
+gpui::actions!(session, [ToggleTerminal, EscapeComposer, SteerDraft]);
 
 #[derive(Debug, Clone)]
 pub enum PaneEvent {
@@ -78,6 +79,8 @@ pub struct SessionPane {
     /// Whether the session's stream was down when the transcript was last folded.
     lost: bool,
     awaiting_title: bool,
+    /// When Esc was last pressed in the composer during a turn; a second one soon after stops it.
+    escaped: Option<std::time::Instant>,
     _revisions: Task<()>,
     _submitted: Subscription,
     _pasted: Subscription,
@@ -136,6 +139,7 @@ impl SessionPane {
             forking: None,
             lost: false,
             awaiting_title: false,
+            escaped: None,
             _revisions: watcher,
             _submitted: submitted,
             _pasted: pasted,
