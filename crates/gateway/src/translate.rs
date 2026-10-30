@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use model::{
     HarnessId, NativeSessionId, SessionId,
     plan::{Plan, Step, StepStatus},
@@ -381,7 +383,9 @@ fn usage(raw: &MessageUsage) -> Usage {
     }
 }
 
-fn turn(raw: HarnessTranscriptTurn) -> Turn {
+/// One transcript turn; `tasks` counts the tasks Claude created in the turns before it, which is how
+/// Claude numbers them.
+fn turn(raw: HarnessTranscriptTurn, tasks: &mut u32) -> Turn {
     let ends_with_text = raw.last_block.is_none_or(|block| block == TranscriptBlock::Text);
     Turn {
         ends_with_text,
@@ -415,7 +419,9 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
                     TranscriptToolStatus::Done => ToolState::Done,
                     TranscriptToolStatus::Error => ToolState::Failed,
                 };
-                let input = crate::tool_input::parse(&tool.name, tool.input.as_ref().or(tool.args.as_ref()));
+                let given = tool.input.as_ref().or(tool.args.as_ref());
+                let input = crate::tool_input::claude_task(&tool.name, given, tasks)
+                    .unwrap_or_else(|| crate::tool_input::parse(&tool.name, given));
                 let output = tool
                     .result_text
                     .as_deref()
@@ -442,7 +448,12 @@ fn context(turns: &[HarnessTranscriptTurn], window: Option<u64>) -> Option<Conte
     Some(ContextUsage { used, window })
 }
 
-pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
+/// The names of the tools a session stream has running, so a later update to one's input parses as
+/// that tool's.
+#[derive(Debug, Default)]
+pub struct Running(HashMap<String, String>);
+
+pub fn event(raw: HarnessEvent, running: &mut Running) -> Option<SessionEvent> {
     Some(match raw {
         HarnessEvent::AssistantDelta { text, .. } => SessionEvent::AssistantText(text),
         HarnessEvent::ReasoningDelta { text, .. } => SessionEvent::Reasoning(text),
@@ -451,11 +462,23 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
             name,
             input,
             ..
-        } => SessionEvent::ToolStarted {
-            id: tool_call_id,
-            input: crate::tool_input::parse(&name, Some(&input)),
-            name,
-        },
+        } => {
+            running.0.insert(tool_call_id.clone(), name.clone());
+            SessionEvent::ToolStarted {
+                id: tool_call_id,
+                input: crate::tool_input::parse(&name, Some(&input)),
+                name,
+            }
+        }
+        HarnessEvent::ToolUpdate {
+            tool_call_id, input, ..
+        } => {
+            let name = running.0.get(&tool_call_id)?;
+            SessionEvent::ToolInput {
+                input: crate::tool_input::parse(name, Some(&input)),
+                id: tool_call_id,
+            }
+        }
         HarnessEvent::ToolResult {
             tool_call_id,
             name,
@@ -463,6 +486,7 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
             is_error,
             ..
         } => {
+            running.0.remove(&tool_call_id);
             let failed = is_error.unwrap_or(false);
             SessionEvent::ToolFinished {
                 id: tool_call_id,
@@ -482,7 +506,10 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
         }),
         HarnessEvent::ApprovalResolved { request_id, .. } => SessionEvent::ApprovalResolved { request_id },
         HarnessEvent::Plan { entries, .. } => SessionEvent::Plan(plan(entries)),
-        HarnessEvent::TurnComplete { usage, .. } => SessionEvent::TurnComplete(usage.as_ref().map(reported)),
+        HarnessEvent::TurnComplete { usage, .. } => {
+            running.0.clear();
+            SessionEvent::TurnComplete(usage.as_ref().map(reported))
+        }
         HarnessEvent::Error { message, .. } => SessionEvent::Error(message),
         HarnessEvent::Transcript {
             turns,
@@ -491,7 +518,10 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
         } => {
             let usage = context(&turns, context_window);
             SessionEvent::Snapshot {
-                turns: turns.into_iter().map(turn).collect(),
+                turns: {
+                    let mut tasks = 0;
+                    turns.into_iter().map(|raw| turn(raw, &mut tasks)).collect()
+                },
                 context: usage,
             }
         }
