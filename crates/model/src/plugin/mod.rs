@@ -83,12 +83,16 @@ impl Permission {
         }
     }
 
-    /// Asked for consent only: the plug-in runs as the node's user, so rh can't enforce it.
-    pub fn is_host(self) -> bool {
-        matches!(
-            self,
-            Self::HostFilesRead | Self::HostFilesWrite | Self::HostNetwork | Self::HostExec
-        )
+    /// What a host permission means for the sandbox rh runs the plug-in in; the others are
+    /// checked on every call it makes to rh.
+    pub fn sandbox(self) -> Option<&'static str> {
+        match self {
+            Self::HostFilesRead | Self::HostFilesWrite | Self::HostNetwork => {
+                Some("Widens the sandbox it runs in, which otherwise holds it to its own folder.")
+            }
+            Self::HostExec => Some("What it runs stays in its sandbox."),
+            _ => None,
+        }
     }
 }
 

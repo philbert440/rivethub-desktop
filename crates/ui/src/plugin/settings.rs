@@ -268,14 +268,13 @@ impl PluginSettings {
                                 16.,
                                 if pending { Theme::warn() } else { Theme::accent() },
                             ))
-                            .child(div().flex().flex_col().child(permission.describe()).when(
-                                permission.is_host(),
-                                |line| {
-                                    line.child(
-                                        dim("Asked for your consent; rh can't hold it to this.").text_xs(),
-                                    )
-                                },
-                            )),
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(permission.describe())
+                                    .children(permission.sandbox().map(|note| dim(note).text_xs())),
+                            ),
                     )
                     .child(dim(if pending { "Waiting for you" } else { "Allowed" }).text_xs())
                     .into_any_element()

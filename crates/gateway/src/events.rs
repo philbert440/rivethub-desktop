@@ -37,29 +37,18 @@ pub enum PluginEvent {
     Closed,
 }
 
-/// A plug-in notice, told apart by its `type`: rh's untagged `SessionBroadcast` reads a
-/// `plugin.views` frame as `plugin.changed`, since neither notice checks its tag when read.
+/// A plug-in notice on a node's event stream.
 fn plugin_notice(text: &str) -> Option<PluginEvent> {
-    use wire::plugin::host::{PluginChangedNotice, PluginViewsNotice};
-    if !text.contains("\"plugin.") {
-        return None;
-    }
-    let frame: serde_json::Value = serde_json::from_str(text).ok()?;
-    let notice = match frame.get("type")?.as_str()? {
-        "plugin.changed" => Notice::Changed(
-            serde_json::from_value::<PluginChangedNotice>(frame)
-                .ok()?
-                .plugin
-                .into(),
-        ),
-        "plugin.views" => {
-            let views = serde_json::from_value::<PluginViewsNotice>(frame).ok()?;
-            Notice::Views {
-                plugin: views.plugin.into(),
-                views: views.views.into_iter().map(Into::into).collect(),
-            }
-        }
-        _ => return None,
+    let notice = match serde_json::from_str::<SessionBroadcast>(text).ok()? {
+        SessionBroadcast::PluginChanged(changed) => Notice::Changed(changed.plugin.into()),
+        SessionBroadcast::PluginViews(views) => Notice::Views {
+            plugin: views.plugin.into(),
+            views: views.views.into_iter().map(Into::into).collect(),
+        },
+        SessionBroadcast::Snapshot(_)
+        | SessionBroadcast::Removed(_)
+        | SessionBroadcast::HubState(_)
+        | SessionBroadcast::Event(_) => return None,
     };
     Some(PluginEvent::Notice(notice))
 }
