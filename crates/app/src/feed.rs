@@ -262,6 +262,8 @@ where
                 }
                 signals.apply(&source, event);
             }
+            // What the stream said no longer stands, and the listing should find out why it ended.
+            signals.reset(&source);
         }
         if signals.closed() {
             return;

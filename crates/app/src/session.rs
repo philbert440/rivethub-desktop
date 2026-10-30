@@ -234,6 +234,7 @@ impl Actor {
                             },
                         }
                     }
+                    self.fail("Lost the connection to this session's node. Reconnecting…");
                 }
                 Err(err) => self.fail(&err.to_string()),
             }
