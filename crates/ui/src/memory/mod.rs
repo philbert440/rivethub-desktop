@@ -3,6 +3,7 @@ mod conversation;
 mod decisions;
 mod entities;
 mod entity_edit;
+mod mentions;
 mod session;
 mod sessions;
 mod stats;
@@ -191,7 +192,7 @@ impl MemoryPage {
                 self.open_topic(topic, cx);
             }
             Focus::Session(session) => self.open_session(*session, cx),
-            Focus::Conversation(conversation) => self.open_conversation(*conversation, cx),
+            Focus::Conversation(conversation) => self.open_conversation(*conversation, true, cx),
         }
     }
 
@@ -309,7 +310,7 @@ impl Render for MemoryPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.tab {
             _ if self.viewing.is_some() => self.session_page(window, cx),
-            _ if self.remembering.is_some() => self.conversation_page(cx),
+            _ if self.remembering.is_some() => self.conversation_page(window, cx),
             Tab::Ask => self.ask(cx),
             Tab::Topics => self.topics(window, cx),
             Tab::Entities => self.entities(window, cx),

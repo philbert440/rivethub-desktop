@@ -1,25 +1,57 @@
-use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
+use gpui::{
+    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, Window, div, prelude::*, px,
+};
 use model::topics::{FiledBy, FiledConversation};
 
+use super::session::{Recalled, badge};
 use super::{Focus, MemoryEvent, MemoryPage};
 use crate::text::{ago_phrase, now_ms};
 use crate::theme::Theme;
 
-/// A conversation Memory shows, and whether it is still filed where it was.
+/// A conversation Memory shows, whether it is filed where it says, and its summaries once they load.
 pub(super) struct Remembered {
     conversation: FiledConversation,
     filed: bool,
+    pub(super) recalled: Option<Recalled>,
 }
 
 impl MemoryPage {
-    /// Shows a filed conversation that is no harness session: what it is and where it's filed.
-    pub(super) fn open_conversation(&mut self, conversation: FiledConversation, cx: &mut Context<Self>) {
+    /// Shows a conversation that is no harness session: what it is, where it's filed if it is, and
+    /// what memory made of it.
+    pub(super) fn open_conversation(
+        &mut self,
+        conversation: FiledConversation,
+        filed: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.viewing = None;
         self.problem = None;
+        let id = conversation.id.clone();
         self.remembering = Some(Remembered {
             conversation,
-            filed: true,
+            filed,
+            recalled: None,
         });
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let memory = hub.conversation_memory(id.clone()).await;
+            this.update(cx, |this, cx| {
+                let Some(remembering) = this
+                    .remembering
+                    .as_mut()
+                    .filter(|remembering| remembering.conversation.id == id)
+                else {
+                    return;
+                };
+                match memory {
+                    Ok(memory) => remembering.recalled = Some(Recalled::new(memory, None)),
+                    Err(err) => this.failed(&err, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -45,8 +77,13 @@ impl MemoryPage {
         .detach();
     }
 
-    pub(super) fn conversation_page(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(Remembered { conversation, filed }) = &self.remembering else {
+    pub(super) fn conversation_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(Remembered {
+            conversation,
+            filed,
+            recalled,
+        }) = &self.remembering
+        else {
             return div().into_any_element();
         };
         let title = conversation
@@ -54,11 +91,49 @@ impl MemoryPage {
             .clone()
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| format!("{} conversation", conversation.channel));
+        div()
+            .id("memory-conversation")
+            .size_full()
+            .overflow_y_scroll()
+            .py_8()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(860.))
+                    .px_8()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_2xl().text_color(Theme::ink()).child(title))
+                    .child(self.conversation_line(conversation, *filed, cx))
+                    .children(
+                        self.problem
+                            .clone()
+                            .map(|problem| div().text_xs().text_color(Theme::ink_dim()).child(problem)),
+                    )
+                    .child(
+                        div()
+                            .pt_2()
+                            .child(Self::recall(recalled.as_ref(), "conversation", window, cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Its channel and node, where it's filed and by whom, and when it was last active.
+    fn conversation_line(
+        &self,
+        conversation: &FiledConversation,
+        filed: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let topic = self
             .listed
             .topics
             .iter()
-            .filter(|_| *filed)
+            .filter(|_| filed)
             .find(|known| known.id == conversation.topic)
             .map(|topic| {
                 let focus = topic.id.clone();
@@ -76,7 +151,7 @@ impl MemoryPage {
                     }))
                     .child(format!("in {}", topic.name))
             });
-        let undo = (*filed && conversation.by == FiledBy::Categorizer).then(|| {
+        let undo = (filed && conversation.by == FiledBy::Categorizer).then(|| {
             let id = conversation.id.clone();
             div()
                 .flex()
@@ -98,50 +173,23 @@ impl MemoryPage {
                 )
         });
         div()
-            .id("memory-conversation")
-            .size_full()
-            .overflow_y_scroll()
-            .py_8()
             .flex()
-            .justify_center()
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(860.))
-                    .px_8()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(div().text_2xl().text_color(Theme::ink()).child(title))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .px_2()
-                                    .rounded(px(9.))
-                                    .bg(Theme::surface())
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child(conversation.channel.clone()),
-                            )
-                            .children(topic)
-                            .children(undo)
-                            .children(conversation.last_active_ms.map(|at| {
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child(format!("active {}", ago_phrase(now_ms(), at)))
-                            })),
-                    )
-                    .children(
-                        self.problem
-                            .clone()
-                            .map(|problem| div().text_xs().text_color(Theme::ink_dim()).child(problem)),
-                    ),
+            .items_center()
+            .gap_2()
+            .child(badge(conversation.channel.clone(), Theme::ink_dim().into()))
+            .children(
+                conversation
+                    .node
+                    .clone()
+                    .map(|node| badge(node, Theme::ink_dim().into())),
             )
-            .into_any_element()
+            .children(topic)
+            .children(undo)
+            .children(conversation.last_active_ms.map(|at| {
+                div()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(format!("active {}", ago_phrase(now_ms(), at)))
+            }))
     }
 }

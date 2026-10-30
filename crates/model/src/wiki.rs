@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-use crate::TopicId;
 use crate::markdown::Block;
+use crate::{SessionId, TopicId};
 
 /// A wiki page. A root topic owns one, and its subtopics are sections on it; an entity owns its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,8 +15,92 @@ pub struct Page {
     /// What the page says is true now, on its own, for editing.
     pub current_state: String,
     pub article: Option<String>,
-    /// When each summary that cited the page was written, where it says.
-    pub cited_ms: Vec<i64>,
+    pub citations: Vec<Citation>,
+}
+
+/// A summary that cites a page, and the conversation it summarizes, as far as rh knows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Citation {
+    pub summary: String,
+    pub at_ms: Option<i64>,
+    pub conversation: Option<String>,
+    /// The harness session the conversation is, when it is one.
+    pub session: Option<SessionId>,
+    pub title: Option<String>,
+    pub channel: Option<String>,
+    /// Where the conversation is filed.
+    pub topic: Option<TopicId>,
+}
+
+/// One conversation that cites a page, with how often and how lately: a row of "Mentioned in".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mention {
+    pub conversation: String,
+    pub session: Option<SessionId>,
+    pub title: Option<String>,
+    pub channel: Option<String>,
+    pub topic: Option<TopicId>,
+    pub summaries: usize,
+    pub latest_ms: Option<i64>,
+}
+
+/// The conversations that cite a page, each once, the most recently cited first. A citation whose
+/// summary rh no longer has names no conversation and is left out.
+pub fn mentioned_in(citations: &[Citation]) -> Vec<Mention> {
+    let mut by_conversation: HashMap<&str, Mention> = HashMap::new();
+    for citation in citations {
+        let Some(conversation) = citation.conversation.as_deref() else {
+            continue;
+        };
+        let mention = by_conversation.entry(conversation).or_insert_with(|| Mention {
+            conversation: conversation.to_owned(),
+            session: citation.session.clone(),
+            title: citation.title.clone(),
+            channel: citation.channel.clone(),
+            topic: citation.topic.clone(),
+            summaries: 0,
+            latest_ms: None,
+        });
+        mention.summaries += 1;
+        mention.latest_ms = mention.latest_ms.max(citation.at_ms);
+    }
+    let mut mentions: Vec<Mention> = by_conversation.into_values().collect();
+    mentions.sort_by(|left, right| {
+        right
+            .latest_ms
+            .cmp(&left.latest_ms)
+            .then_with(|| left.conversation.cmp(&right.conversation))
+    });
+    mentions
+}
+
+/// The topics the mentioning conversations are filed in, the one with the most of them first.
+pub fn mentioning_topics(mentions: &[Mention]) -> Vec<(TopicId, usize)> {
+    let mut counted: HashMap<&TopicId, usize> = HashMap::new();
+    for topic in mentions.iter().filter_map(|mention| mention.topic.as_ref()) {
+        *counted.entry(topic).or_default() += 1;
+    }
+    let mut topics: Vec<(TopicId, usize)> = counted
+        .into_iter()
+        .map(|(topic, count)| (topic.clone(), count))
+        .collect();
+    topics.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    topics
+}
+
+/// An entity a topic's sessions refer to, as the topic's Mentions line names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityMention {
+    pub entity: TopicId,
+    pub name: String,
+}
+
+/// What a topic or entity owns in the wiki: its page, if the wiki has written one, and the
+/// entities a work topic's sessions mention.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Owned {
+    pub page: Option<Page>,
+    pub mentions: Vec<EntityMention>,
 }
 
 /// What a person changes on a page: its current state, its article, or both.
@@ -26,21 +110,13 @@ pub struct PageEdit {
     pub article: Option<String>,
 }
 
-/// A page as the wiki index lists it.
+/// A page as the wiki index lists it, and the topic or entity that owns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listing {
     pub slug: String,
     pub title: String,
     pub updated_ms: i64,
-}
-
-/// The listed pages no topic owns.
-pub fn loose<'a>(listings: &'a [Listing], owned: &[Page]) -> Vec<&'a Listing> {
-    let owned: HashSet<&str> = owned.iter().map(|page| page.slug.as_str()).collect();
-    listings
-        .iter()
-        .filter(|listing| !owned.contains(listing.slug.as_str()))
-        .collect()
+    pub owner: Option<TopicId>,
 }
 
 /// Where a subtopic's section starts among a page's blocks. rh writes each subtopic as a `##`
@@ -162,8 +238,54 @@ pub fn readable(markdown: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{readable, section, without_decisions};
+    use super::{Citation, mentioned_in, mentioning_topics, readable, section, without_decisions};
+    use crate::TopicId;
     use crate::markdown::parse;
+
+    fn cited(summary: &str, conversation: Option<&str>, at_ms: i64, topic: Option<&str>) -> Citation {
+        Citation {
+            summary: summary.to_owned(),
+            at_ms: Some(at_ms),
+            conversation: conversation.map(str::to_owned),
+            session: None,
+            title: None,
+            channel: None,
+            topic: topic.map(|topic| TopicId::new(topic.to_owned())),
+        }
+    }
+
+    #[test]
+    fn mentions_count_each_conversation_once_and_the_latest_first() {
+        let citations = [
+            cited("s1", Some("c1"), 10, Some("mesh")),
+            cited("s2", Some("c2"), 30, Some("desk")),
+            cited("s3", Some("c1"), 40, Some("mesh")),
+            cited("s4", None, 50, None),
+            cited("s5", Some("c3"), 20, Some("mesh")),
+        ];
+        let mentions = mentioned_in(&citations);
+        let rows: Vec<(&str, usize, Option<i64>)> = mentions
+            .iter()
+            .map(|mention| {
+                (
+                    mention.conversation.as_str(),
+                    mention.summaries,
+                    mention.latest_ms,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![("c1", 2, Some(40)), ("c2", 1, Some(30)), ("c3", 1, Some(20))]
+        );
+        assert_eq!(
+            mentioning_topics(&mentions),
+            vec![
+                (TopicId::new("mesh".to_owned()), 2),
+                (TopicId::new("desk".to_owned()), 1)
+            ]
+        );
+    }
 
     #[test]
     fn a_page_reads_without_front_matter_title_or_empty_sections() {

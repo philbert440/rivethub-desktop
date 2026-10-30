@@ -5,13 +5,13 @@ use gpui::{
 use model::TopicId;
 use model::entities::{Catalog, Entity};
 use model::markdown::Block;
-use model::wiki::{Page, readable};
+use model::wiki::{Owned, Page, readable};
 
 use super::MemoryPage;
 use super::entity_edit::{Choosing, Editing, Field};
 use crate::markdown_view;
 use crate::menu::Noun;
-use crate::text::{ago, ago_phrase, now_ms};
+use crate::text::{ago, now_ms};
 use crate::theme::Theme;
 
 const LIST_WIDTH: f32 = 300.;
@@ -43,6 +43,7 @@ pub(super) struct Browse {
     pub(super) aliasing: Option<Field>,
     pub(super) editing: Option<Editing>,
     pub(super) choosing: Option<Choosing>,
+    pub(super) all_mentions: bool,
 }
 
 impl MemoryPage {
@@ -103,6 +104,7 @@ impl MemoryPage {
         self.browse.unwritten = false;
         self.browse.editing = None;
         self.browse.aliasing = None;
+        self.browse.all_mentions = false;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let fetched = hub.topic_page(entity.clone()).await;
@@ -111,8 +113,10 @@ impl MemoryPage {
                     return;
                 }
                 match fetched {
-                    Ok(Some(page)) => this.browse.reading = Some(EntityReading::new(page)),
-                    Ok(None) => this.browse.unwritten = true,
+                    Ok(Owned { page: Some(page), .. }) => {
+                        this.browse.reading = Some(EntityReading::new(page));
+                    }
+                    Ok(Owned { page: None, .. }) => this.browse.unwritten = true,
                     Err(err) => this.failed(&err, cx),
                 }
                 cx.notify();
@@ -388,24 +392,16 @@ impl MemoryPage {
                     }))
                     .child("⋯"),
             );
-        let cited = self.browse.reading.as_ref().map(|reading| &reading.page.cited_ms);
-        let mentions = cited.filter(|cited| !cited.is_empty()).map(|cited| {
-            let latest = cited.iter().max().copied().unwrap_or_default();
-            let noun = if cited.len() == 1 { "summary" } else { "summaries" };
-            div().text_xs().text_color(Theme::ink_dim()).child(format!(
-                "Mentioned in {} {noun}, the latest {}",
-                cited.len(),
-                ago_phrase(now_ms(), latest)
-            ))
-        });
         let body = match (&self.browse.reading, self.browse.unwritten) {
             (Some(reading), _) => self.page_body(reading, window, cx),
-            (None, true) => div()
-                .text_color(Theme::ink_dim())
-                .child("The wiki hasn't written this entity's page yet.")
-                .into_any_element(),
+            (None, true) => self.unwritten_body(cx),
             (None, false) => Self::quiet("Loading…"),
         };
+        let mentioned = self
+            .browse
+            .reading
+            .as_ref()
+            .and_then(|reading| self.mentioned_in(&reading.page, cx));
         div()
             .flex()
             .flex_col()
@@ -413,13 +409,31 @@ impl MemoryPage {
             .child(crumbs)
             .child(head)
             .child(self.aliases(entity, cx))
-            .children(mentions)
             .children(
                 self.problem
                     .clone()
                     .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
             )
             .child(body)
+            .children(mentioned)
+            .into_any_element()
+    }
+
+    /// An entity the wiki hasn't written a page for yet; writing its text writes the page.
+    fn unwritten_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(field) = self.edit_field(cx) {
+            return field;
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(Self::edit_buttons(String::new(), String::new(), cx))
+            .child(
+                div()
+                    .text_color(Theme::ink_dim())
+                    .child("The wiki hasn't written this entity's page yet."),
+            )
             .into_any_element()
     }
 
@@ -437,7 +451,11 @@ impl MemoryPage {
             .flex()
             .flex_col()
             .gap_3()
-            .child(Self::edit_buttons(reading, cx))
+            .child(Self::edit_buttons(
+                reading.page.current_state.clone(),
+                reading.page.article.clone().unwrap_or_default(),
+                cx,
+            ))
             .children(blocks)
             .into_any_element()
     }

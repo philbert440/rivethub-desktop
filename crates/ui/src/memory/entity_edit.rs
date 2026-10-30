@@ -8,7 +8,7 @@ use gpui::{
 use model::TopicId;
 use model::entities::{Catalog, Entity as Known};
 use model::topics::Topic;
-use model::wiki::PageEdit;
+use model::wiki::{Owned, PageEdit};
 
 use super::MemoryPage;
 use super::entities::EntityReading;
@@ -205,12 +205,7 @@ impl MemoryPage {
     fn save_text(&mut self, part: Part, text: String, cx: &mut Context<Self>) {
         self.browse.editing = None;
         cx.notify();
-        let Some(slug) = self
-            .browse
-            .reading
-            .as_ref()
-            .map(|reading| reading.page.slug.clone())
-        else {
+        let Some(entity) = self.browse.entity.clone() else {
             return;
         };
         let edit = match part {
@@ -225,10 +220,17 @@ impl MemoryPage {
         };
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let saved = hub.edit_page(slug, edit).await;
+            let saved = hub.edit_page(entity.clone(), edit).await;
             this.update(cx, |this, cx| {
+                if this.browse.entity.as_ref() != Some(&entity) {
+                    return;
+                }
                 match saved {
-                    Ok(page) => this.browse.reading = Some(EntityReading::new(page)),
+                    Ok(Owned { page: Some(page), .. }) => {
+                        this.browse.reading = Some(EntityReading::new(page));
+                        this.browse.unwritten = false;
+                    }
+                    Ok(Owned { page: None, .. }) => this.problem = Some("rh kept no page for it.".into()),
                     Err(err) => this.problem = Some(format!("saving it failed: {err}")),
                 }
                 cx.notify();
@@ -320,9 +322,7 @@ impl MemoryPage {
         )
     }
 
-    pub(super) fn edit_buttons(reading: &EntityReading, cx: &mut Context<Self>) -> impl IntoElement {
-        let now = reading.page.current_state.clone();
-        let article = reading.page.article.clone().unwrap_or_default();
+    pub(super) fn edit_buttons(now: String, article: String, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .gap_2()

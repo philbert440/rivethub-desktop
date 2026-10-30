@@ -71,6 +71,7 @@ pub struct Listed {
     pub topics: Vec<Topic>,
     pub placements: Placements,
     pub filed_by: HashMap<SessionId, FiledBy>,
+    pub conversations: Vec<FiledConversation>,
 }
 
 /// Where the topic screen stands in the open topic.
@@ -552,6 +553,7 @@ impl Workspace {
             topics: self.topics.clone(),
             placements: self.placements.clone(),
             filed_by: self.filed_by.clone(),
+            conversations: self.conversations.clone(),
         }));
     }
 

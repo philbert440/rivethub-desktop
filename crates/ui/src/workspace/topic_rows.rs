@@ -203,7 +203,10 @@ impl Workspace {
                     .flex_none()
                     .text_xs()
                     .text_color(Theme::ink_dim())
-                    .child(format!("{} · in Memory", conversation.channel)),
+                    .child(match &conversation.node {
+                        Some(node) => format!("{} · {node} · in Memory", conversation.channel),
+                        None => format!("{} · in Memory", conversation.channel),
+                    }),
             )
             .child(
                 div().flex_none().text_xs().text_color(Theme::ink_dim()).child(

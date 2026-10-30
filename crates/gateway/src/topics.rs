@@ -77,6 +77,7 @@ impl Gateway {
                     title: placed.title,
                     last_active_ms: placed.last_active.map(|at| at.timestamp_millis()),
                     by: filed_by(placed.placement.by),
+                    node: placed.node,
                 })
                 .collect(),
             conversations: list
@@ -89,6 +90,7 @@ impl Gateway {
                     channel: filed.channel,
                     last_active_ms: filed.last_active.map(|at| at.timestamp_millis()),
                     by: filed_by(filed.placement.by),
+                    node: filed.node,
                 })
                 .collect(),
         })

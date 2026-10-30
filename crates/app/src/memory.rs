@@ -1,16 +1,20 @@
 use gateway::GatewayError;
+use std::collections::HashMap;
+
 use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
 use model::topics::Topic;
-use model::wiki::{Listing, Page, PageEdit};
+use model::wiki::{EntityMention, Listing, Owned, Page, PageEdit};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
 
-/// The topics and the wiki pages their root topics own.
+/// The topics, the wiki pages their root topics own, and the entities each root topic's sessions
+/// mention.
 #[derive(Debug, Default)]
 pub struct Library {
     pub topics: Vec<Topic>,
     pub pages: Vec<Page>,
+    pub mentions: HashMap<TopicId, Vec<EntityMention>>,
 }
 
 /// What the tagger proposed and is waiting on a person for.
@@ -53,24 +57,43 @@ impl Hub {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
             let topics = gateway.topics().await?;
-            let pages = futures::future::try_join_all(
-                topics
-                    .iter()
-                    .filter(|topic| topic.parent.is_none())
-                    .map(|topic| gateway.topic_page(&topic.id)),
-            )
-            .await?;
+            let roots: Vec<&Topic> = topics.iter().filter(|topic| topic.parent.is_none()).collect();
+            let owned =
+                futures::future::try_join_all(roots.iter().map(|topic| gateway.topic_page(&topic.id)))
+                    .await?;
+            let mut pages = Vec::new();
+            let mut mentions = HashMap::new();
+            for (
+                root,
+                Owned {
+                    page,
+                    mentions: named,
+                },
+            ) in roots.iter().zip(owned)
+            {
+                pages.extend(page);
+                mentions.insert(root.id.clone(), named);
+            }
             Ok(Library {
                 topics,
-                pages: pages.into_iter().flatten().collect(),
+                pages,
+                mentions,
             })
         })
         .await
     }
 
-    pub async fn edit_page(&self, slug: String, edit: PageEdit) -> Result<Page, GatewayError> {
+    /// Edits the page a topic or entity owns, writing it first when the wiki hasn't.
+    pub async fn edit_page(&self, topic: TopicId, edit: PageEdit) -> Result<Owned, GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.edit_page(&slug, edit).await })
+        self.on_runtime(async move { gateway.edit_page(&topic, edit).await })
+            .await
+    }
+
+    /// A filed conversation's summaries, for one that is no harness session.
+    pub async fn conversation_memory(&self, conversation: String) -> Result<SessionMemory, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.conversation_memory(&conversation).await })
             .await
     }
 
@@ -79,8 +102,8 @@ impl Hub {
         self.on_runtime(async move { gateway.memory_stats().await }).await
     }
 
-    /// The page a topic or entity owns, if the wiki has written one.
-    pub async fn topic_page(&self, topic: TopicId) -> Result<Option<Page>, GatewayError> {
+    /// The page a topic or entity owns, if the wiki has written one, and what its sessions mention.
+    pub async fn topic_page(&self, topic: TopicId) -> Result<Owned, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.topic_page(&topic).await })
             .await

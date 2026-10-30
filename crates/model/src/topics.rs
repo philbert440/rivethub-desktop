@@ -59,6 +59,8 @@ pub struct FiledConversation {
     pub channel: String,
     pub last_active_ms: Option<i64>,
     pub by: FiledBy,
+    /// The node that captured it, when rh recorded one.
+    pub node: Option<String>,
 }
 
 /// A placed session as rh names it, and who filed it.
@@ -68,23 +70,19 @@ pub struct FiledSession {
     pub title: Option<String>,
     pub last_active_ms: Option<i64>,
     pub by: FiledBy,
+    /// The node that captured it, when rh recorded one.
+    pub node: Option<String>,
 }
 
 impl FiledSession {
     /// The session as far as rh remembers it, for a session no node lists any more.
     pub fn summary(&self) -> SessionSummary {
-        SessionSummary {
-            id: self.session.clone(),
-            title: self.title.clone(),
-            status: crate::session::SessionStatus::Idle,
-            model: None,
-            effort: None,
-            cwd: None,
-            updated_at_ms: self.last_active_ms.unwrap_or_default(),
-            parent: None,
-            node: None,
-            blocked: false,
-        }
+        SessionSummary::remembered(
+            self.session.clone(),
+            self.title.clone(),
+            self.last_active_ms.unwrap_or_default(),
+            self.node.clone(),
+        )
     }
 }
 

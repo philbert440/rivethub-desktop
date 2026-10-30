@@ -1,5 +1,5 @@
 use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
-use model::wiki::{Listing, Page, PageEdit};
+use model::wiki::{EntityMention, Listing, Owned, PageEdit};
 use model::{SessionId, TopicId};
 use wire::gateway::memory::{
     MemorySearchResponse, MemoryStatsResponse, MemorySummaryDagResponse, MemoryTagsDecideRequest,
@@ -7,6 +7,20 @@ use wire::gateway::memory::{
 };
 use wire::gateway::topics::TopicPage;
 use wire::gateway::wiki::{WikiPageEdit, WikiPageResponse, WikiTopicList};
+
+fn owned(bound: TopicPage) -> Owned {
+    Owned {
+        page: bound.page.map(translate::page),
+        mentions: bound
+            .mentions
+            .into_iter()
+            .map(|mention| EntityMention {
+                entity: TopicId::new(mention.topic_id),
+                name: mention.name,
+            })
+            .collect(),
+    }
+}
 
 use crate::{Gateway, GatewayError, translate};
 
@@ -38,27 +52,35 @@ impl Gateway {
         Ok(translate::session_memory(dag))
     }
 
-    pub async fn topic_page(&self, topic: &TopicId) -> Result<Option<Page>, GatewayError> {
-        let url = self.api_url(&["api", "topics", topic.as_str(), "page"])?;
-        let bound: TopicPage = Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(bound.page.map(translate::page))
+    /// A conversation's summaries by its id, for a filed conversation that is no harness session.
+    pub async fn conversation_memory(&self, conversation: &str) -> Result<SessionMemory, GatewayError> {
+        let url = self.api_url(&["api", "memory", "conversations", conversation, "summaries"])?;
+        let dag: MemorySummaryDagResponse = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::session_memory(dag))
     }
 
-    pub async fn wiki_page(&self, slug: &str) -> Result<Page, GatewayError> {
+    pub async fn topic_page(&self, topic: &TopicId) -> Result<Owned, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "page"])?;
+        Ok(owned(Self::read_json(self.http.get(url).send().await)?.await?))
+    }
+
+    pub async fn wiki_page(&self, slug: &str) -> Result<model::wiki::Page, GatewayError> {
         let url = self.api_url(&["api", "wiki", slug])?;
         let page: WikiPageResponse = Self::read_json(self.http.get(url).send().await)?.await?;
         Ok(translate::page(page))
     }
 
-    /// Replaces what the edit names on a topic or entity page, and answers the page as it is now.
-    pub async fn edit_page(&self, slug: &str, edit: PageEdit) -> Result<Page, GatewayError> {
-        let url = self.api_url(&["api", "wiki", slug])?;
+    /// Replaces what the edit names on the page a topic or entity owns, writing that page first when
+    /// the wiki hasn't, and answers it as it is now.
+    pub async fn edit_page(&self, topic: &TopicId, edit: PageEdit) -> Result<Owned, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "page"])?;
         let body = WikiPageEdit {
             current_state: edit.current_state,
             article: edit.article,
         };
-        let page: WikiPageResponse = Self::read_json(self.http.put(url).json(&body).send().await)?.await?;
-        Ok(translate::page(page))
+        Ok(owned(
+            Self::read_json(self.http.put(url).json(&body).send().await)?.await?,
+        ))
     }
 
     pub async fn memory_stats(&self) -> Result<Stats, GatewayError> {
