@@ -20,6 +20,7 @@ pub mod prompt;
 pub mod search;
 pub mod session;
 pub mod shelf;
+pub mod tidy;
 pub mod tools;
 pub mod topics;
 pub mod trust;

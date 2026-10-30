@@ -4,6 +4,7 @@ mod events;
 mod memory;
 mod previews;
 mod terminal;
+mod tidy;
 mod tls;
 mod tool_input;
 mod topics;

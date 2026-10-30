@@ -137,7 +137,7 @@ impl MemoryPage {
     pub(super) fn tidy_section(&self, cx: &mut Context<Self>) -> AnyElement {
         let body = match &self.tidy {
             None => div().text_color(Theme::ink_dim()).child("Loading…"),
-            Some(tidy) if tidy.tags.is_empty() && tidy.terms.is_empty() => div()
+            Some(tidy) if tidy.waiting() == 0 => div()
                 .pt_4()
                 .text_color(Theme::ink_dim())
                 .child("All tidy. Memory adds things here when it needs you."),
@@ -145,6 +145,13 @@ impl MemoryPage {
                 .flex()
                 .flex_col()
                 .gap_2()
+                .when(!tidy.batches.is_empty(), |list| {
+                    list.child(Self::group(
+                        "Topics, entities and types",
+                        "changes to the trees, in the batches they were proposed in",
+                    ))
+                    .children(self.batches(cx))
+                })
                 .when(!tidy.tags.is_empty(), |list| {
                     list.child(Self::group("Tags", "the tagger's proposals for conversations"))
                         .children(tidy.tags.iter().enumerate().map(|(index, tag)| {

@@ -4,12 +4,14 @@ mod decisions;
 mod entities;
 mod entity_edit;
 mod mentions;
+mod proposals;
 mod session;
 mod sessions;
 mod stats;
 mod tidy;
 mod topics;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use app::{Hub, Library, Tidy};
@@ -22,6 +24,7 @@ use model::entities::Catalog;
 use model::markdown::Block;
 use model::memory::{Found, Period, Stats};
 use model::session::SessionSummary;
+use model::tidy::Upkeep;
 use model::topics::FiledConversation;
 use model::wiki::{Listing, Page};
 use model::{SessionId, TopicId};
@@ -111,7 +114,9 @@ pub struct MemoryPage {
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
+    open_batches: HashSet<String>,
     stats: Option<Stats>,
+    upkeep: Option<Upkeep>,
     catalog: Option<Catalog>,
     browse: entities::Browse,
     entity_find: Entity<TextInput>,
@@ -169,7 +174,9 @@ impl MemoryPage {
             deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
+            open_batches: HashSet::new(),
             stats: None,
+            upkeep: None,
             catalog: None,
             browse: entities::Browse::default(),
             entity_find,
@@ -240,6 +247,7 @@ impl MemoryPage {
             Tab::Stats => {
                 self.load_tidy(cx);
                 self.load_stats(cx);
+                self.load_catalog(cx);
             }
         }
         cx.notify();
@@ -251,10 +259,7 @@ impl MemoryPage {
     }
 
     fn tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let waiting = self
-            .tidy
-            .as_ref()
-            .map_or(0, |tidy| tidy.tags.len() + tidy.terms.len());
+        let waiting = self.tidy.as_ref().map_or(0, app::Tidy::waiting);
         div()
             .flex()
             .items_center()
