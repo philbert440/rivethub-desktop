@@ -1,20 +1,20 @@
+mod adopt;
+mod layout;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
 use app::Hub;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, ImageFormat, IntoElement, ParentElement,
-    Pixels, Point, Render, ScrollHandle, Styled, Subscription, Window, anchored, deferred, div, prelude::*,
-    px,
+    Context, Entity, EventEmitter, IntoElement, ParentElement, Pixels, Point, Render, ScrollHandle, Styled,
+    Subscription, Window, div, prelude::*,
 };
-use model::plugin::view::{Action, Answer, Block, Button, ButtonStyle, CanvasBlock, Confirm, Field, View};
+use model::plugin::view::{Action, Answer, Button, ButtonStyle, Confirm, View};
 use model::plugin::{Context as About, Params, PluginRef};
 
-use super::canvas::{CanvasTarget, CanvasView, Replied};
-use super::form::{FormSubmitted, FormView};
-use crate::theme::Theme;
-use crate::{brand, shell};
+use super::canvas::CanvasView;
+use super::form::FormView;
 
 /// Where a view is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,15 +58,6 @@ pub(super) enum Picture {
     Failed,
 }
 
-/// What a view holds that the frame keeps between fetches.
-#[derive(Default)]
-struct Found<'a> {
-    forms: Vec<(&'a str, &'a [Field], &'a [Button])>,
-    canvases: Vec<&'a CanvasBlock>,
-    images: Vec<&'a str>,
-    logs: Vec<String>,
-}
-
 /// The key of the block at `index` in a list of blocks reached by `parent`, so local state
 /// (a tab chosen, a section folded, a column sorted) stays with its block across fetches.
 pub(super) fn child_key(parent: &str, index: usize) -> String {
@@ -74,31 +65,6 @@ pub(super) fn child_key(parent: &str, index: usize) -> String {
         index.to_string()
     } else {
         format!("{parent}.{index}")
-    }
-}
-
-fn gather<'a>(blocks: &'a [Block], key: &str, found: &mut Found<'a>) {
-    for (index, block) in blocks.iter().enumerate() {
-        let key = child_key(key, index);
-        match block {
-            Block::Section { blocks, .. } => gather(blocks, &key, found),
-            Block::Split {
-                primary, secondary, ..
-            } => {
-                gather(primary, &format!("{key}p"), found);
-                gather(secondary, &format!("{key}s"), found);
-            }
-            Block::Tabs { tabs, .. } => {
-                for tab in tabs {
-                    gather(&tab.blocks, &format!("{key}:{}", tab.id), found);
-                }
-            }
-            Block::Form(form) => found.forms.push((&form.id, &form.fields, &form.buttons)),
-            Block::Canvas(canvas) => found.canvases.push(canvas),
-            Block::Image { path, .. } => found.images.push(path),
-            Block::Code { follow: true, .. } => found.logs.push(key),
-            _ => {}
-        }
     }
 }
 
@@ -237,89 +203,6 @@ impl Frame {
         self.load(cx);
     }
 
-    /// Brings the frame's forms, canvases and images in line with a view fetched as `asked`.
-    fn adopt(&mut self, view: &View, asked: Instant, cx: &mut Context<Self>) {
-        let mut found = Found::default();
-        gather(&view.blocks, "", &mut found);
-        self.forms
-            .retain(|id, _| found.forms.iter().any(|(form, ..)| form == id));
-        for (id, fields, buttons) in found.forms {
-            let unchanged = self
-                .forms
-                .get(id)
-                .is_some_and(|state| state.view.read(cx).given() == fields);
-            if let Some(state) = self.forms.get_mut(id).filter(|_| unchanged) {
-                state.buttons = buttons.to_vec();
-                continue;
-            }
-            let form = cx.new(|cx| FormView::new(fields.to_vec(), &[], cx));
-            let named = id.to_owned();
-            let submitted = cx.subscribe(&form, move |this, _, _: &FormSubmitted, cx| {
-                this.submit(&named, cx);
-            });
-            self.forms.insert(
-                id.to_owned(),
-                FormState {
-                    view: form,
-                    refusal: None,
-                    buttons: buttons.to_vec(),
-                    _submitted: submitted,
-                },
-            );
-        }
-        self.canvases
-            .retain(|id, _| found.canvases.iter().any(|canvas| &canvas.id == id));
-        for block in found.canvases {
-            let target = CanvasTarget {
-                plugin: self.plugin.clone(),
-                canvas: block.id.clone(),
-                params: self.params.clone(),
-                context: self.context.clone(),
-            };
-            if let Some((canvas, _)) = self.canvases.get(&block.id) {
-                canvas.update(cx, |canvas, cx| canvas.renew(block, target, asked, cx));
-                continue;
-            }
-            let hub = self.hub.clone();
-            let canvas = cx.new(|cx| CanvasView::new(hub, block, target, cx));
-            let replied = cx.subscribe(&canvas, |_, _, Replied(actions), cx| {
-                cx.emit(FrameEvent::Run(actions.clone()));
-            });
-            self.canvases.insert(block.id.clone(), (canvas, replied));
-        }
-        for path in found.images {
-            if !self.pictures.contains_key(path) {
-                self.fetch_picture(path.to_owned(), cx);
-            }
-        }
-        for key in found.logs {
-            self.logs.entry(key).or_default().scroll_to_bottom();
-        }
-    }
-
-    fn fetch_picture(&mut self, path: String, cx: &mut Context<Self>) {
-        self.pictures.insert(path.clone(), Picture::Loading);
-        let hub = self.hub.clone();
-        let plugin = self.plugin.clone();
-        cx.spawn(async move |this, cx| {
-            let fetched = hub.plugin_file(plugin, path.clone()).await;
-            this.update(cx, |this, cx| {
-                let format = |media_type: Option<&str>| media_type.and_then(ImageFormat::from_mime_type);
-                let picture = match fetched {
-                    Ok((bytes, media_type)) => format(media_type.as_deref())
-                        .map_or(Picture::Failed, |format| {
-                            Picture::Ready(Arc::new(gpui::Image::from_bytes(format, bytes)))
-                        }),
-                    Err(_) => Picture::Failed,
-                };
-                this.pictures.insert(path, picture);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// A button was pressed: asks first when it says to, then runs its action.
     pub(super) fn press(&mut self, button: &Button, form: Option<&str>, cx: &mut Context<Self>) {
         if button.disabled {
@@ -408,265 +291,6 @@ impl Frame {
             self.menu = Some((at, buttons));
             cx.notify();
         }
-    }
-
-    fn back(cx: &mut Context<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
-        cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(FrameEvent::Run(vec![Action::Back])))
-    }
-
-    fn icon_button(id: &'static str, icon: &'static str) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(id)
-            .size(px(36.))
-            .flex_none()
-            .rounded(px(18.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|button| button.bg(Theme::raised()))
-            .child(brand::icon(brand::symbol(Some(icon)), 18., Theme::ink()))
-    }
-
-    fn body(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let level = u8::from(self.placement == Placement::Dialog);
-        let mut body: Vec<AnyElement> = self
-            .problem
-            .iter()
-            .map(|problem| {
-                div()
-                    .text_xs()
-                    .text_color(Theme::danger())
-                    .child(problem.clone())
-                    .into_any_element()
-            })
-            .collect();
-        match &self.shown {
-            Shown::Waiting => body.push(
-                div()
-                    .text_sm()
-                    .text_color(Theme::ink_dim())
-                    .child("Loading…")
-                    .into_any_element(),
-            ),
-            Shown::Failed(problem) => body.push(
-                div()
-                    .p_4()
-                    .rounded(px(16.))
-                    .bg(Theme::danger_container())
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(div().text_color(Theme::danger()).child(problem.clone()))
-                    .child(
-                        div().flex().child(
-                            div()
-                                .id("frame-retry")
-                                .h(px(30.))
-                                .px_4()
-                                .rounded(px(15.))
-                                .border_1()
-                                .border_color(Theme::line())
-                                .flex()
-                                .items_center()
-                                .cursor_pointer()
-                                .text_sm()
-                                .hover(|button| button.bg(Theme::raised()))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.load(cx)))
-                                .child("Try again"),
-                        ),
-                    )
-                    .into_any_element(),
-            ),
-            Shown::Ready(view) => body.extend(self.blocks(&view.blocks, "", level, window, cx)),
-        }
-        body
-    }
-
-    fn toolbar(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        match &self.shown {
-            Shown::Ready(view) => view
-                .toolbar
-                .iter()
-                .enumerate()
-                .map(|(index, button)| self.button(button, format!("toolbar-{index}").into(), None, cx))
-                .collect(),
-            Shown::Waiting | Shown::Failed(_) => Vec::new(),
-        }
-    }
-
-    fn heading(&self) -> (String, Option<String>) {
-        match &self.shown {
-            Shown::Ready(view) => (view.title.clone(), view.subtitle.clone()),
-            Shown::Waiting | Shown::Failed(_) => (String::new(), None),
-        }
-    }
-
-    fn page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let (title, subtitle) = self.heading();
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(
-                shell::header()
-                    .when(self.depth > 0, |header| {
-                        header.child(Self::icon_button("frame-back", "arrow_back").on_click(Self::back(cx)))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .child(shell::title(title).truncate())
-                            .children(subtitle.map(|subtitle| {
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .truncate()
-                                    .child(subtitle)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .px_2()
-                            .rounded(px(8.))
-                            .bg(Theme::card())
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(self.plugin.node.clone()),
-                    )
-                    .child(div().flex_1())
-                    .when(self.loading && matches!(self.shown, Shown::Ready(_)), |header| {
-                        header.child(div().text_xs().text_color(Theme::ink_dim()).child("Updating…"))
-                    })
-                    .children(self.toolbar(cx)),
-            )
-            .child(
-                shell::tile().child(
-                    div()
-                        .id("plugin-page")
-                        .size_full()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .child(
-                            div()
-                                .p_6()
-                                .flex()
-                                .flex_col()
-                                .gap_4()
-                                .children(self.body(window, cx)),
-                        ),
-                ),
-            )
-            .into_any_element()
-    }
-
-    fn dialog(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let (title, subtitle) = self.heading();
-        div()
-            .w(px(560.))
-            .max_h(window.viewport_size().height * 0.85)
-            .rounded(px(28.))
-            .bg(Theme::card())
-            .border_1()
-            .border_color(Theme::line())
-            .flex()
-            .flex_col()
-            .occlude()
-            .child(
-                div()
-                    .px_6()
-                    .pt_5()
-                    .pb_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(shell::title(title))
-                            .children(subtitle.map(|subtitle| {
-                                div().text_xs().text_color(Theme::ink_dim()).child(subtitle)
-                            })),
-                    )
-                    .children(self.toolbar(cx))
-                    .child(Self::icon_button("dialog-close", "close").on_click(Self::back(cx))),
-            )
-            .child(
-                div()
-                    .id("plugin-dialog")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .px_6()
-                    .pb_6()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .children(self.body(window, cx)),
-            )
-            .into_any_element()
-    }
-
-    fn menu_overlay(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let (at, buttons) = self.menu.as_ref()?;
-        Some(deferred(
-            anchored().position(*at).child(
-                div()
-                    .min_w(px(200.))
-                    .p_1()
-                    .rounded(px(16.))
-                    .bg(Theme::card())
-                    .border_1()
-                    .border_color(Theme::line())
-                    .text_color(Theme::ink())
-                    .occlude()
-                    .on_mouse_down_out(cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
-                        this.menu = None;
-                        cx.notify();
-                    }))
-                    .children(buttons.iter().enumerate().map(|(index, button)| {
-                        let pressed = button.clone();
-                        let ink = if button.style == ButtonStyle::Danger {
-                            Theme::danger()
-                        } else {
-                            Theme::ink()
-                        };
-                        div()
-                            .id(("row-menu", index))
-                            .px_3()
-                            .py_2()
-                            .rounded(px(10.))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_color(ink)
-                            .map(|item| {
-                                if button.disabled {
-                                    item.opacity(0.5)
-                                } else {
-                                    item.cursor_pointer().hover(|item| item.bg(Theme::selected()))
-                                }
-                            })
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.press(&pressed, None, cx);
-                            }))
-                            .children(
-                                button
-                                    .icon
-                                    .as_deref()
-                                    .map(|icon| brand::icon(brand::symbol(Some(icon)), 16., ink)),
-                            )
-                            .child(button.label.clone())
-                    })),
-            ),
-        ))
     }
 }
 
