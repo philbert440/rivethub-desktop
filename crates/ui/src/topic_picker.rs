@@ -26,6 +26,7 @@ pub struct TopicPicker {
     no_topic: Option<&'static str>,
     creates: bool,
     heading: Option<String>,
+    noun: &'static str,
     _input: [Subscription; 2],
 }
 
@@ -42,6 +43,7 @@ impl TopicPicker {
             no_topic,
             creates: true,
             heading: None,
+            noun: "topic",
             _input: [submitted, typed],
         }
     }
@@ -50,6 +52,19 @@ impl TopicPicker {
     #[must_use]
     pub fn headed(mut self, heading: String) -> Self {
         self.heading = Some(heading);
+        self
+    }
+
+    /// Names what is picked, such as "type", in the field and on the Create row.
+    #[must_use]
+    pub fn naming(mut self, noun: &'static str, cx: &mut Context<Self>) -> Self {
+        self.noun = noun;
+        let mut field = format!("{noun} name");
+        if let Some(first) = field.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(field, cx));
         self
     }
 
@@ -153,7 +168,7 @@ impl Render for TopicPicker {
             .when(self.creates && !typed.trim().is_empty() && !exact, |list| {
                 list.child(Self::row(
                     ("create", 0),
-                    format!("Create topic “{typed}”"),
+                    format!("Create {} “{typed}”", self.noun),
                     cx,
                     PickerEvent::Create(typed.clone()),
                 ))

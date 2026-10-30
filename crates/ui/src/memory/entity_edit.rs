@@ -403,8 +403,14 @@ impl MemoryPage {
             return;
         };
         let (heading, choices, creates) = choices(catalog, &pick);
+        let noun = match &pick {
+            Pick::Merge(id) if catalog.entity(id).is_some() => "entity",
+            Pick::Under(_) | Pick::Merge(_) => "type",
+        };
         let picker = cx.new(|cx| {
-            let picker = TopicPicker::new(choices, None, cx).headed(heading);
+            let picker = TopicPicker::new(choices, None, cx)
+                .headed(heading)
+                .naming(noun, cx);
             if creates { picker } else { picker.without_create() }
         });
         let events = cx.subscribe(&picker, move |this, _, event: &PickerEvent, cx| {

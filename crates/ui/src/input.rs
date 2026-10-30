@@ -799,6 +799,10 @@ impl TextInput {
             is_selecting: false,
         }
     }
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = placeholder.into();
+        cx.notify();
+    }
 
     /// Lets the text span lines, as a message or instructions do.
     #[must_use]
