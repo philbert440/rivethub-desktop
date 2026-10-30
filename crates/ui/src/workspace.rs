@@ -104,7 +104,9 @@ pub struct Workspace {
     subagents: HashMap<SessionId, usize>,
     uncategorized_open: bool,
     uncategorized_folded: bool,
-    problem: Option<String>,
+    /// What the last listing couldn't show, and why.
+    unlisted: Option<String>,
+    topics_problem: Option<String>,
     listing: Listing,
     /// Why the last thing the person asked for failed; reloads keep it, their next request clears it.
     failed: Option<String>,
@@ -215,7 +217,8 @@ impl Workspace {
             subagents: HashMap::new(),
             uncategorized_open: false,
             uncategorized_folded: false,
-            problem: None,
+            unlisted: None,
+            topics_problem: None,
             listing: Listing::Idle,
             failed: None,
             pane: None,

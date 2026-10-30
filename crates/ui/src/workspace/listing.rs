@@ -8,11 +8,6 @@ use model::topics::Filing;
 
 use super::{Arrival, Listed, Workspace};
 
-pub(super) type Loaded = (
-    Result<app::AllSessions, GatewayError>,
-    Result<Filing, GatewayError>,
-);
-
 /// Where the workspace's listing stands. One load runs at a time, and a request that arrives during
 /// it runs once more after it, so results land in order and requests don't pile up on a slow node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +18,8 @@ pub(super) enum Listing {
 }
 
 impl Workspace {
+    /// Lists every node's sessions and the topics again. The topics come first, then each node's
+    /// sessions as that node answers, so one that is slow or silent holds back only its own.
     pub(super) fn load(&mut self, cx: &mut Context<Self>) {
         if self.listing != Listing::Idle {
             self.listing = Listing::Stale;
@@ -31,11 +28,25 @@ impl Workspace {
         self.listing = Listing::Loading;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let loaded: Loaded = tokio::join!(hub.all_sessions(), hub.topics());
+            let (listing, filing) = tokio::join!(hub.all_sessions(), hub.topics());
+            let listing = this
+                .update(cx, |this, cx| {
+                    this.filed(filing, cx);
+                    listing.map_err(|err| this.unlisted = Some(err.to_string())).ok()
+                })
+                .ok()
+                .flatten();
+            if let Some(mut listing) = listing {
+                while listing.next().await {
+                    if this.update(cx, |this, cx| this.listed(&listing.all, cx)).is_err() {
+                        return;
+                    }
+                }
+            }
             this.update(cx, |this, cx| {
                 let again = this.listing == Listing::Stale;
                 this.listing = Listing::Idle;
-                this.loaded(loaded, cx);
+                this.listing_done(cx);
                 if again {
                     this.load(cx);
                 }
@@ -83,32 +94,28 @@ impl Workspace {
         self.conversations = filing.conversations;
     }
 
-    fn loaded(&mut self, (sessions, topics): Loaded, cx: &mut Context<Self>) {
-        let mut problems = Vec::new();
-        match sessions {
-            Ok(mut all) => {
-                if let Some(nodes) = &all.other_nodes {
-                    self.feed.follow_nodes(nodes);
-                }
-                all.keep_from(&self.sessions);
-                problems.extend(missing_note(&all.missing, self.hub.local_node().as_deref()));
-                self.sessions = all.sessions;
-                self.arrival = Arrival::Arrived;
+    /// The topics a load read, or why they couldn't be read.
+    fn filed(&mut self, topics: Result<Filing, GatewayError>, cx: &mut Context<Self>) {
+        self.topics_problem = match topics {
+            Ok(filing) => {
+                self.take_filing(filing);
+                None
             }
-            Err(err) => problems.push(err.to_string()),
-        }
-        match topics {
-            Ok(filing) => self.take_filing(filing),
-            Err(err) if err.is_missing_route() => {
-                problems.push("Topics need a newer rh on this node.".to_owned());
-            }
+            Err(err) if err.is_missing_route() => Some("Topics need a newer rh on this node.".to_owned()),
             // The sessions' note already says this node is out of reach.
-            Err(err) if err.is_unreachable() => {}
-            Err(err) => problems.push(format!("topics: {err}")),
+            Err(err) if err.is_unreachable() => None,
+            Err(err) => Some(format!("topics: {err}")),
+        };
+        self.show_listing(cx);
+    }
+
+    /// The sessions listed so far, taken in as each node answers.
+    fn listed(&mut self, all: &app::AllSessions, cx: &mut Context<Self>) {
+        if let Some(nodes) = &all.other_nodes {
+            self.feed.follow_nodes(nodes);
         }
-        self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
-        self.refile_sessions();
-        self.publish(cx);
+        self.unlisted = missing_note(&all.missing, self.hub.local_node().as_deref());
+        self.sessions = all.shown(&self.sessions);
         if let Some(pane) = &self.pane {
             let open = pane.read(cx).session_id().clone();
             if let Some(latest) = self.sessions.iter().find(|session| session.id == open).cloned() {
@@ -119,7 +126,21 @@ impl Workspace {
         for parent in self.sessions.iter().filter_map(|session| session.parent.clone()) {
             *self.subagents.entry(parent).or_default() += 1;
         }
+        self.show_listing(cx);
+    }
+
+    fn show_listing(&mut self, cx: &mut Context<Self>) {
+        self.refile_sessions();
+        self.publish(cx);
         self.sync_panel(cx);
+        self.show_step(cx);
+        cx.notify();
+    }
+
+    /// Every node has answered: what the open topic's sessions are doing and where the
+    /// uncategorized ones might go are asked once per load.
+    fn listing_done(&mut self, cx: &mut Context<Self>) {
+        self.arrival = Arrival::Arrived;
         self.sync_step(cx);
         self.load_suggestions(cx);
         cx.notify();
@@ -130,7 +151,8 @@ impl Workspace {
         let parts: Vec<&str> = self
             .failed
             .iter()
-            .chain(&self.problem)
+            .chain(&self.unlisted)
+            .chain(&self.topics_problem)
             .map(String::as_str)
             .collect();
         (!parts.is_empty()).then(|| parts.join(" · "))

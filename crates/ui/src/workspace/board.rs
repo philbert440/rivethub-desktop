@@ -67,23 +67,12 @@ impl Workspace {
             .map_or_else(|| root.clone(), Clone::clone)
     }
 
-    /// Points the rail at the open topic's current step and its sessions, newest first, and asks
-    /// what the step's Active sessions are doing now.
+    /// Shows the open topic's current step on the rail, and asks what the step's Active sessions
+    /// are doing now.
     pub(super) fn sync_step(&self, cx: &mut Context<Self>) {
-        let Altitude::Topic(root) = &self.altitude else {
+        let Some((step, active)) = self.show_step(cx) else {
             return;
         };
-        let step = self.step_in(root);
-        let inside = self.shelf(&step);
-        let active: Vec<SessionSummary> = inside.active.iter().map(|session| (*session).clone()).collect();
-        let mut sessions: Vec<SessionSummary> = active
-            .iter()
-            .cloned()
-            .chain(inside.history.iter().map(|session| (*session).clone()))
-            .collect();
-        sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-        self.rail
-            .update(cx, |rail, cx| rail.show(step.clone(), sessions, cx));
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let previews = hub.previews(active).await;
@@ -100,6 +89,26 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Points the rail at the open topic's current step and its sessions, newest first; the step
+    /// and its Active sessions, when a topic is open.
+    pub(super) fn show_step(&self, cx: &mut Context<Self>) -> Option<(TopicId, Vec<SessionSummary>)> {
+        let Altitude::Topic(root) = &self.altitude else {
+            return None;
+        };
+        let step = self.step_in(root);
+        let inside = self.shelf(&step);
+        let active: Vec<SessionSummary> = inside.active.iter().map(|session| (*session).clone()).collect();
+        let mut sessions: Vec<SessionSummary> = active
+            .iter()
+            .cloned()
+            .chain(inside.history.iter().map(|session| (*session).clone()))
+            .collect();
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
+        self.rail
+            .update(cx, |rail, cx| rail.show(step.clone(), sessions, cx));
+        Some((step, active))
     }
 
     pub(super) fn sync_panel(&self, cx: &mut Context<Self>) {

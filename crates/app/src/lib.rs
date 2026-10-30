@@ -1,6 +1,7 @@
 mod backoff;
 mod chime;
 mod feed;
+mod listing;
 mod memory;
 mod notify;
 pub mod omarchy;
@@ -12,12 +13,13 @@ mod terminal;
 mod topics;
 
 pub use feed::WorkspaceFeed;
+pub use listing::{AllSessions, Missing, SessionListing};
 pub use memory::{Library, Tidy};
 pub use plugins::{Installed, NodeNotice, PluginWatch};
 pub use session::SessionHandle;
 pub use terminal::{TerminalHandle, TerminalState};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -300,91 +302,6 @@ impl Hub {
         .unwrap_or_default()
     }
 
-    /// Every session every reachable node lists, across all of its harnesses, newest first.
-    pub async fn all_sessions(&self) -> Result<AllSessions, GatewayError> {
-        let hub = self.clone();
-        self.on_runtime(async move {
-            // Until this node has named itself, its own mesh entry would be listed again as another
-            // node's, over the network.
-            let unnamed = hub.inner.local_node.read().is_none();
-            if unnamed && let Ok(roster) = hub.inner.local.agents().await {
-                *hub.inner.local_node.write() = Some(roster.node);
-            }
-            let local = hub.inner.local_node.read().clone();
-            let mut nodes = vec![(None, hub.inner.local.clone())];
-            let mesh = hub.inner.local.mesh().await.ok();
-            for node in mesh.iter().flatten() {
-                let is_local = local.as_deref().is_some_and(|name| node.answers_to(name));
-                if node.online
-                    && !is_local
-                    && let Ok(gateway) = hub.gateway_for(Some(&node.name)).await
-                {
-                    nodes.push((Some(node.name.clone()), gateway));
-                }
-            }
-            // Without this node's mesh, such as while it restarts, the nodes already reached are
-            // still asked directly, so their sessions stay listed.
-            if mesh.is_none() {
-                let known = hub.inner.remote.read().clone();
-                nodes.extend(
-                    known
-                        .into_iter()
-                        .filter(|(name, _)| !hub.is_local(name))
-                        .map(|(name, gateway)| (Some(name), gateway)),
-                );
-            }
-            let other_nodes = mesh.map(|_| nodes.iter().filter_map(|(node, _)| node.clone()).collect());
-            let listed = futures::future::join_all(nodes.into_iter().map(|(node, gateway)| {
-                let hub = hub.clone();
-                async move {
-                    let listed = match hub.offers(node.as_deref(), &gateway).await {
-                        Ok(offers) => Ok(node_sessions(&gateway, &offers).await),
-                        Err(err) => Err(err),
-                    };
-                    (node, listed)
-                }
-            }))
-            .await;
-            let mut all = AllSessions {
-                other_nodes,
-                ..AllSessions::default()
-            };
-            let mut seen = HashSet::new();
-            for (node, listed) in listed {
-                let (sessions, failed) = match listed {
-                    Ok(listed) => listed,
-                    Err(error) => {
-                        all.missing.push(Missing {
-                            node,
-                            harness: None,
-                            error,
-                        });
-                        continue;
-                    }
-                };
-                for (harness, error) in failed {
-                    all.missing.push(Missing {
-                        node: node.clone(),
-                        harness: Some(harness),
-                        error,
-                    });
-                }
-                for mut session in sessions {
-                    if seen.insert(session.id.clone()) {
-                        if session.node.is_none() {
-                            session.node.clone_from(&node);
-                        }
-                        all.sessions.push(session);
-                    }
-                }
-            }
-            all.sessions
-                .sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-            Ok(all)
-        })
-        .await
-    }
-
     pub async fn agents(&self) -> Result<Roster, GatewayError> {
         let gateway = self.inner.local.clone();
         let roster = self.on_runtime(async move { gateway.agents().await }).await?;
@@ -528,76 +445,4 @@ impl Hub {
         self.inner.offers.write().insert(key, offers.clone());
         Ok(offers)
     }
-}
-
-#[derive(Debug, Default)]
-pub struct AllSessions {
-    pub sessions: Vec<SessionSummary>,
-    /// The listings that didn't come back.
-    pub missing: Vec<Missing>,
-    /// The other online nodes, or `None` when the mesh couldn't be read.
-    pub other_nodes: Option<Vec<String>>,
-}
-
-/// A listing that didn't come back: a whole node, or one harness on a node that answered.
-#[derive(Debug)]
-pub struct Missing {
-    /// `None` is this client's own node.
-    pub node: Option<String>,
-    /// `None` when the node itself didn't answer.
-    pub harness: Option<HarnessId>,
-    pub error: GatewayError,
-}
-
-impl Missing {
-    fn covers(&self, session: &SessionSummary) -> bool {
-        session.node == self.node
-            && self
-                .harness
-                .as_ref()
-                .is_none_or(|harness| session.id.harness() == harness)
-    }
-}
-
-impl AllSessions {
-    /// Keeps the sessions an earlier listing had where this one came back empty-handed, so a node
-    /// that is restarting, or a harness that failed to list just now, doesn't empty the workspace.
-    pub fn keep_from(&mut self, earlier: &[SessionSummary]) {
-        let listed: HashSet<&model::SessionId> = self.sessions.iter().map(|session| &session.id).collect();
-        let kept: Vec<SessionSummary> = earlier
-            .iter()
-            .filter(|session| {
-                !listed.contains(&session.id) && self.missing.iter().any(|missing| missing.covers(session))
-            })
-            .cloned()
-            .collect();
-        if kept.is_empty() {
-            return;
-        }
-        self.sessions.extend(kept);
-        self.sessions
-            .sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-    }
-}
-
-/// Every session the node's harnesses list, and the harnesses whose listing failed.
-async fn node_sessions(
-    gateway: &Gateway,
-    offers: &[model::harness::HarnessOffer],
-) -> (Vec<SessionSummary>, Vec<(HarnessId, GatewayError)>) {
-    let listing: Vec<&HarnessId> = offers
-        .iter()
-        .filter(|offer| offer.lists_sessions)
-        .map(|offer| &offer.id)
-        .collect();
-    let lists = futures::future::join_all(listing.iter().map(|harness| gateway.sessions(harness))).await;
-    let mut sessions = Vec::new();
-    let mut failed = Vec::new();
-    for (harness, list) in listing.into_iter().zip(lists) {
-        match list {
-            Ok(list) => sessions.extend(list),
-            Err(err) => failed.push((harness.clone(), err)),
-        }
-    }
-    (sessions, failed)
 }
