@@ -2,7 +2,7 @@ use gpui::{ClickEvent, Context, Div, IntoElement, ParentElement, Styled, div, pr
 use model::prefs::{LastLaunch, SessionView};
 
 use super::SettingsPage;
-use super::parts::{button, dim, labelled, row, section, segment, segments, toggle};
+use super::parts::{button, dim, labelled, row, section, segment, segments, toggle, toggle_if};
 use crate::launch_choice::{LaunchChoices, Picked};
 use crate::theme::Theme;
 
@@ -139,10 +139,25 @@ impl SettingsPage {
             .into_any_element()
     }
 
+    /// The master switch first; the kinds and the sound below it only count while it's on.
     fn notifications(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let prefs = self.hub.preferences();
+        let on = prefs.notifications;
         vec![
             toggle(
+                "notifications",
+                "Desktop notifications",
+                "While RivetHub is in the background or on another session. Off silences all of them.",
+                on,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.notifications = !prefs.notifications;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+            toggle_if(
+                on,
                 "notify-finished",
                 "An agent finished a reply",
                 "When you're in another window or another session.",
@@ -154,7 +169,8 @@ impl SettingsPage {
                     cx.notify();
                 }),
             ),
-            toggle(
+            toggle_if(
+                on,
                 "notify-needs-you",
                 "A session needs you",
                 "When an agent waits on an approval or an answer.",
@@ -162,6 +178,22 @@ impl SettingsPage {
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     let mut prefs = this.hub.preferences();
                     prefs.notify_needs_you = !prefs.notify_needs_you;
+                    this.hub.set_preferences(prefs);
+                    cx.notify();
+                }),
+            ),
+            toggle_if(
+                on,
+                "notify-sound",
+                "Play a sound",
+                "A short chime with each notification. Turning it on plays it once.",
+                prefs.notify_sound,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    let mut prefs = this.hub.preferences();
+                    prefs.notify_sound = !prefs.notify_sound;
+                    if prefs.notify_sound {
+                        this.hub.chime();
+                    }
                     this.hub.set_preferences(prefs);
                     cx.notify();
                 }),

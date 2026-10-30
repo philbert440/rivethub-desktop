@@ -103,6 +103,19 @@ pub fn toggle(
     on: bool,
     flip: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
+    toggle_if(true, id, label, detail, on, flip)
+}
+
+/// A toggle that only flips while `enabled`, shown faded otherwise, for a switch that a switch
+/// above it has turned off.
+pub fn toggle_if(
+    enabled: bool,
+    id: &'static str,
+    label: &'static str,
+    detail: &'static str,
+    on: bool,
+    flip: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> AnyElement {
     let track = div()
         .w(px(36.))
         .h(px(20.))
@@ -121,9 +134,15 @@ pub fn toggle(
         );
     row()
         .id(id)
-        .cursor_pointer()
-        .hover(|row| row.bg(Theme::raised()))
-        .on_click(flip)
+        .map(|row| {
+            if enabled {
+                row.cursor_pointer()
+                    .hover(|row| row.bg(Theme::raised()))
+                    .on_click(flip)
+            } else {
+                row.opacity(0.45)
+            }
+        })
         .child(labelled(label, detail))
         .child(track)
         .into_any_element()

@@ -3,9 +3,14 @@ use crate::notice::NoticeKind;
 
 /// The choices the person makes in Settings, kept between runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::struct_excessive_bools, reason = "each switch in Settings is a bool")]
 pub struct Preferences {
+    /// Desktop notifications at all; off silences every kind below.
+    pub notifications: bool,
     pub notify_finished: bool,
     pub notify_needs_you: bool,
+    /// A chime with each desktop notification.
+    pub notify_sound: bool,
     /// A reply arriving or a turn ending brings an open chat to its end, even when scrolled up.
     pub jump_to_newest: bool,
     /// What the launcher preselects; `None` leaves it to the built-in choice.
@@ -41,8 +46,10 @@ impl Appearance {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            notifications: true,
             notify_finished: true,
             notify_needs_you: true,
+            notify_sound: false,
             jump_to_newest: true,
             last_launch: None,
             appearance: Appearance::Dark,
@@ -53,10 +60,11 @@ impl Default for Preferences {
 
 impl Preferences {
     pub fn wants(&self, kind: NoticeKind) -> bool {
-        match kind {
-            NoticeKind::Finished => self.notify_finished,
-            NoticeKind::NeedsYou => self.notify_needs_you,
-        }
+        self.notifications
+            && match kind {
+                NoticeKind::Finished => self.notify_finished,
+                NoticeKind::NeedsYou => self.notify_needs_you,
+            }
     }
 }
 

@@ -10,9 +10,12 @@ use crate::Hub;
 /// The file's shape: every field optional, so a file from an older or newer build still loads.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+#[expect(clippy::struct_excessive_bools, reason = "each switch in Settings is a bool")]
 struct Stored {
+    notifications: bool,
     notify_finished: bool,
     notify_needs_you: bool,
+    notify_sound: bool,
     jump_to_newest: bool,
     #[serde(deserialize_with = "or_none")]
     last_launch: Option<StoredLaunch>,
@@ -78,8 +81,10 @@ impl Default for Stored {
 impl From<&Preferences> for Stored {
     fn from(prefs: &Preferences) -> Self {
         Self {
+            notifications: prefs.notifications,
             notify_finished: prefs.notify_finished,
             notify_needs_you: prefs.notify_needs_you,
+            notify_sound: prefs.notify_sound,
             jump_to_newest: prefs.jump_to_newest,
             last_launch: prefs.last_launch.as_ref().map(|launch| match launch {
                 LastLaunch::Agent { id, name } => StoredLaunch::Agent {
@@ -109,8 +114,10 @@ impl From<&Preferences> for Stored {
 impl From<Stored> for Preferences {
     fn from(stored: Stored) -> Self {
         Self {
+            notifications: stored.notifications,
             notify_finished: stored.notify_finished,
             notify_needs_you: stored.notify_needs_you,
+            notify_sound: stored.notify_sound,
             jump_to_newest: stored.jump_to_newest,
             last_launch: stored.last_launch.map(|launch| match launch {
                 StoredLaunch::Agent { id, name } => LastLaunch::Agent { id, name },
@@ -210,6 +217,7 @@ mod tests {
         let older: Stored = serde_json::from_str(r#"{"notifyFinished":false}"#).unwrap_or_default();
         let older = Preferences::from(older);
         assert!(!older.notify_finished);
+        assert!(older.notifications && !older.notify_sound);
         assert!(older.jump_to_newest);
         assert_eq!(older.last_launch, None);
 
@@ -230,6 +238,8 @@ mod tests {
             }),
             appearance: model::prefs::Appearance::Omarchy,
             opens_in: SessionView::Terminal,
+            notifications: false,
+            notify_sound: true,
             ..Preferences::default()
         };
         let json = serde_json::to_string(&Stored::from(&saved)).unwrap_or_default();

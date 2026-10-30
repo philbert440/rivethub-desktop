@@ -1,3 +1,4 @@
+mod chime;
 mod feed;
 mod memory;
 mod notify;

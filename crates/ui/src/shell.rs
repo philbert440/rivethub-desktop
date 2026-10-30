@@ -163,6 +163,9 @@ impl Shell {
             NoticeKind::NeedsYou => "A session needs you",
         };
         let body = one_line(attention.title.as_deref()).to_string();
+        if self.hub.preferences().notify_sound {
+            self.hub.chime();
+        }
         let hub = self.hub.clone();
         let session = notice.session.clone();
         cx.spawn_in(window, async move |this, cx| {
