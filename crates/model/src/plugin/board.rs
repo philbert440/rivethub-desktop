@@ -25,13 +25,15 @@ impl Hit {
 }
 
 /// A canvas as the person works on it: the plug-in's scene with its changes, what is selected,
-/// where the view is, and the connectors drawn that the plug-in hasn't answered yet.
+/// where the view is, and what the plug-in hasn't answered yet: connectors drawn and items
+/// deleted.
 #[derive(Debug, Clone)]
 pub struct Board {
     scene: Scene,
     selection: Vec<String>,
     viewport: Option<Viewport>,
     provisional: Vec<(End, End)>,
+    hidden: Vec<String>,
 }
 
 impl Board {
@@ -41,6 +43,7 @@ impl Board {
             scene,
             selection: Vec::new(),
             provisional: Vec::new(),
+            hidden: Vec::new(),
         }
     }
 
@@ -100,7 +103,7 @@ impl Board {
     /// counts as on, in canvas units. Decorative items are never hit.
     pub fn hit(&self, at: Point, slack: f32, anchors: bool) -> Option<Hit> {
         if anchors {
-            let anchor = self.scene.items.iter().rev().find_map(|item| match item {
+            let anchor = self.shown().rev().find_map(|item| match item {
                 Item::Node(node) if !node.decorative => node
                     .anchors
                     .iter()
@@ -130,6 +133,22 @@ impl Board {
             }
             _ => None,
         })
+    }
+
+    /// The items on screen: the scene less what was deleted and not yet answered, and the
+    /// connectors of deleted nodes.
+    pub fn shown(&self) -> impl DoubleEndedIterator<Item = &Item> {
+        self.scene.items.iter().filter(|item| !self.is_hidden(item))
+    }
+
+    fn is_hidden(&self, item: &Item) -> bool {
+        let hidden = |id: &str| self.hidden.iter().any(|gone| gone == id);
+        match item {
+            Item::Node(node) => hidden(&node.id),
+            Item::Connector(connector) => {
+                hidden(&connector.id) || hidden(&connector.from.node) || hidden(&connector.to.node)
+            }
+        }
     }
 
     pub fn selection(&self) -> &[String] {
@@ -167,13 +186,18 @@ impl Board {
         if !adding {
             self.selection.clear();
         }
-        for item in &self.scene.items {
-            if let Item::Node(node) = item
-                && !node.decorative
-                && node.bounds().intersects(area)
-                && !self.selection.contains(&node.id)
-            {
-                self.selection.push(node.id.clone());
+        let touched: Vec<String> = self
+            .shown()
+            .filter_map(|item| match item {
+                Item::Node(node) if !node.decorative && node.bounds().intersects(area) => {
+                    Some(node.id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for id in touched {
+            if !self.selection.contains(&id) {
+                self.selection.push(id);
             }
         }
         self.selection != before
@@ -258,6 +282,14 @@ impl Board {
         }
     }
 
+    /// Deletes what is selected: it is hidden until the plug-in answers, and comes back unless the
+    /// answer removes it. The deleted items, or none.
+    pub fn delete_selection(&mut self) -> Vec<String> {
+        let deleted = std::mem::take(&mut self.selection);
+        self.hidden.extend(deleted.iter().cloned());
+        deleted
+    }
+
     /// Draws a connector the plug-in hasn't answered for yet.
     pub fn propose(&mut self, from: End, to: End) {
         self.provisional.push((from, to));
@@ -268,11 +300,14 @@ impl Board {
     }
 
     /// The plug-in answered `event`: its connector drawn so far goes, the plug-in's own upsert
-    /// adding the real one.
+    /// adding the real one, and what it deleted shows again unless the answer removed it.
     pub fn settle(&mut self, event: &Event) {
-        if let Event::Connected { from, to } = event {
-            self.provisional
-                .retain(|(drawn_from, drawn_to)| drawn_from != from || drawn_to != to);
+        match event {
+            Event::Connected { from, to } => self
+                .provisional
+                .retain(|(drawn_from, drawn_to)| drawn_from != from || drawn_to != to),
+            Event::Deleted(items) => self.hidden.retain(|id| !items.contains(id)),
+            Event::Selected(_) | Event::Moved(_) | Event::Activated(_) | Event::Menu { .. } => {}
         }
     }
 
@@ -362,7 +397,8 @@ impl Outbox {
 mod tests {
     use super::{Board, Hit, Outbox};
     use crate::plugin::canvas::{
-        Anchor, Direction, End, Event, Grid, Item, Node, Op, Placed, Point, Scene, Side,
+        Anchor, Arrow, Connector, Direction, End, Event, Grid, Item, Node, Op, Placed, Point, Route, Scene,
+        Side,
     };
 
     fn node(id: &str, x: f32, anchors: &[(&str, Direction)]) -> Item {
@@ -473,6 +509,38 @@ mod tests {
         assert_eq!(ids, ["fetch", "locked", "step-4"]);
         assert_eq!(board.scene().node("fetch").map(|node| node.x), Some(64.));
         assert_eq!(board.selection(), [] as [String; 0]);
+    }
+
+    #[test]
+    fn deleted_items_hide_with_their_connectors_until_the_answer() {
+        let mut board = board();
+        board.apply(vec![Op::Upsert(Item::Connector(Connector {
+            id: "e1".into(),
+            from: End {
+                node: "fetch".into(),
+                anchor: Some("out".into()),
+            },
+            to: End {
+                node: "draft".into(),
+                anchor: Some("in".into()),
+            },
+            route: Route::Curved,
+            stroke: None,
+            stroke_width: None,
+            dashed: false,
+            arrow: Arrow::End,
+            label: None,
+            tooltip: None,
+            menu: Vec::new(),
+            decorative: false,
+        }))]);
+        board.select("draft", false);
+        let deleted = board.delete_selection();
+        assert_eq!(deleted, ["draft"]);
+        let shown: Vec<&str> = board.shown().map(Item::id).collect();
+        assert_eq!(shown, ["fetch", "locked"]);
+        board.settle(&Event::Deleted(deleted));
+        assert_eq!(board.shown().count(), 4);
     }
 
     #[test]

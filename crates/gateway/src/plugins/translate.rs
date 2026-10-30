@@ -781,6 +781,7 @@ pub fn wire_event(event: &Event) -> CanvasEvent {
             from: wire_end(from),
             to: wire_end(to),
         },
+        Event::Deleted(items) => CanvasEvent::Deleted { items: items.clone() },
         Event::Activated(item) => CanvasEvent::Activated { item: item.clone() },
         Event::Menu { item, choice, at } => CanvasEvent::Menu {
             item: item.clone(),

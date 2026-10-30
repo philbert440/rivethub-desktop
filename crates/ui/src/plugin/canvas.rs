@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 use app::Hub;
 use gpui::{
     BorderStyle, Bounds, ClickEvent, ContentMask, Context, CursorStyle, DispatchPhase, EventEmitter,
-    FontWeight, Hitbox, HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, PathBuilder, PinchEvent, Pixels, Render, ScrollWheelEvent, SharedString,
-    Styled, Task, TextAlign, TextRun, TransformationMatrix, Window, anchored, canvas, deferred, div, font,
-    point, prelude::*, px, quad, size,
+    FocusHandle, FontWeight, Hitbox, HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, PinchEvent, Pixels, Render, ScrollWheelEvent,
+    SharedString, Styled, Task, TextAlign, TextRun, TransformationMatrix, Window, actions, anchored, canvas,
+    deferred, div, font, point, prelude::*, px, quad, size,
 };
 use model::plugin::board::{Board, Hit, Outbox};
 use model::plugin::canvas::{
@@ -20,6 +20,18 @@ use model::plugin::{Context as About, Params, PluginRef};
 
 use crate::brand;
 use crate::theme::Theme;
+
+actions!(
+    plugin_canvas,
+    [
+        DeleteSelection,
+        Activate,
+        ClearSelection,
+        ZoomIn,
+        ZoomOut,
+        FitView
+    ]
+);
 
 /// A canvas's height when its block doesn't say.
 const HEIGHT: f32 = 420.;
@@ -114,6 +126,7 @@ fn parse_path(data: &str) -> Rc<[Segment]> {
 /// here, and the plug-in hears only their results.
 pub struct CanvasView {
     hub: Hub,
+    focus: FocusHandle,
     target: CanvasTarget,
     board: Board,
     read_only: bool,
@@ -137,9 +150,10 @@ pub struct CanvasView {
 impl EventEmitter<Replied> for CanvasView {}
 
 impl CanvasView {
-    pub fn new(hub: Hub, block: &CanvasBlock, target: CanvasTarget) -> Self {
+    pub fn new(hub: Hub, block: &CanvasBlock, target: CanvasTarget, cx: &mut Context<Self>) -> Self {
         Self {
             hub,
+            focus: cx.focus_handle(),
             target,
             board: Board::new(block.scene.clone()),
             read_only: block.read_only,
@@ -301,6 +315,47 @@ impl CanvasView {
                 });
             }
         }
+        cx.notify();
+    }
+
+    fn delete_selection(&mut self, _: &DeleteSelection, _: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || self.gesture.is_some() {
+            return;
+        }
+        let deleted = self.board.delete_selection();
+        if !deleted.is_empty() {
+            self.tell(Event::Deleted(deleted), cx);
+            cx.notify();
+        }
+    }
+
+    /// Activates the one item selected, as a double-click on it does.
+    fn activate(&mut self, _: &Activate, _: &mut Window, cx: &mut Context<Self>) {
+        if let [only] = self.board.selection() {
+            let item = only.clone();
+            self.tell(Event::Activated(item), cx);
+        }
+    }
+
+    fn clear_selection(&mut self, _: &ClearSelection, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_menu = None;
+        if self.board.clear_selection() {
+            self.tell(Event::Selected(Vec::new()), cx);
+        }
+        cx.notify();
+    }
+
+    fn zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        self.zoom_by(ZOOM_STEP, cx);
+    }
+
+    fn zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        self.zoom_by(1. / ZOOM_STEP, cx);
+    }
+
+    fn fit_view(&mut self, _: &FitView, _: &mut Window, cx: &mut Context<Self>) {
+        let size = self.size();
+        self.board.fit(size);
         cx.notify();
     }
 
@@ -506,7 +561,7 @@ impl CanvasView {
     }
 
     /// What one frame draws, taken out of the view so painting can use the app.
-    fn picture(&mut self, bounds: Bounds<Pixels>) -> Picture {
+    fn picture(&mut self, bounds: Bounds<Pixels>, focused: bool) -> Picture {
         self.bounds = Some(bounds);
         let view = self.board.view_in(self.size());
         let mut paths = HashMap::new();
@@ -554,8 +609,13 @@ impl CanvasView {
                 None => CursorStyle::Arrow,
             },
         };
+        let scene = self.board.scene();
         Picture {
-            scene: self.board.scene().clone(),
+            scene: Scene {
+                items: self.board.shown().cloned().collect(),
+                grid: scene.grid,
+                viewport: scene.viewport,
+            },
             selection: self.board.selection().to_vec(),
             view,
             provisional: self.board.provisional().to_vec(),
@@ -565,6 +625,7 @@ impl CanvasView {
             grid: self.board.scene().grid.map(|grid| grid.size),
             paths,
             cursor,
+            focused,
         }
     }
 }
@@ -591,6 +652,8 @@ struct Picture {
     grid: Option<f32>,
     paths: HashMap<String, Rc<[Segment]>>,
     cursor: CursorStyle,
+    /// Whether the canvas has the keyboard, which its outline shows.
+    focused: bool,
 }
 
 fn hsla(color: gpui::Rgba) -> Hsla {
@@ -621,12 +684,17 @@ impl Picture {
     }
 
     fn paint(&self, bounds: Bounds<Pixels>, hitbox: &Hitbox, window: &mut Window, cx: &mut gpui::App) {
+        let edge = if self.focused {
+            hsla(Theme::accent()).opacity(0.45)
+        } else {
+            hsla(Theme::line())
+        };
         window.paint_quad(quad(
             bounds,
             px(20.),
             hsla(Theme::panel()),
             px(1.),
-            hsla(Theme::line()),
+            edge,
             BorderStyle::Solid,
         ));
         window.set_cursor_style(self.cursor, hitbox);
@@ -1343,18 +1411,22 @@ impl CanvasView {
 }
 
 impl Render for CanvasView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let focused = self.focus.is_focused(window);
         let drawing = canvas(
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
             move |bounds, hitbox, window, cx| {
-                let picture = view.update(cx, |this, _| this.picture(bounds));
+                let picture = view.update(cx, |this, _| this.picture(bounds, focused));
                 picture.paint(bounds, &hitbox, window, cx);
                 window.on_mouse_event({
                     let (view, hitbox) = (view.clone(), hitbox.clone());
                     move |event: &MouseDownEvent, phase, window, cx| {
                         if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
-                            view.update(cx, |this, cx| this.down(event, cx));
+                            view.update(cx, |this, cx| {
+                                window.focus(&this.focus, cx);
+                                this.down(event, cx);
+                            });
                             cx.stop_propagation();
                         }
                     }
@@ -1402,6 +1474,22 @@ impl Render for CanvasView {
             .w_full()
             .h(px(self.height))
             .flex_none()
+            .key_context("PluginCanvas")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::delete_selection))
+            .on_action(cx.listener(Self::activate))
+            .on_action(cx.listener(Self::clear_selection))
+            .on_action(cx.listener(Self::zoom_in))
+            .on_action(cx.listener(Self::zoom_out))
+            .on_action(cx.listener(Self::fit_view))
+            // A click anywhere else takes the keyboard back, so Delete can't reach a selection
+            // the person has moved on from.
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                if this.focus.is_focused(window) {
+                    window.blur(cx);
+                    cx.notify();
+                }
+            }))
             .child(drawing)
             .child(self.controls(cx))
             .children(self.problem.clone().map(|problem| {

@@ -4,6 +4,7 @@ mod form;
 mod frame;
 mod settings;
 
+pub use canvas::{Activate, ClearSelection, DeleteSelection, FitView, ZoomIn, ZoomOut};
 pub use frame::Frame;
 pub use settings::{PluginSettings, SettingsEvent};
 

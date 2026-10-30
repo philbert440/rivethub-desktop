@@ -410,6 +410,7 @@ pub enum Event {
         from: End,
         to: End,
     },
+    Deleted(Vec<String>),
     Activated(String),
     /// A menu entry chosen on an item, or on empty space when `item` is `None`, at `at`.
     Menu {

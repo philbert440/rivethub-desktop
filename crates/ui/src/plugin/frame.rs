@@ -281,7 +281,7 @@ impl Frame {
                 continue;
             }
             let hub = self.hub.clone();
-            let canvas = cx.new(|_| CanvasView::new(hub, block, target));
+            let canvas = cx.new(|cx| CanvasView::new(hub, block, target, cx));
             let replied = cx.subscribe(&canvas, |_, _, Replied(actions), cx| {
                 cx.emit(FrameEvent::Run(actions.clone()));
             });
