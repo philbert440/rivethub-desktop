@@ -196,6 +196,9 @@ impl MemoryPage {
                 if verdict == Verdict::Accept {
                     cx.emit(MemoryEvent::Refiled);
                     this.load_catalog(cx);
+                    // A page merge or removal changes the wiki's pages, which Topics keeps listed.
+                    this.load_library(cx);
+                    this.load_pages(cx);
                 }
                 this.load_tidy(cx);
                 this.load_stats(cx);
