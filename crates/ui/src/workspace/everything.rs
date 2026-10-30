@@ -5,8 +5,8 @@ use gpui::{
 use model::session::SessionSummary;
 use model::topics::Card;
 
-use super::Workspace;
 use super::topic_edit::DraggedTopic;
+use super::{Listing, Workspace};
 use crate::brand;
 use crate::memory::Focus;
 use crate::side_panel::{DragGhost, DraggedAgent, DraggedSession};
@@ -21,9 +21,12 @@ impl Workspace {
     pub(super) fn everything(&self, cx: &mut Context<Self>) -> AnyElement {
         let board = self.board();
         if board.uncategorized.is_empty() && board.recent.is_empty() {
-            let line = self
-                .problems()
-                .unwrap_or_else(|| "Start a session and it will find its topic.".into());
+            let (heading, hint) = if self.listing == Listing::Arrived {
+                ("Nothing active", "Start a session and it will find its topic.")
+            } else {
+                ("Finding your sessions…", "Asking each node what it runs.")
+            };
+            let line = self.problems().unwrap_or_else(|| hint.into());
             return div()
                 .size_full()
                 .flex()
@@ -32,7 +35,7 @@ impl Workspace {
                 .justify_center()
                 .gap_3()
                 .child(img(brand::ghost()).size(px(96.)))
-                .child(div().text_color(Theme::ink()).child("Nothing active"))
+                .child(div().text_color(Theme::ink()).child(heading))
                 .child(div().text_color(Theme::ink_dim()).child(line))
                 .child(self.new_topic_card(cx))
                 .into_any_element();

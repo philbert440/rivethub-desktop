@@ -42,12 +42,13 @@ pub async fn open(
     let (resync, mut resync_rx) = mpsc::channel::<()>(1);
     let sync = serde_json::to_string(&HarnessSocketMessage::Sync).unwrap_or_default();
     tokio::spawn(async move {
+        let mut running = translate::Running::default();
         loop {
             tokio::select! {
                 frame = source.next() => {
                     let Some(Ok(frame)) = frame else { break };
                     let Message::Text(text) = frame else { continue };
-                    let Some(event) = decode(&text) else { continue };
+                    let Some(event) = decode(&text, &mut running) else { continue };
                     if events_tx.send(event).await.is_err() {
                         break;
                     }
@@ -63,9 +64,9 @@ pub async fn open(
     Ok(SessionStream { events, resync })
 }
 
-fn decode(text: &str) -> Option<SessionEvent> {
+fn decode(text: &str, running: &mut translate::Running) -> Option<SessionEvent> {
     if let Ok(event) = serde_json::from_str::<HarnessEvent>(text) {
-        return translate::event(event);
+        return translate::event(event, running);
     }
     match serde_json::from_str::<HarnessSocketRefusal>(text) {
         Ok(HarnessSocketRefusal::Error { message, .. }) => Some(SessionEvent::Error(message)),

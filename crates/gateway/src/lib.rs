@@ -326,6 +326,17 @@ impl Gateway {
         Ok(translate::summary(renamed))
     }
 
+    /// Starts a new chat that carries this session's conversation up to the reply to its
+    /// `prompts`th prompt.
+    pub async fn fork(&self, session: &SessionId, prompts: u32) -> Result<SessionSummary, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = format!("{}/api/harness-sessions/{segment}/fork", self.base_url);
+        let body = wire::gateway::sessions::HarnessSessionForkRequest { prompts };
+        let forked: wire::harness::HarnessSessionSummary =
+            Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
+        Ok(translate::summary(forked))
+    }
+
     pub async fn create_agent(
         &self,
         draft: &model::agents::AgentDraft,

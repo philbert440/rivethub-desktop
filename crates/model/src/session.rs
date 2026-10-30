@@ -208,6 +208,11 @@ pub enum SessionEvent {
         name: String,
         input: ToolInput,
     },
+    /// A running tool's input as the harness now names it, whole.
+    ToolInput {
+        id: String,
+        input: ToolInput,
+    },
     ToolFinished {
         id: String,
         failed: bool,
@@ -288,6 +293,22 @@ impl SessionView {
                     input,
                     output: None,
                 });
+            }
+            SessionEvent::ToolInput { id, input } => {
+                let Some(tool) = self
+                    .live
+                    .as_mut()
+                    .and_then(|turn| turn.tools.iter_mut().find(|tool| tool.id.as_deref() == Some(&id)))
+                else {
+                    return;
+                };
+                if tool.input == input {
+                    return;
+                }
+                if let ToolInput::Todos(todos) = &input {
+                    self.plan.revise(todos);
+                }
+                tool.input = input;
             }
             SessionEvent::ToolFinished { id, failed, output } => {
                 let state = if failed {

@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use app::{Hub, SessionHandle};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, ExternalPaths, Focusable, ImageFormat, IntoElement,
-    ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
-    Window, div, list, prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Context, Entity, ExternalPaths, FocusHandle, Focusable, ImageFormat,
+    IntoElement, ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled,
+    Subscription, Task, Window, div, list, prelude::*, px, relative,
 };
 use model::chat::{ExchangeState, arrived, exchanges, totals};
 use model::harness::{HarnessOffer, ModelChoice};
@@ -40,6 +40,10 @@ pub enum PaneEvent {
     Renamed(Box<SessionSummary>),
     /// The session's terminal rang its bell while the window was in the background.
     Bell,
+    /// A fork of the conversation started, as this new session.
+    Forked(Box<SessionSummary>),
+    /// Something asked of the pane's node failed, as said.
+    Failed(String),
 }
 
 struct Renaming {
@@ -79,6 +83,8 @@ pub struct SessionPane {
     uploading: usize,
     attach_problem: Option<String>,
     renaming: Option<Renaming>,
+    /// The exchange a fork is being started after, until the fork opens or fails.
+    forking: Option<usize>,
     awaiting_title: bool,
     _revisions: Task<()>,
     _submitted: Subscription,
@@ -135,6 +141,7 @@ impl SessionPane {
             uploading: 0,
             attach_problem: None,
             renaming: None,
+            forking: None,
             awaiting_title: false,
             _revisions: watcher,
             _submitted: submitted,
@@ -363,6 +370,10 @@ impl SessionPane {
 
     pub fn session_id(&self) -> &model::SessionId {
         &self.summary.id
+    }
+
+    pub fn summary(&self) -> &SessionSummary {
+        &self.summary
     }
 
     /// The workspace's listing has a newer copy of this session, such as the title the harness gave
@@ -759,6 +770,38 @@ impl SessionPane {
         }
     }
 
+    /// Forks the conversation as it stood after the exchange at `index`: a new chat carries every
+    /// prompt up to and including that one, with their replies.
+    pub fn fork_after(&mut self, index: usize, cx: &mut Context<Self>) {
+        let asked = self
+            .exchanges
+            .iter()
+            .take(index + 1)
+            .filter(|view| view.exchange.prompt.is_some())
+            .count();
+        if self.forking.is_some() {
+            return;
+        }
+        let prompts = u32::try_from(asked).unwrap_or(u32::MAX);
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        self.forking = Some(index);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let forked = hub.fork(&summary, prompts).await;
+            this.update(cx, |this, cx| {
+                this.forking = None;
+                cx.notify();
+                match forked {
+                    Ok(forked) => cx.emit(PaneEvent::Forked(Box::new(forked))),
+                    Err(err) => cx.emit(PaneEvent::Failed(format!("forking failed: {err}"))),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub fn reveal_turn(&mut self, index: usize, cx: &mut Context<Self>) {
         self.turns.scroll_to_reveal_item(index);
         cx.notify();
@@ -788,6 +831,7 @@ impl SessionPane {
         let fetched = Arc::clone(&self.fetched);
         let previews = Arc::clone(&self.previews);
         let plan = view.plan().clone();
+        let forking = self.forking;
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -807,6 +851,7 @@ impl SessionPane {
                             fetched: &fetched,
                             previews: &previews,
                             plan: &plan,
+                            forking: forking == Some(index),
                         };
                         transcript::exchange(exchange, &context, window)
                     },
@@ -870,7 +915,7 @@ impl SessionPane {
                     .children(self.plan_panel(&view, cx))
                     .children(self.queue_dock(cx))
                     .child(
-                        self.approval_card(&view)
+                        self.approval_card(&view, &self.composer.focus_handle(cx))
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
                     ),
             )
@@ -981,15 +1026,19 @@ impl SessionPane {
         )
     }
 
+    /// One answer to an approval; answering hands the keyboard back to the composer the card stood
+    /// in for.
     fn decision_button(
         &self,
         label: &'static str,
         decision: Decision,
         primary: bool,
         request_id: &str,
+        composer: &FocusHandle,
     ) -> impl IntoElement {
         let handle = self.handle.clone();
         let request_id = request_id.to_owned();
+        let composer = composer.clone();
         div()
             .id(label)
             .h(px(34.))
@@ -1007,11 +1056,14 @@ impl SessionPane {
                     .border_color(Theme::line())
                     .text_color(Theme::ink())
             })
-            .on_click(move |_, _, _| handle.decide(request_id.clone(), decision))
+            .on_click(move |_, window, cx| {
+                handle.decide(request_id.clone(), decision);
+                window.focus(&composer, cx);
+            })
             .child(label)
     }
 
-    fn approval_card(&self, view: &SessionView) -> Option<AnyElement> {
+    fn approval_card(&self, view: &SessionView, composer: &FocusHandle) -> Option<AnyElement> {
         let approval = view.approvals().first()?;
         let request_id = approval.request_id.clone();
         Some(
@@ -1049,14 +1101,21 @@ impl SessionPane {
                         .flex()
                         .gap_2()
                         .justify_end()
-                        .child(self.decision_button("Reject", Decision::Deny, false, &request_id))
+                        .child(self.decision_button("Reject", Decision::Deny, false, &request_id, composer))
                         .child(self.decision_button(
                             "Allow for session",
                             Decision::AllowForSession,
                             false,
                             &request_id,
+                            composer,
                         ))
-                        .child(self.decision_button("Allow once", Decision::Allow, true, &request_id)),
+                        .child(self.decision_button(
+                            "Allow once",
+                            Decision::Allow,
+                            true,
+                            &request_id,
+                            composer,
+                        )),
                 )
                 .into_any_element(),
         )

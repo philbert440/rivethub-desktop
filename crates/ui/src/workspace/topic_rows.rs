@@ -382,15 +382,21 @@ impl Workspace {
         }
     }
 
-    /// "Claude · Opus · ct115 · Memory": the harness, its model, the node, and the subtopic it sits
-    /// in when that's below the step.
+    /// "Claude · Opus · ct115 · Memory": the harness, its model, the node it runs on (this one's
+    /// name for a session listed here, the capturing node's for one only memory keeps), and the
+    /// subtopic it sits in when that's below the step.
     fn session_meta(&self, session: &SessionSummary, step: &TopicId) -> String {
         let mut parts = vec![session.id.harness().display_name().to_owned()];
         if session.model.is_some() {
             parts.push(self.model_name(session));
         }
-        if let Some(node) = &session.node {
-            parts.push(node.clone());
+        let listed = self.sessions.iter().any(|known| known.id == session.id);
+        if let Some(node) = session
+            .node
+            .clone()
+            .or_else(|| listed.then(|| self.hub.local_node()).flatten())
+        {
+            parts.push(node);
         }
         let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
         if let Some(own) = atlas.topic_of(session).filter(|own| *own != step)

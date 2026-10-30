@@ -707,9 +707,12 @@ impl Element for TextElement {
             return;
         };
         let scroll = prepaint.scroll;
+        let focused = focus_handle.is_focused(window);
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-            for quad in prepaint.selection.drain(..) {
-                window.paint_quad(quad);
+            if focused {
+                for quad in prepaint.selection.drain(..) {
+                    window.paint_quad(quad);
+                }
             }
             for (_, top, line) in &layout.lines {
                 let origin = point(bounds.left(), bounds.top() + *top - scroll);
@@ -724,9 +727,7 @@ impl Element for TextElement {
                     tracing::warn!(%err, "painting the input failed");
                 }
             }
-            if focus_handle.is_focused(window)
-                && let Some(cursor) = prepaint.cursor.take()
-            {
+            if focused && let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
             }
         });

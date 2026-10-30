@@ -74,6 +74,13 @@ pub struct Listed {
     pub conversations: Vec<FiledConversation>,
 }
 
+/// Whether the sessions have been listed yet: until then an empty page is still loading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    Awaited,
+    Arrived,
+}
+
 /// Where the topic screen stands in the open topic.
 #[derive(Debug, Default)]
 struct TopicScreen {
@@ -81,6 +88,8 @@ struct TopicScreen {
     step: Option<TopicId>,
     /// Whether History lists all its sessions rather than its newest few.
     all_history: bool,
+    /// A pill clicked once: the step into it waits out a double-click, which renames it instead.
+    stepping: Option<(TopicId, gpui::Task<()>)>,
 }
 
 struct Placing {
@@ -94,6 +103,7 @@ pub struct Workspace {
     hub: Hub,
     altitude: Altitude,
     sessions: Vec<SessionSummary>,
+    listing: Listing,
     topics: Vec<Topic>,
     placements: Placements,
     marks: HistoryMarks,
@@ -204,6 +214,7 @@ impl Workspace {
             hub,
             altitude: Altitude::Everything,
             sessions: Vec::new(),
+            listing: Listing::Awaited,
             topics: Vec::new(),
             placements: Placements::new(),
             marks: HistoryMarks::new(),
@@ -283,6 +294,39 @@ impl Workspace {
         .detach();
     }
 
+    /// Reads the topics and what is filed under them again, without listing every node's sessions:
+    /// what a topic or filing change alters, shown as soon as rh has it.
+    fn refile(&self, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let filing = hub.topics().await;
+            this.update(cx, |this, cx| {
+                match filing {
+                    Ok(filing) => {
+                        this.take_filing(filing);
+                        this.refile_sessions();
+                    }
+                    Err(err) => this.failed = Some(format!("topics: {err}")),
+                }
+                this.publish(cx);
+                this.sync_panel(cx);
+                this.sync_step(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn take_filing(&mut self, filing: Filing) {
+        self.topics = filing.topics;
+        self.placements = filing.placements;
+        self.marks = filing.marks;
+        self.filed_by = filing.filed_by;
+        self.remembered = filing.remembered;
+        self.conversations = filing.conversations;
+    }
+
     fn loaded(&mut self, (sessions, topics): Loaded, cx: &mut Context<Self>) {
         let mut problems = Vec::new();
         match sessions {
@@ -291,6 +335,7 @@ impl Workspace {
                     self.feed.follow_nodes(nodes);
                 }
                 self.sessions = all.sessions;
+                self.listing = Listing::Arrived;
                 if !all.unreachable.is_empty() {
                     problems.push(format!("couldn't reach {}", all.unreachable.join(", ")));
                 }
@@ -298,14 +343,7 @@ impl Workspace {
             Err(err) => problems.push(err.to_string()),
         }
         match topics {
-            Ok(filing) => {
-                self.topics = filing.topics;
-                self.placements = filing.placements;
-                self.marks = filing.marks;
-                self.filed_by = filing.filed_by;
-                self.remembered = filing.remembered;
-                self.conversations = filing.conversations;
-            }
+            Ok(filing) => self.take_filing(filing),
             Err(err) if err.is_missing_route() => {
                 problems.push("Topics need a newer rh on this node.".to_owned());
             }
@@ -531,15 +569,25 @@ impl Workspace {
         let session = summary.id.clone();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
         window.focus(&pane.read(cx).composer().focus_handle(cx), cx);
-        self.pane_events = Some(
-            cx.subscribe(&pane, |this, pane, event: &PaneEvent, cx| match event {
+        self.pane_events = Some(cx.subscribe_in(
+            &pane,
+            window,
+            |this, pane, event: &PaneEvent, window, cx| match event {
                 PaneEvent::Renamed(renamed) => this.renamed(renamed, cx),
                 PaneEvent::Bell => {
                     let session = pane.read(cx).session_id().clone();
                     this.rang(session, cx);
                 }
-            }),
-        );
+                PaneEvent::Forked(forked) => {
+                    let source = pane.read(cx).summary().clone();
+                    this.forked(&source, (**forked).clone(), window, cx);
+                }
+                PaneEvent::Failed(problem) => {
+                    this.failed = Some(problem.clone());
+                    cx.notify();
+                }
+            },
+        ));
         self.pane = Some(pane);
         self.placing = None;
         self.altitude = Altitude::Session { topic, session };
@@ -555,6 +603,24 @@ impl Workspace {
             filed_by: self.filed_by.clone(),
             conversations: self.conversations.clone(),
         }));
+    }
+
+    /// A fork opens at once, filed where the session it forks from is.
+    fn forked(
+        &mut self,
+        source: &SessionSummary,
+        forked: SessionSummary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        let topic = atlas.topic_of(source).cloned();
+        let session = forked.id.clone();
+        self.sessions.insert(0, forked.clone());
+        if let Some(topic) = topic {
+            self.place(session, topic, cx);
+        }
+        self.open(forked, window, cx);
     }
 
     fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
@@ -649,7 +715,7 @@ impl Workspace {
                     this.topic_deleted(topic, window, cx);
                     cx.emit(TopicDeleted(topic.clone()));
                 }
-                MenuEvent::Filed => this.load(cx),
+                MenuEvent::Filed => this.refile(cx),
                 MenuEvent::Rename(topic) => this.begin_retitle(topic.clone(), window, cx),
                 MenuEvent::MoveInto(topic) => this.choose(Pick::MoveInto(topic.clone()), at, window, cx),
                 MenuEvent::MergeInto(topic) => this.choose(Pick::MergeInto(topic.clone()), at, window, cx),
@@ -703,7 +769,7 @@ impl Workspace {
 
     /// Something was filed or unfiled elsewhere, such as from Memory: list topics again.
     pub fn refiled(&mut self, cx: &mut Context<Self>) {
-        self.load(cx);
+        self.refile(cx);
     }
 
     /// A deleted topic's sessions are back in Uncategorized; leave the topic if it was open.
@@ -819,7 +885,7 @@ impl Workspace {
                 if let Err(err) = placed {
                     this.failed = Some(format!("placing the session failed: {err}"));
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
@@ -838,7 +904,7 @@ impl Workspace {
                 if let Err(err) = unplaced {
                     this.failed = Some(format!("taking the session out of its topic failed: {err}"));
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
@@ -854,7 +920,7 @@ impl Workspace {
                 if let Err(err) = created {
                     this.failed = Some(format!("creating the topic failed: {err}"));
                 }
-                this.load(cx);
+                this.refile(cx);
             })
             .ok();
         })
