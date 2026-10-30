@@ -60,7 +60,11 @@ pub fn clock(at_ms: i64) -> String {
     }
 }
 
+/// How long ago `at_ms` was, such as "5m"; nothing for a time memory doesn't know, which is 0.
 pub fn ago(now_ms: i64, at_ms: i64) -> String {
+    if at_ms <= 0 {
+        return String::new();
+    }
     let minutes = (now_ms - at_ms).max(0) / 60_000;
     match minutes {
         0 => "now".to_owned(),
