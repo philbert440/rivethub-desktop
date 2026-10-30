@@ -148,6 +148,22 @@ pub fn button(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>) ->
         .child(label.into())
 }
 
+/// The filled pill for the one thing a row is for.
+pub fn primary(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(32.))
+        .px_4()
+        .rounded(px(16.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .bg(Theme::accent())
+        .text_color(Theme::on_accent())
+        .child(label.into())
+}
+
 pub fn pending<T>(load: &Load<T>) -> Vec<AnyElement> {
     let line = match load {
         Load::Failed(problem) => div().text_color(Theme::warn()).child(problem.clone()),

@@ -2,6 +2,7 @@ mod chat;
 mod error;
 mod events;
 mod memory;
+mod pairing;
 mod previews;
 mod terminal;
 mod tls;

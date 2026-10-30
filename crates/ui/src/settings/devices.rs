@@ -17,6 +17,7 @@ impl SettingsPage {
     pub(super) fn devices(&self) -> Vec<Div> {
         vec![
             section("This device", self.device()),
+            section("Pair a phone", vec![self.pairing.clone().into_any_element()]),
             section("Certificate authority", self.authority()),
         ]
     }

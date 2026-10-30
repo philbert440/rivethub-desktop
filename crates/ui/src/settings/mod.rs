@@ -3,6 +3,7 @@ mod agents;
 mod devices;
 mod general;
 mod memory;
+mod pairing;
 mod parts;
 
 use app::Hub;
@@ -20,6 +21,7 @@ use crate::agent_editor::AgentEditor;
 use crate::launch_choice::LaunchChoices;
 use crate::shell;
 use crate::theme::Theme;
+use pairing::PhonePairing;
 use parts::Load;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,12 +76,14 @@ pub struct SettingsPage {
     /// The choices for new sessions, while they're being changed.
     choosing: Option<(Entity<LaunchChoices>, Subscription)>,
     editing: Option<(Entity<AgentEditor>, Subscription)>,
+    pairing: Entity<PhonePairing>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPage {}
 
 impl SettingsPage {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
+        let pairing = cx.new(|cx| PhonePairing::new(hub.clone(), cx));
         let mut page = Self {
             hub,
             gateway: crate::gateway_url(),
@@ -90,6 +94,7 @@ impl SettingsPage {
             roster: Load::Waiting,
             choosing: None,
             editing: None,
+            pairing,
         };
         page.refresh(cx);
         page
@@ -100,6 +105,7 @@ impl SettingsPage {
         self.trust = Load::Waiting;
         self.memory = Load::Waiting;
         self.load_agents(cx);
+        self.pairing.update(cx, PhonePairing::check);
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let nodes = hub.nodes().await;
