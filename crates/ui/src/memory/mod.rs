@@ -160,7 +160,7 @@ impl MemoryPage {
         let sought = cx.subscribe(&entity_find, |this, _, Submitted(text), cx| {
             this.find_entities(text, cx);
         });
-        let page = Self {
+        let mut page = Self {
             hub,
             tab: Tab::Ask,
             problem: None,

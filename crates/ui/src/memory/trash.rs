@@ -15,6 +15,8 @@ use crate::theme::Theme;
 #[derive(Debug, Default)]
 pub(super) struct Sweep {
     review: Option<TrashReview>,
+    /// The nodes are being asked; the first answer can take a while on a big memory.
+    loading: bool,
     /// rh keeps no record of a keep, so a kept session stays off the review while the app runs.
     kept: HashSet<SessionId>,
     /// Delete all is asking first.
@@ -52,11 +54,13 @@ fn delete_button(id: (&'static str, usize), label: String) -> gpui::Stateful<gpu
 }
 
 impl MemoryPage {
-    pub(super) fn load_trash(&self, cx: &mut Context<Self>) {
+    pub(super) fn load_trash(&mut self, cx: &mut Context<Self>) {
+        self.trash.loading = true;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let loaded = hub.trash().await;
             this.update(cx, |this, cx| {
+                this.trash.loading = false;
                 match loaded {
                     Ok(mut review) => {
                         review
@@ -239,7 +243,24 @@ impl MemoryPage {
 
     /// What the nodes count as obvious trash, as a batch to decide one at a time or all at once.
     pub(super) fn trash_review(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let review = self.trash.review.as_ref()?;
+        let Some(review) = self.trash.review.as_ref() else {
+            let (note, ink) = if self.trash.loading {
+                (
+                    "Asking each node for its obvious trash…".to_owned(),
+                    Theme::ink_dim(),
+                )
+            } else {
+                (self.trash.problem.clone()?, Theme::warn())
+            };
+            return Some(
+                div()
+                    .px_2()
+                    .text_xs()
+                    .text_color(ink)
+                    .child(note)
+                    .into_any_element(),
+            );
+        };
         if review.trash.is_empty() && self.trash.problem.is_none() {
             return None;
         }
