@@ -121,7 +121,13 @@ impl Plugins {
         let follow = cx.spawn(async move |this, cx| {
             while let Some(NodeNotice { node, notice }) = notices.recv().await {
                 let followed = this.update(cx, |this, cx| match notice {
-                    None | Some(Notice::Changed(_)) => this.load(cx),
+                    None => this.load(cx),
+                    // A plug-in that starts running, stops or finishes a job: its views on
+                    // screen, such as a card that said it isn't running, show where it is now.
+                    Some(Notice::Changed(plugin)) => {
+                        this.load(cx);
+                        this.refresh(&PluginRef { node, id: plugin }, None, cx);
+                    }
                     Some(Notice::Views { plugin, views }) => {
                         let plugin = PluginRef { node, id: plugin };
                         this.refresh(&plugin, Some(&views), cx);
