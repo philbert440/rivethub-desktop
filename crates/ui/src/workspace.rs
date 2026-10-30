@@ -72,6 +72,13 @@ pub struct Listed {
     pub placements: Placements,
 }
 
+/// Whether the sessions have been listed yet: until then an empty page is still loading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    Awaited,
+    Arrived,
+}
+
 /// Where the topic screen stands in the open topic.
 #[derive(Debug, Default)]
 struct TopicScreen {
@@ -94,6 +101,7 @@ pub struct Workspace {
     hub: Hub,
     altitude: Altitude,
     sessions: Vec<SessionSummary>,
+    listing: Listing,
     topics: Vec<Topic>,
     placements: Placements,
     marks: HistoryMarks,
@@ -198,6 +206,7 @@ impl Workspace {
             hub,
             altitude: Altitude::Everything,
             sessions: Vec::new(),
+            listing: Listing::Awaited,
             topics: Vec::new(),
             placements: Placements::new(),
             marks: HistoryMarks::new(),
@@ -281,6 +290,7 @@ impl Workspace {
                     self.feed.follow_nodes(nodes);
                 }
                 self.sessions = all.sessions;
+                self.listing = Listing::Arrived;
                 if !all.unreachable.is_empty() {
                     problems.push(format!("couldn't reach {}", all.unreachable.join(", ")));
                 }
