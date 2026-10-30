@@ -9,16 +9,6 @@ use crate::session_pane::{PaneEvent, SessionPane};
 
 impl Workspace {
     pub(super) fn open(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_pane(summary, false, window, cx);
-    }
-
-    /// Opens a session started or forked here, which has no conversation yet for a terminal to
-    /// resume.
-    pub(super) fn open_new(&mut self, summary: SessionSummary, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_pane(summary, true, window, cx);
-    }
-
-    fn open_pane(&mut self, summary: SessionSummary, new: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Rebuilding the pane on show would drop its draft and terminal.
         if self
             .pane
@@ -32,9 +22,6 @@ impl Workspace {
         // A child session is a transcript inside its parent's, with no terminal of its own.
         let terminal = self.hub.preferences().opens_in == SessionView::Terminal && summary.parent.is_none();
         let pane = cx.new(|cx| SessionPane::new(self.hub.clone(), summary, cx));
-        if new {
-            pane.update(cx, |pane, _| pane.started_here());
-        }
         if terminal {
             pane.update(cx, |pane, cx| pane.show_terminal(window, cx));
         } else {
@@ -80,7 +67,7 @@ impl Workspace {
         if let Some(topic) = topic {
             self.place(session, topic, cx);
         }
-        self.open_new(forked, window, cx);
+        self.open(forked, window, cx);
     }
 
     pub(super) fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
