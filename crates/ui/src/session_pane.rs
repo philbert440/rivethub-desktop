@@ -40,6 +40,10 @@ pub enum PaneEvent {
     Renamed(Box<SessionSummary>),
     /// The session's terminal rang its bell while the window was in the background.
     Bell,
+    /// A fork of the conversation started, as this new session.
+    Forked(Box<SessionSummary>),
+    /// Something asked of the pane's node failed, as said.
+    Failed(String),
 }
 
 struct Renaming {
@@ -363,6 +367,10 @@ impl SessionPane {
 
     pub fn session_id(&self) -> &model::SessionId {
         &self.summary.id
+    }
+
+    pub fn summary(&self) -> &SessionSummary {
+        &self.summary
     }
 
     /// The workspace's listing has a newer copy of this session, such as the title the harness gave
@@ -757,6 +765,29 @@ impl SessionPane {
             self.hovered_turn = turn;
             cx.notify();
         }
+    }
+
+    /// Forks the conversation as it stood after the exchange at `index`: a new chat carries every
+    /// prompt up to and including that one, with their replies.
+    pub fn fork_after(&mut self, index: usize, cx: &mut Context<Self>) {
+        let asked = self
+            .exchanges
+            .iter()
+            .take(index + 1)
+            .filter(|view| view.exchange.prompt.is_some())
+            .count();
+        let prompts = u32::try_from(asked).unwrap_or(u32::MAX);
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        cx.spawn(async move |this, cx| {
+            let forked = hub.fork(&summary, prompts).await;
+            this.update(cx, |_, cx| match forked {
+                Ok(forked) => cx.emit(PaneEvent::Forked(Box::new(forked))),
+                Err(err) => cx.emit(PaneEvent::Failed(format!("forking failed: {err}"))),
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub fn reveal_turn(&mut self, index: usize, cx: &mut Context<Self>) {

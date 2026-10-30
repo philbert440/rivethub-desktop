@@ -141,6 +141,24 @@ impl Hub {
         .await
     }
 
+    /// A new chat on the session's node that carries its conversation up to the reply to its
+    /// `prompts`th prompt.
+    pub async fn fork(&self, summary: &SessionSummary, prompts: u32) -> Result<SessionSummary, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move {
+            let mut forked = hub
+                .gateway_for(node.as_deref())
+                .await?
+                .fork(&session, prompts)
+                .await?;
+            forked.node = node;
+            Ok(forked)
+        })
+        .await
+    }
+
     /// The session as its node describes it now, such as with the title its harness gave it and
     /// whether a turn can switch its model or effort.
     pub async fn describe(&self, summary: &SessionSummary) -> Result<Described, GatewayError> {
