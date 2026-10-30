@@ -10,7 +10,8 @@ use model::session::SessionSummary;
 use model::shelf::Shelf;
 use model::topics::{Directory, Topic};
 
-use super::{Launch, ViewInMemory, Workspace};
+use super::launch::Launch;
+use super::{ViewInMemory, Workspace};
 use crate::brand;
 use crate::memory::Focus;
 use crate::side_panel::{DraggedAgent, DraggedSession};
