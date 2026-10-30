@@ -3,6 +3,7 @@ mod error;
 mod events;
 mod memory;
 mod previews;
+mod socket;
 mod terminal;
 mod tls;
 mod tool_input;
@@ -25,6 +26,10 @@ use serde::{Deserialize, Serialize};
 
 /// The roles a memory search leaves out, so it finds only what people and agents said.
 const SAID_ONLY: &str = "tool,system";
+
+/// How long reaching a node may take before it counts as out of reach. Without it, a node that
+/// dropped off the network holds every request to it for as long as the OS keeps retrying.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct Identity {
@@ -77,6 +82,7 @@ impl Gateway {
         let tls = Arc::new(tls::client_config(&endpoint.ca_pem, endpoint.identity.as_ref())?);
         let http = reqwest::Client::builder()
             .tls_backend_preconfigured(ClientConfig::clone(&tls))
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(GatewayError::Http)?;
         Ok(Self {
