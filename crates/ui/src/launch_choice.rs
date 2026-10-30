@@ -254,6 +254,7 @@ impl LaunchChoices {
     }
 
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_agents = !self.agents.is_empty();
         let nodes = (self.nodes.len() > 1).then(|| self.node_chips(cx));
         let agents = self.agents.iter().enumerate().map(|(index, agent)| {
             let pick = Choice::Agent(agent.clone());
@@ -300,11 +301,15 @@ impl LaunchChoices {
             .flex()
             .flex_col()
             .gap_1()
-            .child(label("Agents"))
-            .child(div().flex().flex_wrap().gap(px(6.)).children(agents))
-            .map(|list| match nodes {
-                Some(nodes) => list.child(label("Or a harness on")).child(nodes),
-                None => list.child(label("Or a harness on this node")),
+            .when(has_agents, |list| {
+                list.child(label("Agents"))
+                    .child(div().flex().flex_wrap().gap(px(6.)).children(agents))
+            })
+            .map(|list| match (nodes, has_agents) {
+                (Some(nodes), true) => list.child(label("Or a harness on")).child(nodes),
+                (Some(nodes), false) => list.child(label("A harness on")).child(nodes),
+                (None, true) => list.child(label("Or a harness on this node")),
+                (None, false) => list.child(label("A harness on this node")),
             })
             .children(status.map(|status| div().px_1().text_xs().text_color(Theme::ink_dim()).child(status)))
             .child(div().flex().flex_wrap().gap(px(6.)).children(harnesses))
