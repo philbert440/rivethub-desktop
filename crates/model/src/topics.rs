@@ -67,6 +67,7 @@ pub struct FiledConversation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FiledSession {
     pub session: SessionId,
+    pub topic: TopicId,
     pub title: Option<String>,
     pub last_active_ms: Option<i64>,
     pub by: FiledBy,

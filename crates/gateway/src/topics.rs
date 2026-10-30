@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use model::decisions::Decision;
 use model::entities::{Catalog, Entity};
 use model::preview::{StartupPart, StartupPreview};
@@ -8,8 +10,9 @@ use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     ConversationPlacementReply, DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded,
     DecisionUpdate, PlacedBy, PlacementReply, PlacementRequest, SessionHistoryList, SessionHistoryMark,
-    StartupContext, TopicCreateRequest, TopicDecision, TopicDecisionList, TopicDirectory, TopicKind,
-    TopicList, TopicMergeRequest, TopicRecord, TopicSessionList, TopicUpdate,
+    SessionSuggestionList, StartupContext, TopicConversation, TopicCreateRequest, TopicDecision,
+    TopicDecisionList, TopicDirectory, TopicKind, TopicList, TopicMergeRequest, TopicRecord, TopicSession,
+    TopicSessionList, TopicSuggestion, TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -35,6 +38,53 @@ fn listed(list: TopicList) -> Vec<Topic> {
         .into_iter()
         .map(|summary| topic(summary.topic, summary.last_active.map(|at| at.timestamp_millis())))
         .collect()
+}
+
+fn filing(sessions: Vec<TopicSession>, conversations: Vec<TopicConversation>) -> TopicFiling {
+    TopicFiling {
+        sessions: sessions
+            .into_iter()
+            .map(|placed| FiledSession {
+                session: translate::session(&placed.placement.session_id),
+                topic: TopicId::new(placed.placement.topic_id),
+                title: placed.title,
+                last_active_ms: placed.last_active.map(|at| at.timestamp_millis()),
+                by: filed_by(placed.placement.by),
+                node: placed.node,
+            })
+            .collect(),
+        conversations: conversations
+            .into_iter()
+            .map(|filed| FiledConversation {
+                id: filed.placement.conversation_id,
+                topic: TopicId::new(filed.placement.topic_id),
+                title: filed.title,
+                channel: filed.channel,
+                last_active_ms: filed.last_active.map(|at| at.timestamp_millis()),
+                by: filed_by(filed.placement.by),
+                node: filed.node,
+            })
+            .collect(),
+    }
+}
+
+fn marks(history: &[SessionHistoryMark]) -> HistoryMarks {
+    history
+        .iter()
+        .map(|mark| {
+            (
+                translate::session(&mark.session_id),
+                mark.marked_at.timestamp_millis(),
+            )
+        })
+        .collect()
+}
+
+fn suggestion(suggested: TopicSuggestion) -> Suggestion {
+    Suggestion {
+        name: suggested.name,
+        topic: suggested.topic_id.map(TopicId::new),
+    }
 }
 
 fn filed_by(by: PlacedBy) -> FiledBy {
@@ -68,32 +118,21 @@ impl Gateway {
     pub async fn topic_sessions(&self, topic: &TopicId) -> Result<TopicFiling, GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str(), "sessions"])?;
         let list: TopicSessionList = Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(TopicFiling {
-            sessions: list
-                .sessions
-                .into_iter()
-                .map(|placed| FiledSession {
-                    session: translate::session(&placed.placement.session_id),
-                    title: placed.title,
-                    last_active_ms: placed.last_active.map(|at| at.timestamp_millis()),
-                    by: filed_by(placed.placement.by),
-                    node: placed.node,
-                })
-                .collect(),
-            conversations: list
-                .conversations
-                .into_iter()
-                .map(|filed| FiledConversation {
-                    id: filed.placement.conversation_id,
-                    topic: TopicId::new(filed.placement.topic_id),
-                    title: filed.title,
-                    channel: filed.channel,
-                    last_active_ms: filed.last_active.map(|at| at.timestamp_millis()),
-                    by: filed_by(filed.placement.by),
-                    node: filed.node,
-                })
-                .collect(),
-        })
+        Ok(filing(list.sessions, list.conversations))
+    }
+
+    /// Every topic's filed sessions and conversations and the history marks, in one request; `None`
+    /// from an rh older than the route, which is read a topic at a time instead.
+    pub async fn filing(&self) -> Result<Option<(TopicFiling, HistoryMarks)>, GatewayError> {
+        let url = self.api_url(&["api", "topics", "filing"])?;
+        match Self::read_json::<wire::gateway::topics::TopicFiling>(self.http.get(url).send().await)?.await {
+            Ok(all) => Ok(Some((
+                filing(all.sessions, all.conversations),
+                marks(&all.history),
+            ))),
+            Err(err) if err.is_missing_route() => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     /// The entity types and every entity filed under them.
@@ -156,10 +195,28 @@ impl Gateway {
         let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
         let url = self.api_url(&["api", "sessions", &segment, "placement"])?;
         let reply: PlacementReply = Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(reply.suggestion.map(|suggestion| Suggestion {
-            name: suggestion.name,
-            topic: suggestion.topic_id.map(TopicId::new),
-        }))
+        Ok(reply.suggestion.map(suggestion))
+    }
+
+    /// Where every unplaced session might go, in one request; `None` from an rh older than the
+    /// route, which is asked a session at a time instead.
+    pub async fn suggestions(&self) -> Result<Option<HashMap<SessionId, Suggestion>>, GatewayError> {
+        let url = self.api_url(&["api", "sessions", "suggestions"])?;
+        match Self::read_json::<SessionSuggestionList>(self.http.get(url).send().await)?.await {
+            Ok(list) => Ok(Some(
+                list.sessions
+                    .into_iter()
+                    .map(|suggested| {
+                        (
+                            translate::session(&suggested.session_id),
+                            suggestion(suggested.suggestion),
+                        )
+                    })
+                    .collect(),
+            )),
+            Err(err) if err.is_missing_route() => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     pub async fn place(&self, session: &SessionId, topic: &TopicId) -> Result<(), GatewayError> {
@@ -258,16 +315,7 @@ impl Gateway {
     pub async fn history_marks(&self) -> Result<HistoryMarks, GatewayError> {
         let url = self.api_url(&["api", "sessions", "history"])?;
         let list: SessionHistoryList = Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(list
-            .sessions
-            .iter()
-            .map(|mark| {
-                (
-                    translate::session(&mark.session_id),
-                    mark.marked_at.timestamp_millis(),
-                )
-            })
-            .collect())
+        Ok(marks(&list.sessions))
     }
 
     /// Marks a session as history: it leaves its topic's active sessions until it is active again.

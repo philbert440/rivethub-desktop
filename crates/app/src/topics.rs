@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use model::decisions::{Decision, Group, on_page};
 use model::entities::Catalog;
 use model::preview::StartupPreview;
-use model::topics::{Filing, Suggestion, Topic};
+use model::topics::{Filing, Suggestion, Topic, TopicFiling};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -73,25 +73,37 @@ impl Hub {
         .await
     }
 
+    /// The topics and what is filed under them: two requests to a node with rh's bulk route, else
+    /// one per topic.
     pub async fn topics(&self) -> Result<Filing, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
-            let topics = gateway.topics().await?;
-            let filed =
-                futures::future::try_join_all(topics.iter().map(|topic| gateway.topic_sessions(&topic.id)))
-                    .await?;
-            let marks = gateway.history_marks().await?;
+            let (topics, bulk) = futures::future::try_join(gateway.topics(), gateway.filing()).await?;
+            let (filed, marks) = if let Some(bulk) = bulk {
+                bulk
+            } else {
+                let each = futures::future::try_join_all(
+                    topics.iter().map(|topic| gateway.topic_sessions(&topic.id)),
+                )
+                .await?;
+                let filed = each.into_iter().fold(TopicFiling::default(), |mut all, one| {
+                    all.sessions.extend(one.sessions);
+                    all.conversations.extend(one.conversations);
+                    all
+                });
+                (filed, gateway.history_marks().await?)
+            };
             let mut filing = Filing {
                 marks,
+                conversations: filed.conversations,
                 ..Filing::default()
             };
-            for (topic, filed) in topics.iter().zip(filed) {
-                for placed in filed.sessions {
-                    filing.placements.insert(placed.session.clone(), topic.id.clone());
-                    filing.filed_by.insert(placed.session.clone(), placed.by);
-                    filing.remembered.push(placed.summary());
-                }
-                filing.conversations.extend(filed.conversations);
+            for placed in filed.sessions {
+                filing
+                    .placements
+                    .insert(placed.session.clone(), placed.topic.clone());
+                filing.filed_by.insert(placed.session.clone(), placed.by);
+                filing.remembered.push(placed.summary());
             }
             filing.topics = topics;
             Ok(filing)
@@ -99,12 +111,20 @@ impl Hub {
         .await
     }
 
+    /// Where each of `sessions` might go: one request to a node with rh's bulk route, else one per
+    /// session.
     pub async fn suggestions(
         &self,
         sessions: Vec<SessionId>,
     ) -> Result<HashMap<SessionId, Suggestion>, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
+            if let Some(mut all) = gateway.suggestions().await? {
+                return Ok(sessions
+                    .into_iter()
+                    .filter_map(|session| Some((session.clone(), all.remove(&session)?)))
+                    .collect());
+            }
             let found =
                 futures::future::try_join_all(sessions.iter().map(|session| gateway.suggestion(session)))
                     .await?;
