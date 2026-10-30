@@ -506,6 +506,11 @@ impl SessionPane {
         &self.composer
     }
 
+    /// Opens on the session's terminal: attached when one is running, else offered.
+    pub fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show(Mode::Terminal, window, cx);
+    }
+
     fn show(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = mode;
         match (mode, &self.terminal) {
@@ -564,10 +569,15 @@ impl SessionPane {
             .gap_3()
             .when(self.confirm_spawn, |prompt| {
                 prompt
-                    .child(div().text_color(Theme::ink()).child("No terminal is running for this session."))
+                    .child(
+                        div()
+                            .text_color(Theme::ink())
+                            .child("No terminal is running for this session."),
+                    )
                     .child(div().max_w(px(520.)).text_color(Theme::ink_dim()).child(
-                        "Opening one starts the harness for this session in a terminal. If the session is \
-                         running anywhere else, including this chat, both copies write to the same transcript.",
+                        "Opening one resumes the session in a terminal on its node. rh runs one copy: a chat \
+                         it's running hands over when its turn ends. A copy running outside rh, such as in a \
+                         terminal of your own, would write to the same transcript.",
                     ))
                     .child(
                         div()
@@ -580,7 +590,9 @@ impl SessionPane {
                             .flex()
                             .items_center()
                             .cursor_pointer()
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.attach_terminal(window, cx)))
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.attach_terminal(window, cx);
+                            }))
                             .child("Open terminal"),
                     )
             })

@@ -13,6 +13,8 @@ pub mod memory;
 pub mod mesh;
 pub mod nav;
 pub mod notice;
+pub mod pairing;
+pub mod palette;
 pub mod plan;
 pub mod prefs;
 pub mod preview;

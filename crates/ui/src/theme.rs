@@ -1,4 +1,13 @@
 use gpui::{Rgba, rgb, rgba};
+use model::palette::{DARK, Palette};
+use parking_lot::RwLock;
+
+/// The palette every window draws with now.
+static PALETTE: RwLock<Palette> = RwLock::new(DARK);
+
+fn pick(tone: fn(&Palette) -> u32) -> Rgba {
+    rgb(tone(&PALETTE.read()))
+}
 
 pub struct Theme;
 
@@ -16,64 +25,77 @@ impl Theme {
     ];
 
     pub fn window() -> Rgba {
-        rgb(0x000f_1512)
+        pick(|palette| palette.window)
     }
     pub fn panel() -> Rgba {
-        rgb(0x0014_1a17)
+        pick(|palette| palette.panel)
     }
     pub fn surface() -> Rgba {
-        rgb(0x0018_1e1b)
+        pick(|palette| palette.surface)
     }
     pub fn ink() -> Rgba {
-        rgb(0x00de_e4df)
+        pick(|palette| palette.ink)
     }
     pub fn ink_dim() -> Rgba {
-        rgb(0x00a7_b2ab)
+        pick(|palette| palette.ink_dim)
     }
     pub fn accent() -> Rgba {
-        rgb(0x006c_dbac)
+        pick(|palette| palette.accent)
     }
     pub fn card() -> Rgba {
-        rgb(0x0023_2a26)
+        pick(|palette| palette.card)
     }
     pub fn raised() -> Rgba {
-        rgb(0x002b_332e)
+        pick(|palette| palette.raised)
     }
     pub fn warn() -> Rgba {
-        rgb(0x00f5_c56b)
+        pick(|palette| palette.warn)
     }
     pub fn warn_container() -> Rgba {
-        rgb(0x002a_2618)
+        pick(|palette| palette.warn_container)
     }
     pub fn warn_line() -> Rgba {
-        rgb(0x005c_4d24)
+        pick(|palette| palette.warn_line)
     }
     pub fn code() -> Rgba {
-        rgb(0x0011_1714)
+        pick(|palette| palette.code)
     }
     pub fn line() -> Rgba {
-        rgb(0x0035_3d39)
+        pick(|palette| palette.line)
     }
     pub fn selected() -> Rgba {
-        rgb(0x001f_4535)
+        pick(|palette| palette.selected)
     }
     pub fn on_selected() -> Rgba {
-        rgb(0x00a6_f2cd)
+        pick(|palette| palette.on_selected)
     }
     pub fn removed() -> Rgba {
-        rgb(0x00ff_8a80)
+        pick(|palette| palette.removed)
     }
     pub fn added_bg() -> Rgba {
-        rgb(0x0016_3326)
+        pick(|palette| palette.added_bg)
     }
     pub fn removed_bg() -> Rgba {
-        rgb(0x003a_1f1f)
+        pick(|palette| palette.removed_bg)
     }
     pub fn on_accent() -> Rgba {
-        rgb(0x0000_3825)
+        pick(|palette| palette.on_accent)
     }
     /// Dims the workspace behind a modal.
     pub fn scrim() -> Rgba {
-        rgba(0x0509_07b3)
+        rgba(PALETTE.read().scrim)
     }
+
+    /// Switches every colour above to `palette`; windows redraw to show it.
+    pub fn set(palette: Palette) {
+        *PALETTE.write() = palette;
+    }
+}
+
+/// Whether the desktop is using a light colour scheme.
+pub fn desktop_is_light(window: &gpui::Window) -> bool {
+    matches!(
+        window.appearance(),
+        gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
+    )
 }

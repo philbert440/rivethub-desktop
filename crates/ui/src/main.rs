@@ -1,8 +1,10 @@
 mod agent_editor;
+mod appearance;
 mod brand;
 mod copy;
 mod input;
 mod instance;
+mod launch_choice;
 mod launcher;
 mod markdown_view;
 mod memory;
@@ -116,13 +118,18 @@ fn state_dir() -> Option<PathBuf> {
     Some(state.join("rivethub-desktop"))
 }
 
+/// Where this app writes its log.
+pub fn log_path() -> Option<PathBuf> {
+    Some(state_dir()?.join("rivethub-desktop.log"))
+}
+
 fn log_file() -> Option<std::fs::File> {
-    let dir = state_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
+    let path = log_path()?;
+    std::fs::create_dir_all(path.parent()?).ok()?;
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("rivethub-desktop.log"))
+        .open(path)
         .ok()
 }
 

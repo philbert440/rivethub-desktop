@@ -9,11 +9,11 @@ use model::notice::NoticeKind;
 use model::{Page, SessionId};
 
 use crate::memory::{MemoryEvent, MemoryPage};
-use crate::settings::SettingsPage;
+use crate::settings::{SettingsEvent, SettingsPage};
 use crate::text::one_line;
 use crate::tip::Tip;
 use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
-use crate::{brand, theme::Theme};
+use crate::{appearance, brand, theme::Theme};
 
 const OPEN_WIDTH: f32 = 224.;
 const RAIL_WIDTH: f32 = 48.;
@@ -26,11 +26,42 @@ pub struct Shell {
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
-    _routes: [Subscription; 5],
+    _routes: [Subscription; 7],
+    /// Restyles the window when the followed Omarchy theme changes.
+    _omarchy: gpui::Task<()>,
 }
 
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        appearance::read_omarchy(cx);
+        appearance::apply(&hub, window, cx);
+        let desktop = cx.observe_window_appearance(window, |this, window, cx| {
+            appearance::apply(&this.hub, window, cx);
+        });
+        let omarchy = cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(appearance::WATCH).await;
+                let Ok(following) = this.update(cx, |this, _| appearance::follows_omarchy(&this.hub)) else {
+                    break;
+                };
+                if !following {
+                    continue;
+                }
+                let theme = cx
+                    .background_executor()
+                    .spawn(async { app::omarchy::current_theme() })
+                    .await;
+                let followed = this.update_in(cx, |this, window, cx| {
+                    if cx.global::<appearance::Omarchy>().0 != theme {
+                        cx.set_global(appearance::Omarchy(theme));
+                        appearance::apply(&this.hub, window, cx);
+                    }
+                });
+                if followed.is_err() {
+                    break;
+                }
+            }
+        });
         let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
         let settings = cx.new(|cx| SettingsPage::new(hub.clone(), cx));
         let workspace = cx.new(|cx| Workspace::new(hub.clone(), window, cx));
@@ -72,6 +103,11 @@ impl Shell {
                 }
             },
         );
+        let from_settings = cx.subscribe(&settings, |this, _, event: &SettingsEvent, cx| match event {
+            SettingsEvent::AgentsChanged => {
+                this.workspace.update(cx, Workspace::agents_changed);
+            }
+        });
         let notices = cx.subscribe_in(
             &workspace,
             window,
@@ -86,7 +122,16 @@ impl Shell {
             workspace,
             memory,
             settings,
-            _routes: [to_memory, deleted_in_workspace, listed, from_memory, notices],
+            _routes: [
+                to_memory,
+                deleted_in_workspace,
+                listed,
+                from_memory,
+                notices,
+                from_settings,
+                desktop,
+            ],
+            _omarchy: omarchy,
         }
     }
 
@@ -121,6 +166,9 @@ impl Shell {
             NoticeKind::NeedsYou => "A session needs you",
         };
         let body = one_line(attention.title.as_deref()).to_string();
+        if self.hub.preferences().notify_sound {
+            self.hub.chime();
+        }
         let hub = self.hub.clone();
         let session = notice.session.clone();
         cx.spawn_in(window, async move |this, cx| {

@@ -1,6 +1,7 @@
 use gateway::GatewayError;
 use model::health::MemoryHealth;
 use model::mesh::Node;
+use model::pairing::{PairingAvailability, PairingCode, PairingState};
 use model::trust::Trust;
 
 use crate::Hub;
@@ -37,5 +38,24 @@ impl Hub {
             Ok(Trust { device, authority })
         })
         .await
+    }
+
+    /// Phone pairing happens on this client's own node, which gives the phone its certificate.
+    pub async fn phone_pairing(&self) -> Result<PairingAvailability, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.phone_pairing().await })
+            .await
+    }
+
+    pub async fn start_pairing(&self, name: String) -> Result<PairingCode, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.start_pairing(&name).await })
+            .await
+    }
+
+    pub async fn pairing_state(&self, device_id: String) -> Result<PairingState, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.pairing_state(&device_id).await })
+            .await
     }
 }

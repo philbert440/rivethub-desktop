@@ -16,7 +16,7 @@ pub struct Agent {
 }
 
 /// An agent as typed into the editor: everything needed to create or update one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDraft {
     pub name: String,
     pub color: u32,
@@ -26,6 +26,22 @@ pub struct AgentDraft {
     pub effort: Option<String>,
     pub directory: Option<String>,
     pub instructions: Option<String>,
+}
+
+/// A new agent starts in the app's own colour, not black.
+impl Default for AgentDraft {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            color: DEFAULT_COLOR,
+            harness: None,
+            node: None,
+            model: None,
+            effort: None,
+            directory: None,
+            instructions: None,
+        }
+    }
 }
 
 impl AgentDraft {
@@ -92,6 +108,19 @@ pub const EFFORTS: [&str; 5] = ["off", "low", "medium", "high", "xhigh"];
 pub struct Roster {
     pub node: String,
     pub agents: Vec<Agent>,
+    pub storage: AgentStorage,
+}
+
+/// Where a node keeps its agents and the folders they work in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentStorage {
+    /// Whether the presets live in the memory database, shared by every node on it, or in files on
+    /// the node; `None` when the node doesn't say.
+    pub shared_presets: Option<bool>,
+    /// An agent without a working folder of its own works in a folder named for it under here.
+    pub folder_root: Option<String>,
+    /// The mesh's shared folder, linked into each agent's working folder.
+    pub shared_folder: Option<String>,
 }
 
 impl Agent {
