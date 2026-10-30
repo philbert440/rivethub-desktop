@@ -81,6 +81,15 @@ struct TopicScreen {
     all_history: bool,
 }
 
+/// Where the workspace's listing stands. One load runs at a time, and a request that arrives during
+/// it runs once more after it, so results land in order and requests don't pile up on a slow node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    Idle,
+    Loading,
+    Stale,
+}
+
 struct Placing {
     session: SessionId,
     picker: Entity<TopicPicker>,
@@ -104,6 +113,7 @@ pub struct Workspace {
     uncategorized_open: bool,
     uncategorized_folded: bool,
     problem: Option<String>,
+    listing: Listing,
     /// Why the last thing the person asked for failed; reloads keep it, their next request clears it.
     failed: Option<String>,
     pane: Option<Entity<SessionPane>>,
@@ -172,7 +182,7 @@ impl Workspace {
                     .timer(std::time::Duration::from_millis(750))
                     .await;
                 changes.borrow_and_update();
-                if this.update(cx, |this, cx| this.load(cx)).is_err() {
+                if this.update(cx, Workspace::load).is_err() {
                     break;
                 }
             }
@@ -191,7 +201,7 @@ impl Workspace {
                 }
             }
         });
-        let workspace = Self {
+        let mut workspace = Self {
             focus: cx.focus_handle(),
             hub,
             altitude: Altitude::Everything,
@@ -208,6 +218,7 @@ impl Workspace {
             uncategorized_open: false,
             uncategorized_folded: false,
             problem: None,
+            listing: Listing::Idle,
             failed: None,
             pane: None,
             pane_events: None,
@@ -262,11 +273,24 @@ impl Workspace {
         }
     }
 
-    fn load(&self, cx: &mut Context<Self>) {
+    fn load(&mut self, cx: &mut Context<Self>) {
+        if self.listing != Listing::Idle {
+            self.listing = Listing::Stale;
+            return;
+        }
+        self.listing = Listing::Loading;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let loaded: Loaded = (hub.all_sessions().await, hub.topics().await);
-            this.update(cx, |this, cx| this.loaded(loaded, cx)).ok();
+            let loaded: Loaded = tokio::join!(hub.all_sessions(), hub.topics());
+            this.update(cx, |this, cx| {
+                let again = this.listing == Listing::Stale;
+                this.listing = Listing::Idle;
+                this.loaded(loaded, cx);
+                if again {
+                    this.load(cx);
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -274,14 +298,13 @@ impl Workspace {
     fn loaded(&mut self, (sessions, topics): Loaded, cx: &mut Context<Self>) {
         let mut problems = Vec::new();
         match sessions {
-            Ok(all) => {
+            Ok(mut all) => {
                 if let Some(nodes) = &all.other_nodes {
                     self.feed.follow_nodes(nodes);
                 }
+                all.keep_from(&self.sessions);
+                problems.extend(missing_note(&all.missing, self.hub.local_node().as_deref()));
                 self.sessions = all.sessions;
-                if !all.unreachable.is_empty() {
-                    problems.push(format!("couldn't reach {}", all.unreachable.join(", ")));
-                }
             }
             Err(err) => problems.push(err.to_string()),
         }
@@ -294,6 +317,8 @@ impl Workspace {
             Err(err) if err.is_missing_route() => {
                 problems.push("Topics need a newer rh on this node.".to_owned());
             }
+            // The sessions' note already says this node is out of reach.
+            Err(err) if err.is_unreachable() => {}
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
@@ -1241,6 +1266,35 @@ impl Workspace {
                     .child("New session"),
             )
     }
+}
+
+/// What the listing couldn't show, by why: the nodes that didn't answer, the ones that won't take
+/// this device, and any other failure with what it said.
+fn missing_note(missing: &[app::Missing], local: Option<&str>) -> Option<String> {
+    let name = |node: &Option<String>| {
+        node.as_deref()
+            .or(local)
+            .map_or_else(|| "this node".to_owned(), str::to_owned)
+    };
+    let (mut away, mut refused, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+    for gap in missing {
+        let node = name(&gap.node);
+        match &gap.harness {
+            None if gap.error.is_unreachable() => away.push(node),
+            None if gap.error.is_refused_device() => refused.push(node),
+            None => failed.push(format!("{node}: {}", gap.error)),
+            Some(harness) => failed.push(format!("{} on {node}: {}", harness.display_name(), gap.error)),
+        }
+    }
+    let mut parts = Vec::new();
+    if !away.is_empty() {
+        parts.push(format!("couldn't reach {}", away.join(", ")));
+    }
+    if !refused.is_empty() {
+        parts.push(format!("{} didn't accept this device", refused.join(", ")));
+    }
+    parts.extend(failed);
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 impl Focusable for Workspace {
