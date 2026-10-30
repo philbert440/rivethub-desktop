@@ -1,4 +1,4 @@
-use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolCall, ToolState, Turn};
+use super::{Activity, Approval, ContextUsage, Role, SessionEvent, SessionView, ToolCall, ToolState, Turn};
 use crate::plan::{StepStatus, Todo, Todos};
 use crate::prompt::Prompt;
 use crate::tools::{ToolInput, ToolOutput};
@@ -149,7 +149,10 @@ fn a_reconnect_drops_a_turn_and_a_failure_the_old_stream_left_open() {
 fn snapshot_after_turn_complete_never_duplicates_the_turn() {
     let mut view = SessionView::default();
     view.apply(SessionEvent::AssistantText("Done.".into()));
-    view.apply(SessionEvent::TurnComplete(None));
+    view.apply(SessionEvent::TurnComplete {
+        usage: None,
+        model_ms: None,
+    });
     assert_eq!(view.turns().len(), 1);
     let turns = vec![said(Role::User, "go"), said(Role::Assistant, "Done.")];
     view.apply(SessionEvent::Snapshot {
@@ -193,7 +196,10 @@ fn a_question_stays_open_until_a_reply_follows_it() {
         input: ToolInput::Ask(vec![question]),
     });
     view.apply(SessionEvent::AssistantText("Pick one.".into()));
-    view.apply(SessionEvent::TurnComplete(None));
+    view.apply(SessionEvent::TurnComplete {
+        usage: None,
+        model_ms: None,
+    });
     assert!(view.open_questions().is_some());
     let mut turns = view.turns().to_vec();
     turns.push(said(Role::User, "Which"));
@@ -234,4 +240,75 @@ fn a_snapshot_keeps_the_live_output_of_a_tool_it_lists_without_one() {
         .as_ref()
         .map(|output| output.text.as_str());
     assert_eq!(kept, Some("hello"));
+}
+
+#[test]
+fn a_turn_whose_events_arrive_at_once_keeps_the_pace_its_node_timed() {
+    let mut view = SessionView::default();
+    for event in [
+        SessionEvent::Reasoning("Checking.".into()),
+        SessionEvent::ToolStarted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            input: ToolInput::Unknown,
+        },
+        SessionEvent::ToolFinished {
+            id: "t1".into(),
+            failed: false,
+            output: ToolOutput {
+                text: "ok".into(),
+                exit_code: Some(0),
+            },
+        },
+        SessionEvent::AssistantText("Done.".into()),
+        SessionEvent::TurnComplete {
+            usage: Some(Usage {
+                input: 18_000,
+                cached: 17_000,
+                output: 600,
+            }),
+            model_ms: Some(6_000),
+        },
+    ] {
+        view.apply(event);
+    }
+    assert_eq!(view.pace().tokens_per_second(), Some(100));
+    view.apply(SessionEvent::TurnComplete {
+        usage: Some(Usage {
+            input: 1,
+            cached: 0,
+            output: 9_000,
+        }),
+        model_ms: None,
+    });
+    assert_eq!(view.pace().tokens_per_second(), Some(100));
+}
+
+#[test]
+fn the_harness_count_outranks_the_transcript_and_an_unknown_window_has_no_share() {
+    let mut view = SessionView::default();
+    view.apply(SessionEvent::Snapshot {
+        turns: Vec::new(),
+        context: Some(ContextUsage {
+            used: 16_000,
+            window: Some(200_000),
+        }),
+    });
+    view.apply(SessionEvent::Context(ContextUsage {
+        used: 16_168,
+        window: Some(1_000_000),
+    }));
+    view.apply(SessionEvent::Snapshot {
+        turns: Vec::new(),
+        context: Some(ContextUsage {
+            used: 16_000,
+            window: Some(200_000),
+        }),
+    });
+    assert_eq!(view.context().and_then(ContextUsage::percent), Some(2));
+    let unknown = ContextUsage {
+        used: 17_362,
+        window: None,
+    };
+    assert_eq!((unknown.percent(), unknown.nearly_full()), (None, false));
 }

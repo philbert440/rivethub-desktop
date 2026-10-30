@@ -1,5 +1,6 @@
 use gpui::{ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px, relative};
 use model::session::SessionView;
+use model::usage::tokens;
 
 use super::{Mode, SessionPane};
 use crate::theme::Theme;
@@ -86,34 +87,38 @@ impl SessionPane {
 
     fn context_meter(view: &SessionView) -> Option<gpui::Div> {
         let usage = view.context()?;
+        let meter = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .text_color(Theme::ink_dim());
+        let (Some(window), Some(fraction), Some(percent)) = (usage.window, usage.fraction(), usage.percent())
+        else {
+            return Some(meter.child(format!("{} in context", tokens(usage.used))));
+        };
         let fill = if usage.nearly_full() {
             Theme::warn()
         } else {
             Theme::accent()
         };
         Some(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(Theme::ink_dim())
+            meter
                 .child(
                     div()
                         .w(px(64.))
                         .h(px(6.))
                         .rounded(px(3.))
                         .bg(Theme::card())
-                        .child(
-                            div()
-                                .h_full()
-                                .w(relative(usage.fraction()))
-                                .rounded(px(3.))
-                                .bg(fill),
-                        ),
+                        .child(div().h_full().w(relative(fraction)).rounded(px(3.)).bg(fill)),
                 )
-                .child(format!("{}k / {}k", usage.used / 1000, usage.window / 1000)),
+                .child(format!("{} / {}", tokens(usage.used), tokens(window)))
+                .child(
+                    div()
+                        .when(usage.nearly_full(), |percent| percent.text_color(Theme::warn()))
+                        .child(format!("{percent}%")),
+                ),
         )
     }
 }
