@@ -23,8 +23,8 @@ use model::preview::Previews;
 use model::session::SessionSummary;
 use model::shelf::Shelf;
 use model::topics::{
-    Activity, Atlas, Board, Directory, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows,
-    in_history,
+    Activity, Atlas, Board, Directory, FiledBy, FiledConversation, Filing, HistoryMarks, Placements,
+    Suggestion, Topic, Windows, in_history,
 };
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
@@ -70,6 +70,8 @@ pub struct Listed {
     pub sessions: Vec<SessionSummary>,
     pub topics: Vec<Topic>,
     pub placements: Placements,
+    pub filed_by: HashMap<SessionId, FiledBy>,
+    pub conversations: Vec<FiledConversation>,
 }
 
 /// Where the topic screen stands in the open topic.
@@ -95,6 +97,12 @@ pub struct Workspace {
     topics: Vec<Topic>,
     placements: Placements,
     marks: HistoryMarks,
+    filed_by: HashMap<SessionId, FiledBy>,
+    /// Placed sessions as rh remembers them, so a topic's History reaches past what nodes list.
+    remembered: Vec<SessionSummary>,
+    /// The listed sessions, then the remembered ones no node lists, for the board and topic screen.
+    filed_sessions: Vec<SessionSummary>,
+    conversations: Vec<FiledConversation>,
     screen: TopicScreen,
     naming: Option<new_topic::Naming>,
     retitling: Option<topic_edit::Retitling>,
@@ -199,6 +207,10 @@ impl Workspace {
             topics: Vec::new(),
             placements: Placements::new(),
             marks: HistoryMarks::new(),
+            filed_by: HashMap::new(),
+            remembered: Vec::new(),
+            filed_sessions: Vec::new(),
+            conversations: Vec::new(),
             screen: TopicScreen::default(),
             naming: None,
             retitling: None,
@@ -290,6 +302,9 @@ impl Workspace {
                 self.topics = filing.topics;
                 self.placements = filing.placements;
                 self.marks = filing.marks;
+                self.filed_by = filing.filed_by;
+                self.remembered = filing.remembered;
+                self.conversations = filing.conversations;
             }
             Err(err) if err.is_missing_route() => {
                 problems.push("Topics need a newer rh on this node.".to_owned());
@@ -297,6 +312,7 @@ impl Workspace {
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
+        self.refile_sessions();
         self.publish(cx);
         if let Some(pane) = &self.pane {
             let open = pane.read(cx).session_id().clone();
@@ -367,7 +383,7 @@ impl Workspace {
         };
         model::topics::board(
             &self.topics,
-            &self.sessions,
+            &self.filed_sessions,
             &self.placements,
             &self.marks,
             &self.live(),
@@ -398,7 +414,7 @@ impl Workspace {
             marks: &self.marks,
         };
         Shelf::of(
-            &Atlas::new(&self.topics, &self.sessions, &self.placements),
+            &Atlas::new(&self.topics, &self.filed_sessions, &self.placements),
             step,
             &activity,
         )
@@ -536,6 +552,8 @@ impl Workspace {
             sessions: self.sessions.clone(),
             topics: self.topics.clone(),
             placements: self.placements.clone(),
+            filed_by: self.filed_by.clone(),
+            conversations: self.conversations.clone(),
         }));
     }
 
@@ -543,6 +561,7 @@ impl Workspace {
         if let Some(known) = self.sessions.iter_mut().find(|known| known.id == renamed.id) {
             known.title.clone_from(&renamed.title);
         }
+        self.refile_sessions();
         self.publish(cx);
         if let Some(pane) = self
             .pane
@@ -586,7 +605,7 @@ impl Workspace {
                     self.closed(known),
                 )
             }),
-            Focus::Session(_) => None,
+            Focus::Session(_) | Focus::Conversation(_) => None,
         };
         let session = match &focus {
             Focus::Session(session) => {
@@ -601,7 +620,7 @@ impl Workspace {
                     in_history(latest, &self.marks),
                 ))
             }
-            Focus::Topic(_) => None,
+            Focus::Topic(_) | Focus::Conversation(_) => None,
         };
         let delete = topic.as_ref().map(|(id, name, ..)| (id.clone(), name.clone()));
         let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
@@ -660,6 +679,31 @@ impl Workspace {
             .max()
             .unwrap_or(0);
         topic.is_closed(newest)
+    }
+
+    /// Rebuilds the sessions the board and topic screen show: the listed ones, then the placed ones
+    /// rh remembers that no node lists any more.
+    fn refile_sessions(&mut self) {
+        let listed: HashSet<&SessionId> = self.sessions.iter().map(|session| &session.id).collect();
+        let remembered = self
+            .remembered
+            .iter()
+            .filter(|session| !listed.contains(&session.id));
+        self.filed_sessions = self.sessions.iter().chain(remembered).cloned().collect();
+    }
+
+    /// How many conversations that are no harness session are filed under the topic or below it.
+    pub(super) fn conversations_within(&self, topic: &TopicId) -> usize {
+        let atlas = Atlas::new(&self.topics, &[], &self.placements);
+        self.conversations
+            .iter()
+            .filter(|conversation| atlas.lineage(&conversation.topic).contains(&topic))
+            .count()
+    }
+
+    /// Something was filed or unfiled elsewhere, such as from Memory: list topics again.
+    pub fn refiled(&mut self, cx: &mut Context<Self>) {
+        self.load(cx);
     }
 
     /// A deleted topic's sessions are back in Uncategorized; leave the topic if it was open.
@@ -975,6 +1019,7 @@ impl Workspace {
                     Launch::Uncategorized => {}
                 }
                 self.sessions.push(summary.clone());
+                self.refile_sessions();
                 self.open(summary, window, cx);
             }
             Err(err) => {

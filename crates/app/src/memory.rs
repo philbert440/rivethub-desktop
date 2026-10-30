@@ -1,23 +1,42 @@
 use gateway::GatewayError;
-use model::SessionId;
-use model::memory::{Found, Period, SessionMemory, TagProposal, TermProposal, Verdict};
+use std::collections::HashMap;
+
+use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
+use model::tidy::{Batch, Upkeep};
 use model::topics::Topic;
-use model::wiki::{Listing, Page};
+use model::wiki::{EntityMention, Listing, Owned, Page, PageEdit};
+use model::{SessionId, TopicId};
 
 use crate::Hub;
 
-/// The topics and the wiki pages their root topics own.
+/// The topics, the wiki pages their root topics own, and the entities each root topic's sessions
+/// mention.
 #[derive(Debug, Default)]
 pub struct Library {
     pub topics: Vec<Topic>,
     pub pages: Vec<Page>,
+    pub mentions: HashMap<TopicId, Vec<EntityMention>>,
 }
 
-/// What the tagger proposed and is waiting on a person for.
+/// What memory proposed and is waiting on a person for: tree changes in batches, then the
+/// tagger's tags and tag values.
 #[derive(Debug, Default)]
 pub struct Tidy {
+    pub batches: Vec<Batch>,
     pub tags: Vec<TagProposal>,
     pub terms: Vec<TermProposal>,
+}
+
+impl Tidy {
+    /// How many proposals wait, as the Stats tab counts them.
+    pub fn waiting(&self) -> usize {
+        self.batches
+            .iter()
+            .map(|batch| batch.proposals.len())
+            .sum::<usize>()
+            + self.tags.len()
+            + self.terms.len()
+    }
 }
 
 impl Hub {
@@ -53,19 +72,74 @@ impl Hub {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
             let topics = gateway.topics().await?;
-            let pages = futures::future::try_join_all(
-                topics
-                    .iter()
-                    .filter(|topic| topic.parent.is_none())
-                    .map(|topic| gateway.topic_page(&topic.id)),
-            )
-            .await?;
+            let roots: Vec<&Topic> = topics.iter().filter(|topic| topic.parent.is_none()).collect();
+            let owned =
+                futures::future::try_join_all(roots.iter().map(|topic| gateway.topic_page(&topic.id)))
+                    .await?;
+            let mut pages = Vec::new();
+            let mut mentions = HashMap::new();
+            for (
+                root,
+                Owned {
+                    page,
+                    mentions: named,
+                },
+            ) in roots.iter().zip(owned)
+            {
+                pages.extend(page);
+                mentions.insert(root.id.clone(), named);
+            }
             Ok(Library {
                 topics,
-                pages: pages.into_iter().flatten().collect(),
+                pages,
+                mentions,
             })
         })
         .await
+    }
+
+    /// Edits the page a topic or entity owns, writing it first when the wiki hasn't.
+    pub async fn edit_page(&self, topic: TopicId, edit: PageEdit) -> Result<Owned, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.edit_page(&topic, edit).await })
+            .await
+    }
+
+    /// A filed conversation's summaries, for one that is no harness session.
+    pub async fn conversation_memory(&self, conversation: String) -> Result<SessionMemory, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.conversation_memory(&conversation).await })
+            .await
+    }
+
+    pub async fn upkeep(&self) -> Result<Upkeep, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.upkeep().await }).await
+    }
+
+    pub async fn decide_proposal(&self, proposal: String, verdict: Verdict) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.decide_proposal(&proposal, verdict).await })
+            .await
+    }
+
+    /// Decides a whole batch; answers rh's words for each proposal it couldn't apply.
+    pub async fn decide_batch(&self, batch: String, verdict: Verdict) -> Result<Vec<String>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.decide_batch(&batch, verdict).await })
+            .await
+    }
+
+    pub async fn memory_stats(&self) -> Result<Stats, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.memory_stats().await }).await
+    }
+
+    /// The page a topic or entity owns, if the wiki has written one, and what its sessions mention.
+    pub async fn topic_page(&self, topic: TopicId) -> Result<Owned, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.topic_page(&topic).await })
+            .await
     }
 
     pub async fn wiki_pages(&self, query: String) -> Result<Vec<Listing>, GatewayError> {
@@ -83,9 +157,13 @@ impl Hub {
     pub async fn tidy(&self) -> Result<Tidy, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
-            let (tags, terms) =
-                futures::future::try_join(gateway.tag_proposals(), gateway.term_proposals()).await?;
-            Ok(Tidy { tags, terms })
+            let (batches, tags, terms) = futures::future::try_join3(
+                gateway.proposals(),
+                gateway.tag_proposals(),
+                gateway.term_proposals(),
+            )
+            .await?;
+            Ok(Tidy { batches, tags, terms })
         })
         .await
     }

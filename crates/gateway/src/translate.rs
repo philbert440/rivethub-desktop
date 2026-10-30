@@ -218,6 +218,21 @@ pub fn page(raw: wire::gateway::wiki::WikiPageResponse) -> model::wiki::Page {
         tags: raw.tags,
         updated_ms: raw.updated_at.timestamp_millis(),
         markdown: raw.markdown,
+        current_state: raw.current_state,
+        article: raw.article,
+        citations: raw
+            .citations
+            .into_iter()
+            .map(|citation| model::wiki::Citation {
+                summary: citation.summary_id,
+                at_ms: citation.date.map(|date| date.timestamp_millis()),
+                conversation: citation.conversation_id,
+                session: citation.session_id.as_ref().map(session),
+                title: citation.title,
+                channel: citation.channel,
+                topic: citation.topic_id.map(model::TopicId::new),
+            })
+            .collect(),
     }
 }
 
@@ -251,6 +266,7 @@ pub fn listing(raw: wire::gateway::wiki::WikiTopic) -> model::wiki::Listing {
         slug: raw.slug,
         title: raw.title,
         updated_ms: raw.updated_at.timestamp_millis(),
+        owner: raw.topic_id.map(model::TopicId::new),
     }
 }
 

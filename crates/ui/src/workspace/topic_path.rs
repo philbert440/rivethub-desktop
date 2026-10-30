@@ -16,7 +16,7 @@ impl Workspace {
     /// one row of the current step's subtopics. A step or pill takes a click to go there, a
     /// right-click for its menu, a dropped session to file it there and a dropped topic to nest it.
     pub(super) fn topic_path(&self, root: &TopicId, step: &TopicId, cx: &mut Context<Self>) -> AnyElement {
-        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        let atlas = Atlas::new(&self.topics, &self.filed_sessions, &self.placements);
         let mut path = atlas.lineage(step);
         path.reverse();
         let last = path.len().saturating_sub(1);

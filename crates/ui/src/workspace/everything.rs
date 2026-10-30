@@ -238,7 +238,7 @@ impl Workspace {
             .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
                 "{} active · {} in history · {active}",
                 card.sessions.len(),
-                card.history
+                card.history + self.conversations_within(&card.topic.id)
             )))
             .children(card.sessions.iter().take(CARD_SESSIONS).map(|session| {
                 div()

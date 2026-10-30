@@ -67,6 +67,9 @@ impl Shell {
                     this.workspace
                         .update(cx, |workspace, cx| workspace.topic_deleted(topic, window, cx));
                 }
+                MemoryEvent::Refiled => {
+                    this.workspace.update(cx, Workspace::refiled);
+                }
             },
         );
         let notices = cx.subscribe_in(

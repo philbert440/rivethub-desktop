@@ -4,7 +4,7 @@ use gpui::{
 };
 use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
-use model::wiki::{Page, loose, readable, section, without_decisions};
+use model::wiki::{Page, readable, section, without_decisions};
 
 use super::{MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
@@ -219,7 +219,7 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    fn row(
+    pub(super) fn row(
         id: (&'static str, usize),
         label: String,
         depth: usize,
@@ -265,11 +265,11 @@ impl MemoryPage {
                 .map(|topic| (0, topic))
                 .collect(),
         };
-        let pages = self
-            .library
-            .as_ref()
-            .map(|library| loose(&self.loose, &library.pages))
-            .unwrap_or_default();
+        let pages: Vec<_> = self
+            .loose
+            .iter()
+            .filter(|listing| listing.owner.is_none())
+            .collect();
         let find = div()
             .mx_1()
             .mb_2()
@@ -400,6 +400,7 @@ impl MemoryPage {
                                 .child(format!("updated {}", ago_phrase(now_ms(), read.page.updated_ms))),
                         ),
                 )
+                .children(self.opened_root().and_then(|root| self.topic_mentions(&root, cx)))
                 .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx))
                 .when(read.blocks.is_empty(), |head| {
@@ -420,6 +421,7 @@ impl MemoryPage {
                         cx,
                     ),
                 )
+                .children(self.opened_root().and_then(|root| self.topic_mentions(&root, cx)))
                 .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx)),
             (Some(_), None) => head.child(div().text_color(Theme::ink_dim()).child("Loading…")),

@@ -119,6 +119,27 @@ pub struct SessionSummary {
 }
 
 impl SessionSummary {
+    /// A session as far as rh remembers it, for one no node lists any more.
+    pub fn remembered(
+        id: SessionId,
+        title: Option<String>,
+        updated_at_ms: i64,
+        node: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            status: SessionStatus::Idle,
+            model: None,
+            effort: None,
+            cwd: None,
+            updated_at_ms,
+            parent: None,
+            node,
+            blocked: false,
+        }
+    }
+
     /// What to call the session where it isn't on screen: its title, or before it has one,
     /// its harness and node, such as "Grok on ct112".
     pub fn name(&self) -> String {

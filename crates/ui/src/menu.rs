@@ -27,6 +27,44 @@ pub enum MenuEvent {
     Closed,
 }
 
+/// What the menu's topic is, which words its moves and its delete use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Noun {
+    #[default]
+    Topic,
+    Type,
+    Entity,
+}
+
+impl Noun {
+    fn moves(self) -> &'static str {
+        match self {
+            Self::Topic | Self::Type => "Move into…",
+            Self::Entity => "Change type…",
+        }
+    }
+
+    fn deletes(self) -> &'static str {
+        match self {
+            Self::Topic => "Delete topic",
+            Self::Type => "Delete type",
+            Self::Entity => "Delete entity",
+        }
+    }
+
+    fn warning(self) -> &'static str {
+        match self {
+            Self::Topic => {
+                "Delete this topic? Its sessions go back to Uncategorized, and any subtopics move up a level."
+            }
+            Self::Type => {
+                "Delete this type? Its subtypes and entities move up a level, so a top-level type's entities need another type first."
+            }
+            Self::Entity => "Delete this entity? Its page goes too, and the wiki won't make it again.",
+        }
+    }
+}
+
 /// Where Move up a level takes a subtopic: under its grandparent, or to the top level when it has
 /// none.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +80,7 @@ pub struct Menu {
     history: Option<(SessionId, bool)>,
     edits: Option<(TopicId, Option<Lift>, bool)>,
     moves: Option<(SessionSummary, bool)>,
+    noun: Noun,
     confirming: bool,
     busy: bool,
     problem: Option<String>,
@@ -74,10 +113,17 @@ impl Menu {
             history: None,
             edits: None,
             moves: None,
+            noun: Noun::Topic,
             confirming: false,
             busy: false,
             problem: None,
         }
+    }
+
+    /// Words the moves and the delete for a type or an entity rather than a topic.
+    pub fn naming(mut self, noun: Noun) -> Self {
+        self.noun = noun;
+        self
     }
 
     /// Offers Close topic, or Reopen topic when the topic is `closed`.
@@ -209,7 +255,7 @@ impl Menu {
         if movable {
             items.push(Self::emits(
                 "move-topic",
-                "Move into…",
+                self.noun.moves(),
                 move || MenuEvent::MoveInto(moved.clone()),
                 cx,
             ));
@@ -321,7 +367,7 @@ impl Menu {
             )
             .when(self.delete.is_some(), |items| {
                 items.child(
-                    Self::item("delete-topic", "Delete topic")
+                    Self::item("delete-topic", self.noun.deletes())
                         .text_color(Theme::warn())
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.confirming = true;
@@ -349,11 +395,7 @@ impl Menu {
             .flex_col()
             .gap_3()
             .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name.to_owned()))
-            .child(
-                div()
-                    .text_color(Theme::ink_dim())
-                    .child("Delete this topic? Its sessions go back to Uncategorized, and any subtopics move up a level."),
-            )
+            .child(div().text_color(Theme::ink_dim()).child(self.noun.warning()))
             .children(
                 self.problem
                     .clone()

@@ -8,6 +8,7 @@ use gpui::{
 use model::markdown::Block;
 use model::memory::{SessionMemory, Summary, SummaryKind, Vector};
 use model::session::SessionSummary;
+use model::topics::FiledBy;
 
 use super::sessions::link_button;
 use super::{Focus, MemoryEvent, MemoryPage};
@@ -20,12 +21,39 @@ const INDENT: f32 = 24.;
 const CLAMP: usize = 3;
 const REFRESH: Duration = Duration::from_secs(10);
 
+/// A session's or conversation's memory with its summaries parsed, and which of them are open.
+pub(super) struct Recalled {
+    memory: SessionMemory,
+    blocks: HashMap<String, Vec<Block>>,
+    expanded: HashSet<String>,
+}
+
+impl Recalled {
+    /// Takes memory as it loaded, keeping open whatever was open before.
+    pub(super) fn new(memory: SessionMemory, before: Option<Self>) -> Self {
+        let blocks = memory
+            .summaries
+            .iter()
+            .map(|summary| (summary.id.clone(), model::markdown::parse(summary.text.trim())))
+            .collect();
+        Self {
+            memory,
+            blocks,
+            expanded: before.map(|before| before.expanded).unwrap_or_default(),
+        }
+    }
+
+    fn toggle(&mut self, summary: &str) {
+        if !self.expanded.remove(summary) {
+            self.expanded.insert(summary.to_owned());
+        }
+    }
+}
+
 /// The session Memory is showing, with its summaries parsed once they load.
 pub(super) struct Viewing {
     session: SessionSummary,
-    memory: Option<SessionMemory>,
-    blocks: HashMap<String, Vec<Block>>,
-    expanded: HashSet<String>,
+    recalled: Option<Recalled>,
     loading: bool,
     _refresh: Task<()>,
 }
@@ -39,7 +67,7 @@ impl Viewing {
     }
 }
 
-fn badge(text: impl Into<String>, ink: Hsla) -> impl IntoElement {
+pub(super) fn badge(text: impl Into<String>, ink: Hsla) -> impl IntoElement {
     div()
         .px_2()
         .rounded(px(9.))
@@ -94,9 +122,7 @@ impl MemoryPage {
         });
         self.viewing = Some(Viewing {
             session,
-            memory: None,
-            blocks: HashMap::new(),
-            expanded: HashSet::new(),
+            recalled: None,
             loading: false,
             _refresh: refresh,
         });
@@ -127,14 +153,10 @@ impl MemoryPage {
                 };
                 viewing.loading = false;
                 match memory {
-                    Ok(memory) if viewing.memory.as_ref() == Some(&memory) => {}
+                    Ok(memory)
+                        if viewing.recalled.as_ref().map(|recalled| &recalled.memory) == Some(&memory) => {}
                     Ok(memory) => {
-                        viewing.blocks = memory
-                            .summaries
-                            .iter()
-                            .map(|summary| (summary.id.clone(), model::markdown::parse(summary.text.trim())))
-                            .collect();
-                        viewing.memory = Some(memory);
+                        viewing.recalled = Some(Recalled::new(memory, viewing.recalled.take()));
                         this.problem = None;
                         cx.notify();
                     }
@@ -150,26 +172,15 @@ impl MemoryPage {
         let Some(viewing) = &self.viewing else {
             return div().into_any_element();
         };
-        let body = match &viewing.memory {
-            None => div()
-                .text_color(Theme::ink_dim())
-                .child("Loading…")
-                .into_any_element(),
-            Some(memory) => div()
-                .flex()
-                .flex_col()
-                .gap_4()
-                .child(Self::parts(memory))
-                .child(Self::summaries(viewing, memory, window, cx))
-                .into_any_element(),
-        };
+        let body = Self::recall(viewing.recalled.as_ref(), "session", window, cx);
         div()
             .id("memory-session")
             .size_full()
             .overflow_y_scroll()
             .py_8()
             .flex()
-            .justify_center()
+            .flex_col()
+            .items_center()
             .child(
                 div()
                     .w_full()
@@ -207,6 +218,28 @@ impl MemoryPage {
                 }))
                 .child(format!("in {}", topic.name))
         });
+        let undo = (topic.is_some() && self.listed.filed_by.get(&session.id) == Some(&FiledBy::Categorizer))
+            .then(|| {
+                let unfiled = session.id.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child("by categorizer ·")
+                    .child(
+                        div()
+                            .id("memory-session-undo")
+                            .cursor_pointer()
+                            .text_color(Theme::accent())
+                            .hover(|link| link.text_color(Theme::ink()))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.unfile(unfiled.clone(), cx);
+                            }))
+                            .child("Undo"),
+                    )
+            });
         div()
             .flex()
             .items_start()
@@ -235,6 +268,7 @@ impl MemoryPage {
                                     .map(|node| badge(node, Theme::ink_dim().into())),
                             )
                             .children(topic)
+                            .children(undo)
                             .child(
                                 div()
                                     .text_xs()
@@ -252,7 +286,24 @@ impl MemoryPage {
             )
     }
 
-    fn tile(label: &'static str, value: String, detail: String) -> impl IntoElement {
+    /// Takes a session the categorizer filed back out of its topic; rh keeps it as a correction.
+    fn unfile(&mut self, session: model::SessionId, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let undone = hub.unplace(session).await;
+            this.update(cx, |this, cx| {
+                match undone {
+                    Ok(()) => cx.emit(MemoryEvent::Refiled),
+                    Err(err) => this.problem = Some(format!("undoing it failed: {err}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn tile(label: &'static str, value: String, detail: String) -> impl IntoElement {
         div()
             .flex_1()
             .min_w_0()
@@ -317,17 +368,46 @@ impl MemoryPage {
             ))
     }
 
-    fn summaries(
-        viewing: &Viewing,
-        memory: &SessionMemory,
+    /// What memory holds of a session or conversation, its parts and then its summaries.
+    pub(super) fn recall(
+        recalled: Option<&Recalled>,
+        noun: &str,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let Some(recalled) = recalled else {
+            return div()
+                .text_color(Theme::ink_dim())
+                .child("Loading…")
+                .into_any_element();
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(Self::parts(&recalled.memory))
+            .child(Self::summaries(recalled, noun, window, cx))
+            .into_any_element()
+    }
+
+    /// The summaries being read: the open session's, or else the open conversation's.
+    fn recalled_mut(&mut self) -> Option<&mut Recalled> {
+        match self.viewing.as_mut() {
+            Some(viewing) => viewing.recalled.as_mut(),
+            None => self
+                .remembering
+                .as_mut()
+                .and_then(|remembering| remembering.recalled.as_mut()),
+        }
+    }
+
+    fn summaries(recalled: &Recalled, noun: &str, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let memory = &recalled.memory;
         if memory.summaries.is_empty() {
             let note = if memory.messages.total == 0 {
-                "Memory hasn't captured anything from this session."
+                format!("Memory hasn't captured anything from this {noun}.")
             } else {
-                "Memory hasn't summarized this session yet."
+                format!("Memory hasn't summarized this {noun} yet.")
             };
             return div()
                 .pt_2()
@@ -352,7 +432,7 @@ impl MemoryPage {
                     .into_iter()
                     .enumerate()
                     .map(|(index, (depth, summary))| {
-                        Self::summary(index, depth, summary, viewing, window, cx)
+                        Self::summary(index, depth, summary, recalled, window, cx)
                     }),
             )
             .into_any_element()
@@ -362,12 +442,12 @@ impl MemoryPage {
         index: usize,
         depth: usize,
         summary: &Summary,
-        viewing: &Viewing,
+        recalled: &Recalled,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open = viewing.expanded.contains(&summary.id);
-        let blocks = viewing.blocks.get(&summary.id).map_or(&[][..], Vec::as_slice);
+        let open = recalled.expanded.contains(&summary.id);
+        let blocks = recalled.blocks.get(&summary.id).map_or(&[][..], Vec::as_slice);
         let shown = if open {
             blocks
         } else {
@@ -390,10 +470,8 @@ impl MemoryPage {
             .flex_col()
             .gap_2()
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if let Some(viewing) = this.viewing.as_mut()
-                    && !viewing.expanded.remove(&toggle)
-                {
-                    viewing.expanded.insert(toggle.clone());
+                if let Some(recalled) = this.recalled_mut() {
+                    recalled.toggle(&toggle);
                 }
                 cx.notify();
             }))
