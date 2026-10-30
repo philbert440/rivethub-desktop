@@ -26,11 +26,16 @@ pub struct Shell {
     workspace: Entity<Workspace>,
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
-    _routes: [Subscription; 6],
+    _routes: [Subscription; 7],
 }
 
 impl Shell {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::theme::follow(hub.preferences().appearance, window);
+        let desktop = cx.observe_window_appearance(window, |this, window, cx| {
+            crate::theme::follow(this.hub.preferences().appearance, window);
+            cx.notify();
+        });
         let memory = cx.new(|cx| MemoryPage::new(hub.clone(), cx));
         let settings = cx.new(|cx| SettingsPage::new(hub.clone(), cx));
         let workspace = cx.new(|cx| Workspace::new(hub.clone(), window, cx));
@@ -95,6 +100,7 @@ impl Shell {
                 from_memory,
                 notices,
                 from_settings,
+                desktop,
             ],
         }
     }

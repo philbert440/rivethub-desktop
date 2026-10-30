@@ -1,5 +1,6 @@
 mod about;
 mod agents;
+mod appearance;
 mod devices;
 mod general;
 mod memory;
@@ -29,6 +30,7 @@ enum Tab {
     #[default]
     General,
     Agents,
+    Appearance,
     Nodes,
     Devices,
     Memory,
@@ -36,9 +38,10 @@ enum Tab {
 }
 
 impl Tab {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::General,
         Self::Agents,
+        Self::Appearance,
         Self::Nodes,
         Self::Devices,
         Self::Memory,
@@ -49,6 +52,7 @@ impl Tab {
         match self {
             Self::General => "General",
             Self::Agents => "Agents",
+            Self::Appearance => "Appearance",
             Self::Nodes => "Nodes",
             Self::Devices => "Devices",
             Self::Memory => "Memory",
@@ -179,6 +183,7 @@ impl SettingsPage {
         let sections = match self.tab {
             Tab::General => self.general(cx),
             Tab::Agents => self.agents(cx),
+            Tab::Appearance => self.appearance(window, cx),
             Tab::Nodes => self.nodes_tab(),
             Tab::Devices => self.devices(),
             Tab::Memory => self.memory_tab(),

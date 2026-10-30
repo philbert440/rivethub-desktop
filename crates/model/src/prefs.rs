@@ -10,6 +10,29 @@ pub struct Preferences {
     pub jump_to_newest: bool,
     /// What the launcher preselects; `None` leaves it to the built-in choice.
     pub last_launch: Option<LastLaunch>,
+    pub appearance: Appearance,
+}
+
+/// The app's colours: the dark or light theme, or whichever the desktop is using.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
+impl Appearance {
+    pub const ALL: [Self; 3] = [Self::Dark, Self::Light, Self::System];
+
+    /// Whether the light theme shows, given whether the desktop is light.
+    pub fn is_light(self, desktop_light: bool) -> bool {
+        match self {
+            Self::Dark => false,
+            Self::Light => true,
+            Self::System => desktop_light,
+        }
+    }
 }
 
 impl Default for Preferences {
@@ -19,6 +42,7 @@ impl Default for Preferences {
             notify_needs_you: true,
             jump_to_newest: true,
             last_launch: None,
+            appearance: Appearance::Dark,
         }
     }
 }

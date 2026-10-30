@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use model::HarnessId;
-use model::prefs::{LastLaunch, Preferences};
+use model::prefs::{Appearance, LastLaunch, Preferences};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Hub;
@@ -15,6 +15,23 @@ struct Stored {
     jump_to_newest: bool,
     #[serde(deserialize_with = "or_none")]
     last_launch: Option<StoredLaunch>,
+    #[serde(deserialize_with = "or_dark")]
+    appearance: StoredAppearance,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredAppearance {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
+/// An appearance this build doesn't know keeps the dark theme.
+fn or_dark<'de, D: Deserializer<'de>>(deserializer: D) -> Result<StoredAppearance, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,6 +78,11 @@ impl From<&Preferences> for Stored {
                     model: model.clone(),
                 },
             }),
+            appearance: match prefs.appearance {
+                Appearance::Dark => StoredAppearance::Dark,
+                Appearance::Light => StoredAppearance::Light,
+                Appearance::System => StoredAppearance::System,
+            },
         }
     }
 }
@@ -79,6 +101,11 @@ impl From<Stored> for Preferences {
                     model,
                 },
             }),
+            appearance: match stored.appearance {
+                StoredAppearance::Dark => Appearance::Dark,
+                StoredAppearance::Light => Appearance::Light,
+                StoredAppearance::System => Appearance::System,
+            },
         }
     }
 }
@@ -163,12 +190,13 @@ mod tests {
         assert_eq!(older.last_launch, None);
 
         let newer: Stored = serde_json::from_str(
-            r#"{"jumpToNewest":false,"lastLaunch":{"kind":"workflow","id":"w1"},"theme":"light"}"#,
+            r#"{"jumpToNewest":false,"lastLaunch":{"kind":"workflow","id":"w1"},"appearance":"sepia"}"#,
         )
         .unwrap_or_default();
         let newer = Preferences::from(newer);
         assert!(!newer.jump_to_newest);
         assert_eq!(newer.last_launch, None);
+        assert_eq!(newer.appearance, model::prefs::Appearance::Dark);
 
         let saved = Preferences {
             last_launch: Some(LastLaunch::Harness {
@@ -176,6 +204,7 @@ mod tests {
                 harness: model::HarnessId::new("codex"),
                 model: None,
             }),
+            appearance: model::prefs::Appearance::System,
             ..Preferences::default()
         };
         let json = serde_json::to_string(&Stored::from(&saved)).unwrap_or_default();
