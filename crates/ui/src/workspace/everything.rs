@@ -6,20 +6,21 @@ use model::session::SessionSummary;
 use model::topics::Card;
 
 use super::Workspace;
+use super::topic_edit::DraggedTopic;
 use crate::brand;
 use crate::memory::Focus;
-use crate::side_panel::{DraggedAgent, DraggedSession};
+use crate::side_panel::{DragGhost, DraggedAgent, DraggedSession};
 use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
 
 const CARD_SESSIONS: usize = 3;
-const FORMING_SHOWN: usize = 6;
-const TILE_WIDTH: f32 = 300.;
+const UNCATEGORIZED_SHOWN: usize = 6;
+pub(super) const TILE_WIDTH: f32 = 300.;
 
 impl Workspace {
     pub(super) fn everything(&self, cx: &mut Context<Self>) -> AnyElement {
         let board = self.board();
-        if board.forming.is_empty() && board.recent.is_empty() {
+        if board.uncategorized.is_empty() && board.recent.is_empty() {
             let line = self
                 .problems()
                 .unwrap_or_else(|| "Start a session and it will find its topic.".into());
@@ -33,6 +34,7 @@ impl Workspace {
                 .child(img(brand::ghost()).size(px(96.)))
                 .child(div().text_color(Theme::ink()).child("Nothing active"))
                 .child(div().text_color(Theme::ink_dim()).child(line))
+                .child(self.new_topic_card(cx))
                 .into_any_element();
         }
         let now = now_ms();
@@ -48,71 +50,106 @@ impl Workspace {
                 self.problems()
                     .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
             )
-            .when(!board.forming.is_empty(), |page| {
-                page.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(Self::lane_title(
-                            "FORMING",
-                            format!("{} sessions without a topic yet", board.forming.len()),
-                        ))
-                        .child(
-                            div().flex().flex_wrap().gap_3().children(
-                                board
-                                    .forming
-                                    .iter()
-                                    .take(if self.forming_open {
-                                        usize::MAX
-                                    } else {
-                                        FORMING_SHOWN
-                                    })
-                                    .enumerate()
-                                    .map(|(index, session)| self.forming_tile(index, session, now, cx)),
-                            ),
-                        )
-                        .when(board.forming.len() > FORMING_SHOWN, |lane| {
-                            let label = if self.forming_open {
-                                "Show fewer".to_owned()
-                            } else {
-                                format!("Show all {}", board.forming.len())
-                            };
-                            lane.child(
-                                div()
-                                    .id("forming-more")
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .cursor_pointer()
-                                    .hover(|more| more.text_color(Theme::ink()))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.forming_open = !this.forming_open;
-                                        cx.notify();
-                                    }))
-                                    .child(label),
-                            )
-                        }),
-                )
+            .when(!board.uncategorized.is_empty(), |page| {
+                page.child(self.uncategorized_lane(&board.uncategorized, now, cx))
             })
-            .when(!board.recent.is_empty(), |page| {
-                page.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(Self::lane_title("TOPICS", "most recent first".to_owned()))
-                        .child(
-                            div().flex().flex_wrap().gap_3().children(
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(Self::lane_title("TOPICS", "most recent first".to_owned()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_3()
+                            .children(
                                 board
                                     .recent
                                     .iter()
                                     .enumerate()
                                     .map(|(index, card)| self.topic_card(index, card, now, cx)),
-                            ),
-                        ),
+                            )
+                            .child(self.new_topic_card(cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn uncategorized_lane(
+        &self,
+        sessions: &[&SessionSummary],
+        now: i64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let count = sessions.len();
+        let noun = if count == 1 { "session" } else { "sessions" };
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.uncategorized_title(format!("{count} {noun} without a topic yet"), cx))
+            .when(!self.uncategorized_folded, |lane| {
+                lane.child(
+                    div().flex().flex_wrap().gap_3().children(
+                        sessions
+                            .iter()
+                            .take(if self.uncategorized_open {
+                                usize::MAX
+                            } else {
+                                UNCATEGORIZED_SHOWN
+                            })
+                            .enumerate()
+                            .map(|(index, session)| self.uncategorized_tile(index, session, now, cx)),
+                    ),
                 )
             })
+            .when(
+                !self.uncategorized_folded && count > UNCATEGORIZED_SHOWN,
+                |lane| {
+                    let label = if self.uncategorized_open {
+                        "Show fewer".to_owned()
+                    } else {
+                        format!("Show all {count}")
+                    };
+                    lane.child(
+                        div()
+                            .id("uncategorized-more")
+                            .text_xs()
+                            .text_color(Theme::ink_dim())
+                            .cursor_pointer()
+                            .hover(|more| more.text_color(Theme::ink()))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.uncategorized_open = !this.uncategorized_open;
+                                cx.notify();
+                            }))
+                            .child(label),
+                    )
+                },
+            )
             .into_any_element()
+    }
+
+    /// The Uncategorized lane's title, which folds the lane to just itself.
+    fn uncategorized_title(&self, note: String, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("uncategorized-title")
+            .flex()
+            .gap_2()
+            .items_baseline()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.uncategorized_folded = !this.uncategorized_folded;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .w(px(12.))
+                    .text_color(Theme::ink_dim())
+                    .child(if self.uncategorized_folded { "▸" } else { "▾" }),
+            )
+            .child(Self::lane_title("UNCATEGORIZED", note))
     }
 
     fn lane_title(title: &'static str, note: String) -> impl IntoElement {
@@ -128,6 +165,11 @@ impl Workspace {
         let topic = card.topic.id.clone();
         let dropped_session = topic.clone();
         let dropped_agent = topic.clone();
+        let dropped_topic = topic.clone();
+        let dragged = DraggedTopic {
+            topic: topic.clone(),
+            name: card.topic.name.clone().into(),
+        };
         let waiting = card
             .sessions
             .iter()
@@ -152,12 +194,19 @@ impl Workspace {
             .gap_2()
             .drag_over::<DraggedSession>(|style, _, _, _| style.border_color(Theme::accent()))
             .drag_over::<DraggedAgent>(|style, _, _, _| style.border_color(Theme::accent()))
+            .drag_over::<DraggedTopic>(|style, _, _, _| style.border_color(Theme::accent()))
             .on_drop(cx.listener(move |this, dragged: &DraggedSession, _, cx| {
                 this.place(dragged.0.id.clone(), dropped_session.clone(), cx);
             }))
             .on_drop(cx.listener(move |this, dragged: &DraggedAgent, window, cx| {
                 this.start_with(dragged.0.clone(), Some(dropped_agent.clone()), window, cx);
             }))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTopic, _, cx| {
+                this.nest(dragged.topic.clone(), Some(dropped_topic.clone()), cx);
+            }))
+            .on_drag(dragged, |dragged, _, _, cx| {
+                cx.new(|_| DragGhost(dragged.name.clone()))
+            })
             .on_mouse_down(
                 MouseButton::Right,
                 Self::on_right_click(Focus::Topic(card.topic.id.clone()), cx),
@@ -170,19 +219,27 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
+                    .child(match self.retitle_field(&card.topic.id, cx) {
+                        Some(field) => div()
+                            .id(("retitle", index))
+                            .flex_1()
+                            .on_click(|_, _, cx| cx.stop_propagation())
+                            .child(field)
+                            .into_any_element(),
+                        None => div()
                             .flex_1()
                             .truncate()
                             .text_color(Theme::ink())
-                            .child(card.topic.name.clone()),
-                    )
+                            .child(card.topic.name.clone())
+                            .into_any_element(),
+                    })
                     .when(waiting > 0, |row| row.child(Self::needs_you_chip())),
             )
-            .child(match self.counts(card.sessions.iter().copied()) {
-                Some(counts) => counts.child(format!("\u{a0}·\u{a0}{active}")),
-                None => div().text_xs().text_color(Theme::ink_dim()).child(active),
-            })
+            .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
+                "{} active · {} in history · {active}",
+                card.sessions.len(),
+                card.history
+            )))
             .children(card.sessions.iter().take(CARD_SESSIONS).map(|session| {
                 div()
                     .flex()
@@ -243,7 +300,7 @@ impl Workspace {
         )
     }
 
-    fn forming_tile(
+    fn uncategorized_tile(
         &self,
         index: usize,
         session: &SessionSummary,
@@ -259,7 +316,7 @@ impl Workspace {
             .filter(|placing| placing.session == session.id)
             .map(|placing| placing.picker.clone());
         div()
-            .id(("forming", index))
+            .id(("uncategorized", index))
             .w(px(TILE_WIDTH))
             .p_4()
             .rounded(px(16.))
@@ -277,9 +334,10 @@ impl Workspace {
             .on_drag(DraggedSession(session.clone()), |dragged, _, _, cx| {
                 cx.new(|_| crate::side_panel::DragGhost(one_line(dragged.0.title.as_deref())))
             })
-            .when_some(Self::session_focus(session), |tile, focus| {
-                tile.on_mouse_down(MouseButton::Right, Self::on_right_click(focus, cx))
-            })
+            .on_mouse_down(
+                MouseButton::Right,
+                Self::on_right_click(Focus::Session(Box::new(session.clone())), cx),
+            )
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.open(summary.clone(), window, cx);
             }))
@@ -311,11 +369,17 @@ impl Workspace {
                     .gap_2()
                     .text_xs()
                     .text_color(Theme::ink_dim())
-                    .child(session.model.clone().unwrap_or_else(|| "claude".into()))
-                    .child(ago(now, session.updated_at_ms))
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w(px(150.))
+                            .truncate()
+                            .child(self.model_name(session)),
+                    )
+                    .child(div().flex_none().child(ago(now, session.updated_at_ms)))
                     .children(self.subagents.get(&session.id).map(|count| {
                         let noun = if *count == 1 { "subagent" } else { "subagents" };
-                        format!("↳ {count} {noun}")
+                        div().flex_none().child(format!("↳ {count} {noun}"))
                     }))
                     .child(div().flex_1())
                     .children(self.suggestion_chip(index, session, cx))

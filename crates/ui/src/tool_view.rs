@@ -5,9 +5,11 @@ use gpui::{
     prelude::*, pulsating_between, px,
 };
 use model::chat::Category;
+use model::plan::Plan;
 use model::session::{ToolCall, ToolState};
 use model::tools::{Change, DiffLine, ToolInput, counts, diff, label};
 
+use crate::session_pane::plan::mark;
 use crate::theme::Theme;
 use crate::transcript::{Context, Fold, chevron, toggle_on};
 
@@ -130,7 +132,7 @@ fn diff_lines(lines: &[DiffLine]) -> Vec<AnyElement> {
         .collect()
 }
 
-fn body(tool: &ToolCall) -> Vec<AnyElement> {
+fn body(tool: &ToolCall, plan: &Plan) -> Vec<AnyElement> {
     let output = tool
         .output
         .as_ref()
@@ -147,6 +149,18 @@ fn body(tool: &ToolCall) -> Vec<AnyElement> {
         }
         ToolInput::Edit { before, after, .. } => diff_lines(&diff(before, after)),
         ToolInput::Write { content, .. } => diff_lines(&diff("", content)),
+        ToolInput::Todos(todos) => todos
+            .items
+            .iter()
+            .map(|todo| {
+                let (glyph, ink) = todo.status.map_or(("✕", Theme::ink_dim()), mark);
+                let what = match (todo.content.is_empty(), todo.id.as_deref()) {
+                    (true, Some(id)) => plan.named(id).map_or_else(|| format!("#{id}"), str::to_owned),
+                    _ => todo.content.clone(),
+                };
+                mono_line(format!("{glyph} {what}"), ink, None)
+            })
+            .collect(),
         ToolInput::Fields(fields) => {
             let mut lines: Vec<AnyElement> = fields
                 .iter()
@@ -230,7 +244,7 @@ pub fn row(tool: &ToolCall, fold: Fold, cx: &Context<'_>) -> AnyElement {
                     .text_size(px(12.))
                     .flex()
                     .flex_col()
-                    .children(body(tool)),
+                    .children(body(tool, cx.plan)),
             )
         })
         .into_any_element()

@@ -3,13 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, ClipboardItem, Hsla, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, WeakEntity, Window, div, img, prelude::*, pulsating_between, px,
+    Animation, AnimationExt, AnyElement, Hsla, IntoElement, ParentElement, Pixels, SharedString, Styled,
+    WeakEntity, Window, div, img, prelude::*, pulsating_between, px,
 };
 use model::chat::{Exchange, ExchangeState, Step, group_summary, running_label, thought_summary};
 use model::markdown::{Block, Parsed, parse};
 use model::prompt::SentFile;
+use model::usage::tokens;
 
+use crate::copy::CopyIcon;
 use crate::markdown_view;
 use crate::session_pane::SessionPane;
 use crate::text::clock;
@@ -65,6 +67,8 @@ pub enum Fold {
     Group(usize, usize),
     Thought(usize, usize),
     Tool(usize, usize, usize),
+    /// The agent's to-do list above the composer.
+    Plan,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -92,6 +96,8 @@ pub struct Context<'a> {
     pub fetched: &'a HashMap<String, model::tools::ToolOutput>,
     /// Sent images fetched from the node that holds their uploads, by upload.
     pub previews: &'a HashMap<String, Arc<gpui::Image>>,
+    /// The agent's plan as it stands, which names the items a todo update changes.
+    pub plan: &'a model::plan::Plan,
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
@@ -247,7 +253,8 @@ fn file_chip(label: String) -> AnyElement {
         .into_any_element()
 }
 
-/// The prompt as sent, with the time it went out shown while the pointer is over it.
+/// The prompt as sent, with a copy of it and the time it went out shown while the pointer is over
+/// it.
 fn sent(prompt: &str, files: &[SentFile], at_ms: Option<i64>, cx: &Context<'_>) -> impl IntoElement {
     let prompt = prompt.trim();
     let group = SharedString::from(format!("sent-{}", cx.index));
@@ -277,16 +284,20 @@ fn sent(prompt: &str, files: &[SentFile], at_ms: Option<i64>, cx: &Context<'_>) 
                     .justify_end()
                     .items_end()
                     .gap_2()
-                    .children(at_ms.map(|at| {
+                    .child(
                         div()
                             .flex_none()
-                            .pb(px(10.))
+                            .pb(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
                             .text_xs()
                             .text_color(Theme::ink_dim())
                             .invisible()
                             .group_hover(group, gpui::Styled::visible)
-                            .child(clock(at))
-                    }))
+                            .child(CopyIcon::new(format!("copy-prompt-{}", cx.index), prompt))
+                            .children(at_ms.map(clock)),
+                    )
                     .child(
                         div()
                             .max_w(cx.column * 0.702)
@@ -327,20 +338,23 @@ fn fold_header(exchange: &Exchange, ix: usize, open: bool, cx: &Context<'_>) -> 
     .child(chevron(open))
 }
 
-/// When the reply finished, and the model and output tokens behind it, shown when the pointer is
-/// over the exchange.
+/// When the reply finished, the model behind it, and the tokens it read and wrote, shown when the
+/// pointer is over the exchange.
 fn meta(exchange: &Exchange) -> Option<String> {
-    let tokens = match exchange.output_tokens {
-        0 => None,
-        count if count < 1000 => Some(format!("{count} tokens")),
-        count => Some(format!("{}.{}k tokens", count / 1000, count % 1000 / 100)),
-    };
+    let usage = exchange.usage;
     let parts: Vec<String> = exchange
         .ended_at_ms
         .map(clock)
         .into_iter()
         .chain(exchange.model.iter().cloned())
-        .chain(tokens)
+        .chain((usage.output > 0).then(|| format!("{} out", tokens(usage.output))))
+        .chain((usage.input > 0).then(|| format!("{} in", tokens(usage.input))))
+        .chain(
+            usage
+                .cached_percent()
+                .filter(|share| *share > 0)
+                .map(|share| format!("{share}% cached")),
+        )
         .collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -363,19 +377,7 @@ fn actions(exchange: &Exchange, ix: usize) -> Option<impl IntoElement> {
         .invisible()
         .group_hover("exchange", gpui::Styled::visible)
         .when(!reply.is_empty(), |row| {
-            row.child(
-                div()
-                    .id(SharedString::from(format!("copy-reply-{ix}")))
-                    .size(px(24.))
-                    .rounded(px(6.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|copy| copy.bg(Theme::raised()))
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(reply.clone())))
-                    .child(crate::brand::icon("icons/copy.svg", 14., Theme::ink_dim())),
-            )
+            row.child(CopyIcon::new(format!("copy-reply-{ix}"), reply))
         })
         .children(meta);
     Some(row)
@@ -428,6 +430,16 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                     window,
                 )),
         );
+    }
+    let unanswered =
+        !working && exchange.prompt.is_some() && exchange.answer.trim().is_empty() && !exchange.has_process();
+    if unanswered {
+        let ended = match exchange.state {
+            ExchangeState::Stopped => "Stopped",
+            ExchangeState::Failed => "Failed",
+            ExchangeState::Working | ExchangeState::Completed => "No reply",
+        };
+        column = column.child(div().text_sm().text_color(Theme::ink_dim()).child(ended));
     }
     if !working {
         column = column.children(actions(exchange, ix));

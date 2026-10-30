@@ -1,7 +1,14 @@
 mod everything;
+mod new_topic;
+mod topic_edit;
+mod topic_path;
+mod topic_rows;
 mod topic_view;
 
+pub use topic_edit::CancelRetitle;
+
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use app::Hub;
 use gateway::GatewayError;
@@ -12,33 +19,41 @@ use gpui::{
 };
 use model::history::Phase;
 use model::notice::{Notice, NoticeKind};
+use model::preview::Previews;
 use model::session::SessionSummary;
-use model::topics::{Atlas, Board, Placements, Suggestion, Topic, Windows};
+use model::shelf::Shelf;
+use model::topics::{
+    Activity, Atlas, Board, Directory, Filing, HistoryMarks, Placements, Suggestion, Topic, Windows,
+    in_history,
+};
 use model::{Altitude, HarnessId, SessionId, TopicId};
 
 use crate::agent_editor::{AgentEditor, AgentEditorEvent};
 use crate::launcher::{Choice, Launcher, LauncherEvent, Target};
 use crate::memory::Focus;
-use crate::menu::{Menu, MenuEvent, OpenMenu};
+use crate::menu::{Lift, Menu, MenuEvent, OpenMenu};
 use crate::session_pane::{PaneEvent, SessionPane};
 use crate::side_panel::{DraggedAgent, DraggedSession, PanelEvent, PastTopic, SidePanel};
 use crate::text::{now_ms, one_line};
 use crate::topic_picker::{PickerEvent, TopicPicker};
+use crate::topic_rail::{RailEvent, TopicRail};
 use crate::{brand, shell, theme::Theme};
+use topic_edit::Pick;
 
 actions!(workspace, [ZoomOut, NewSession, ToggleSidePanel, NextNeedingYou]);
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
-const FORMING_MS: i64 = 24 * HOUR_MS;
+/// How long a quiet session stays Active.
+const ACTIVE_MS: i64 = 24 * HOUR_MS;
 const RECENT_MS: i64 = 14 * 24 * HOUR_MS;
 
 type Loaded = (
     Result<app::AllSessions, GatewayError>,
-    Result<(Vec<Topic>, Placements), GatewayError>,
+    Result<Filing, GatewayError>,
 );
 
 enum Launch {
-    Forming,
+    Uncategorized,
     In(TopicId),
     New(String),
 }
@@ -48,6 +63,23 @@ pub struct ViewInMemory(pub Focus);
 
 /// Tells the shell a topic was deleted here, so other pages can let go of it.
 pub struct TopicDeleted(pub TopicId);
+
+/// What the workspace listed last, so Memory can name sessions and topics without listing them again.
+#[derive(Debug, Default)]
+pub struct Listed {
+    pub sessions: Vec<SessionSummary>,
+    pub topics: Vec<Topic>,
+    pub placements: Placements,
+}
+
+/// Where the topic screen stands in the open topic.
+#[derive(Debug, Default)]
+struct TopicScreen {
+    /// The subtopic stepped into, if any.
+    step: Option<TopicId>,
+    /// Whether History lists all its sessions rather than its newest few.
+    all_history: bool,
+}
 
 struct Placing {
     session: SessionId,
@@ -62,10 +94,15 @@ pub struct Workspace {
     sessions: Vec<SessionSummary>,
     topics: Vec<Topic>,
     placements: Placements,
+    marks: HistoryMarks,
+    screen: TopicScreen,
+    naming: Option<new_topic::Naming>,
+    retitling: Option<topic_edit::Retitling>,
+    choosing: Option<topic_edit::Choosing>,
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
-    folded: HashSet<SessionId>,
-    forming_open: bool,
+    uncategorized_open: bool,
+    uncategorized_folded: bool,
     problem: Option<String>,
     /// Why the last thing the person asked for failed; reloads keep it, their next request clears it.
     failed: Option<String>,
@@ -79,6 +116,9 @@ pub struct Workspace {
     menu: Option<OpenMenu>,
     feed: app::WorkspaceFeed,
     _panel_events: Subscription,
+    rail: Entity<TopicRail>,
+    previews: Previews,
+    _rail_events: Subscription,
     _feed: [gpui::Task<()>; 2],
 }
 
@@ -91,10 +131,20 @@ pub struct Attention {
 impl EventEmitter<ViewInMemory> for Workspace {}
 impl EventEmitter<Attention> for Workspace {}
 impl EventEmitter<TopicDeleted> for Workspace {}
+impl EventEmitter<Arc<Listed>> for Workspace {}
 
 impl Workspace {
     pub fn new(hub: Hub, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let panel = cx.new(|cx| SidePanel::new(hub.clone(), cx));
+        let rail = cx.new(|cx| TopicRail::new(hub.clone(), cx));
+        let rail_events = cx.subscribe_in(
+            &rail,
+            window,
+            |this, _, event: &RailEvent, window, cx| match event {
+                RailEvent::OpenSession(summary) => this.open((**summary).clone(), window, cx),
+                RailEvent::ViewInMemory(focus) => cx.emit(ViewInMemory(focus.clone())),
+            },
+        );
         let panel_events =
             cx.subscribe_in(
                 &panel,
@@ -110,9 +160,7 @@ impl Workspace {
                         this.open_menu(Focus::Topic(topic.clone()), *at, window, cx);
                     }
                     PanelEvent::SessionMenu(session, at) => {
-                        if let Some(focus) = Self::session_focus(session) {
-                            this.open_menu(focus, *at, window, cx);
-                        }
+                        this.open_menu(Focus::Session(Box::new(session.clone())), *at, window, cx);
                     }
                 },
             );
@@ -150,10 +198,15 @@ impl Workspace {
             sessions: Vec::new(),
             topics: Vec::new(),
             placements: Placements::new(),
+            marks: HistoryMarks::new(),
+            screen: TopicScreen::default(),
+            naming: None,
+            retitling: None,
+            choosing: None,
             suggestions: HashMap::new(),
             subagents: HashMap::new(),
-            folded: HashSet::new(),
-            forming_open: false,
+            uncategorized_open: false,
+            uncategorized_folded: false,
             problem: None,
             failed: None,
             pane: None,
@@ -166,6 +219,9 @@ impl Workspace {
             menu: None,
             feed,
             _panel_events: panel_events,
+            rail,
+            previews: Previews::new(),
+            _rail_events: rail_events,
             _feed: [refresh, repaint],
         };
         workspace.load(cx);
@@ -230,9 +286,10 @@ impl Workspace {
             Err(err) => problems.push(err.to_string()),
         }
         match topics {
-            Ok((topics, placements)) => {
-                self.topics = topics;
-                self.placements = placements;
+            Ok(filing) => {
+                self.topics = filing.topics;
+                self.placements = filing.placements;
+                self.marks = filing.marks;
             }
             Err(err) if err.is_missing_route() => {
                 problems.push("Topics need a newer rh on this node.".to_owned());
@@ -240,6 +297,7 @@ impl Workspace {
             Err(err) => problems.push(format!("topics: {err}")),
         }
         self.problem = (!problems.is_empty()).then(|| problems.join(" · "));
+        self.publish(cx);
         if let Some(pane) = &self.pane {
             let open = pane.read(cx).session_id().clone();
             if let Some(latest) = self.sessions.iter().find(|session| session.id == open).cloned() {
@@ -251,6 +309,7 @@ impl Workspace {
             *self.subagents.entry(parent).or_default() += 1;
         }
         self.sync_panel(cx);
+        self.sync_step(cx);
         self.load_suggestions(cx);
         cx.notify();
     }
@@ -267,18 +326,18 @@ impl Workspace {
     }
 
     fn load_suggestions(&self, cx: &mut Context<Self>) {
-        let forming: Vec<SessionId> = self
+        let uncategorized: Vec<SessionId> = self
             .board()
-            .forming
+            .uncategorized
             .iter()
             .map(|session| session.id.clone())
             .collect();
-        if forming.is_empty() {
+        if uncategorized.is_empty() {
             return;
         }
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let found = hub.suggestions(forming).await;
+            let found = hub.suggestions(uncategorized).await;
             this.update(cx, |this, cx| {
                 if let Ok(found) = found {
                     this.suggestions = found;
@@ -303,10 +362,91 @@ impl Workspace {
     fn board(&self) -> Board<'_> {
         let windows = Windows {
             now_ms: now_ms(),
-            forming_ms: FORMING_MS,
+            active_ms: ACTIVE_MS,
             recent_ms: RECENT_MS,
         };
-        model::topics::board(&self.topics, &self.sessions, &self.placements, windows)
+        model::topics::board(
+            &self.topics,
+            &self.sessions,
+            &self.placements,
+            &self.marks,
+            &self.live(),
+            windows,
+        )
+    }
+
+    /// The sessions that are live: running, waiting on you, or open in the pane.
+    fn live(&self) -> HashSet<SessionId> {
+        self.sessions
+            .iter()
+            .filter(|session| {
+                self.feed.is_active(session)
+                    || self.feed.needs_you(session)
+                    || self.on_screen() == Some(&session.id)
+            })
+            .map(|session| session.id.clone())
+            .collect()
+    }
+
+    /// The open topic's sessions at `step`, Active then History.
+    fn shelf(&self, step: &TopicId) -> Shelf<'_> {
+        let live = self.live();
+        let activity = Activity {
+            now_ms: now_ms(),
+            window_ms: ACTIVE_MS,
+            live: &live,
+            marks: &self.marks,
+        };
+        Shelf::of(
+            &Atlas::new(&self.topics, &self.sessions, &self.placements),
+            step,
+            &activity,
+        )
+    }
+
+    /// The part of the open topic the topic screen shows: the subtopic stepped into, else the topic.
+    fn step_in(&self, root: &TopicId) -> TopicId {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        self.screen
+            .step
+            .as_ref()
+            .filter(|step| atlas.lineage(step).contains(&root))
+            .map_or_else(|| root.clone(), Clone::clone)
+    }
+
+    /// Points the rail at the open topic's current step and its sessions, newest first, and asks
+    /// what the step's Active sessions are doing now.
+    pub(super) fn sync_step(&self, cx: &mut Context<Self>) {
+        let Altitude::Topic(root) = &self.altitude else {
+            return;
+        };
+        let step = self.step_in(root);
+        let inside = self.shelf(&step);
+        let active: Vec<SessionSummary> = inside.active.iter().map(|session| (*session).clone()).collect();
+        let mut sessions: Vec<SessionSummary> = active
+            .iter()
+            .cloned()
+            .chain(inside.history.iter().map(|session| (*session).clone()))
+            .collect();
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
+        self.rail
+            .update(cx, |rail, cx| rail.show(step.clone(), sessions, cx));
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let previews = hub.previews(active).await;
+            this.update(cx, |this, cx| {
+                let current = match &this.altitude {
+                    Altitude::Topic(root) => this.step_in(root) == step,
+                    _ => false,
+                };
+                if current {
+                    this.previews = previews;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn sync_panel(&self, cx: &mut Context<Self>) {
@@ -329,7 +469,7 @@ impl Workspace {
             .map(|card| PastTopic {
                 id: card.topic.id.clone(),
                 name: card.topic.name.clone(),
-                sessions: card.sessions.len(),
+                sessions: card.sessions.len() + card.history,
                 active_ms: card.active_ms,
             })
             .collect();
@@ -344,6 +484,18 @@ impl Workspace {
     fn home_of(&self, session: &SessionSummary) -> Option<TopicId> {
         let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
         atlas.topic_of(session).map(|topic| atlas.root(topic).clone())
+    }
+
+    /// What a session runs, by the label its node offers for the model, else the model's id, else
+    /// the harness.
+    fn model_name(&self, session: &SessionSummary) -> String {
+        match session.model.as_deref() {
+            Some(model) => self
+                .hub
+                .model_label(session.node.as_deref(), session.id.harness(), model)
+                .unwrap_or_else(|| model.to_owned()),
+            None => session.id.harness().display_name().to_owned(),
+        }
     }
 
     fn topic(&self, id: &TopicId) -> Option<&Topic> {
@@ -378,10 +530,20 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Tells whoever follows the workspace, Memory among them, what it lists now.
+    fn publish(&self, cx: &mut Context<Self>) {
+        cx.emit(Arc::new(Listed {
+            sessions: self.sessions.clone(),
+            topics: self.topics.clone(),
+            placements: self.placements.clone(),
+        }));
+    }
+
     fn renamed(&mut self, renamed: &SessionSummary, cx: &mut Context<Self>) {
         if let Some(known) = self.sessions.iter_mut().find(|known| known.id == renamed.id) {
             known.title.clone_from(&renamed.title);
         }
+        self.publish(cx);
         if let Some(pane) = self
             .pane
             .clone()
@@ -414,13 +576,50 @@ impl Workspace {
     }
 
     fn open_menu(&mut self, focus: Focus, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let delete = match &focus {
-            Focus::Topic(topic) => self.topic(topic).map(|known| (topic.clone(), known.name.clone())),
-            Focus::Search(_) => None,
+        self.choosing = None;
+        let topic = match &focus {
+            Focus::Topic(topic) => self.topic(topic).map(|known| {
+                (
+                    topic.clone(),
+                    known.name.clone(),
+                    known.parent.clone(),
+                    self.closed(known),
+                )
+            }),
+            Focus::Session(_) => None,
         };
-        let hub = self.hub.clone();
-        let menu = cx.new(|_| Menu::new(hub, Some(focus), delete));
-        let events = cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, window, cx| {
+        let session = match &focus {
+            Focus::Session(session) => {
+                let latest = self
+                    .sessions
+                    .iter()
+                    .find(|known| known.id == session.id)
+                    .unwrap_or(session.as_ref());
+                Some((
+                    latest.clone(),
+                    self.placements.contains_key(&latest.id),
+                    in_history(latest, &self.marks),
+                ))
+            }
+            Focus::Topic(_) => None,
+        };
+        let delete = topic.as_ref().map(|(id, name, ..)| (id.clone(), name.clone()));
+        let mut menu = Menu::new(self.hub.clone(), Some(focus), delete);
+        if let Some((id, _, parent, closed)) = topic {
+            let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+            let movable = self
+                .topics
+                .iter()
+                .any(|under| Some(&under.id) != parent.as_ref() && atlas.can_nest(&id, &under.id));
+            let up = parent.map(|parent| Lift(self.topic(&parent).and_then(|parent| parent.parent.clone())));
+            menu = menu.editing(id.clone(), up, movable).closing(id, closed);
+        }
+        if let Some((latest, placed, history)) = session {
+            let id = latest.id.clone();
+            menu = menu.moving(latest, placed).filing(id, history);
+        }
+        let menu = cx.new(|_| menu);
+        let events = cx.subscribe_in(&menu, window, move |this, menu, event: &MenuEvent, window, cx| {
             if this.menu.as_ref().is_none_or(|open| &open.menu != menu) {
                 return;
             }
@@ -431,6 +630,13 @@ impl Workspace {
                     this.topic_deleted(topic, window, cx);
                     cx.emit(TopicDeleted(topic.clone()));
                 }
+                MenuEvent::Filed => this.load(cx),
+                MenuEvent::Rename(topic) => this.begin_retitle(topic.clone(), window, cx),
+                MenuEvent::MoveInto(topic) => this.choose(Pick::MoveInto(topic.clone()), at, window, cx),
+                MenuEvent::MergeInto(topic) => this.choose(Pick::MergeInto(topic.clone()), at, window, cx),
+                MenuEvent::Open(session) => this.open((**session).clone(), window, cx),
+                MenuEvent::MoveSession(session) => this.choose(Pick::File(session.clone()), at, window, cx),
+                MenuEvent::Unplace(session) => this.unplace(session.clone(), cx),
                 MenuEvent::Closed => {}
             }
             cx.notify();
@@ -443,7 +649,20 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A deleted topic's sessions are back in Forming; leave the topic if it was open.
+    /// Closed, with none of its sessions active since.
+    fn closed(&self, topic: &Topic) -> bool {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        let newest = self
+            .sessions
+            .iter()
+            .filter(|session| atlas.within(session, &topic.id))
+            .map(|session| session.updated_at_ms)
+            .max()
+            .unwrap_or(0);
+        topic.is_closed(newest)
+    }
+
+    /// A deleted topic's sessions are back in Uncategorized; leave the topic if it was open.
     pub fn topic_deleted(&mut self, topic: &TopicId, window: &mut Window, cx: &mut Context<Self>) {
         match &mut self.altitude {
             Altitude::Topic(open) if open == topic => {
@@ -454,14 +673,6 @@ impl Workspace {
             _ => {}
         }
         self.load(cx);
-    }
-
-    /// A session shows in Memory as a search for its title, so only titled sessions can.
-    fn session_focus(session: &SessionSummary) -> Option<Focus> {
-        session
-            .title
-            .as_deref()
-            .map(|title| Focus::Search(one_line(Some(title)).to_string()))
     }
 
     /// The New session picker over a backdrop; clicking anywhere outside the picker closes it.
@@ -508,10 +719,13 @@ impl Workspace {
         )
     }
 
-    fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_topic(&mut self, topic: TopicId, window: &mut Window, cx: &mut Context<Self>) {
         self.pane = None;
         self.placing = None;
+        self.screen = TopicScreen::default();
+        self.retitling = None;
         self.altitude = Altitude::Topic(topic);
+        self.sync_step(cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -638,8 +852,8 @@ impl Workspace {
 
     fn launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let preset = match &self.altitude {
-            Altitude::Topic(topic) => self
-                .topic(topic)
+            Altitude::Topic(root) => self
+                .topic(&self.step_in(root))
                 .map(|known| (known.id.clone(), known.name.clone())),
             _ => None,
         };
@@ -654,7 +868,7 @@ impl Workspace {
                 return;
             };
             let launch = match target {
-                Target::Forming => Launch::Forming,
+                Target::Uncategorized => Launch::Uncategorized,
                 Target::In(topic) => Launch::In(topic.clone()),
                 Target::New(name) => Launch::New(name.clone()),
             };
@@ -680,10 +894,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.failed = None;
+        let (topic, node, cwd) = self.start_place(&launch, node);
         let hub = self.hub.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let started = hub.start_session(node, harness, model).await;
+            let started = hub.start_session(node, harness, model, topic, cwd).await;
             cx.update_window(window_handle, |_, window, cx| {
                 this.update(cx, |this, cx| this.started(started, launch, window, cx))
                     .ok();
@@ -693,6 +908,27 @@ impl Workspace {
         .detach();
     }
 
+    /// Where a session launched into a topic starts: filed in the topic, so rh hands it the topic's
+    /// startup memory, and in the topic's working directory (its own or the nearest above it), on
+    /// that directory's node when the directory is local to one.
+    fn start_place(
+        &self,
+        launch: &Launch,
+        node: Option<String>,
+    ) -> (Option<TopicId>, Option<String>, Option<String>) {
+        let Launch::In(topic) = launch else {
+            return (None, node, None);
+        };
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        match atlas.directory(topic) {
+            Some(Directory::Local { node, path }) => {
+                (Some(topic.clone()), Some(node.clone()), Some(path.clone()))
+            }
+            Some(Directory::Shared { path }) => (Some(topic.clone()), node, Some(path.clone())),
+            None => (Some(topic.clone()), node, None),
+        }
+    }
+
     fn start_with(
         &mut self,
         agent: model::agents::Agent,
@@ -700,7 +936,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.start_agent(agent, topic.map_or(Launch::Forming, Launch::In), window, cx);
+        self.start_agent(agent, topic.map_or(Launch::Uncategorized, Launch::In), window, cx);
     }
 
     fn start_agent(
@@ -736,7 +972,7 @@ impl Workspace {
                 match launch {
                     Launch::In(topic) => self.place(summary.id.clone(), topic, cx),
                     Launch::New(name) => self.place_in_new(summary.id.clone(), name, cx),
-                    Launch::Forming => {}
+                    Launch::Uncategorized => {}
                 }
                 self.sessions.push(summary.clone());
                 self.open(summary, window, cx);
@@ -770,12 +1006,21 @@ impl Workspace {
         if altitude == self.altitude {
             return;
         }
+        let back_to_its_topic = matches!(
+            (&self.altitude, &altitude),
+            (Altitude::Session { topic: Some(from), .. }, Altitude::Topic(to)) if from == to
+        );
+        if !matches!(altitude, Altitude::Session { .. }) && !back_to_its_topic {
+            self.screen = TopicScreen::default();
+        }
         self.altitude = altitude;
+        self.retitling = None;
         if !matches!(self.altitude, Altitude::Session { .. }) {
             self.pane = None;
             self.placing = None;
             self.load(cx);
         }
+        self.sync_step(cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -820,29 +1065,45 @@ impl Workspace {
                     .topic(&topic)
                     .map_or_else(|| topic.as_str().to_owned(), |known| known.name.clone());
                 let here = session.is_none();
-                Self::crumb("crumb-topic", name.into(), here).on_click(cx.listener(
-                    move |this, _: &gpui::ClickEvent, window, cx| {
-                        this.leave_to(Altitude::Topic(topic.clone()), window, cx);
-                    },
-                ))
+                match self.retitle_field(&topic, cx) {
+                    Some(field) => div().id("crumb-topic").child(field),
+                    None => Self::crumb("crumb-topic", name.into(), here)
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            Self::on_right_click(Focus::Topic(topic.clone()), cx),
+                        )
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if here && event.click_count() == 2 {
+                                this.begin_retitle(topic.clone(), window, cx);
+                            } else {
+                                this.leave_to(Altitude::Topic(topic.clone()), window, cx);
+                            }
+                        })),
+                }
             }
-            None => Self::crumb("crumb-forming", "Forming".into(), false).on_click(cx.listener(
+            None => Self::crumb("crumb-uncategorized", "Uncategorized".into(), false).on_click(cx.listener(
                 |this, _: &gpui::ClickEvent, window, cx| {
-                    this.forming_open = true;
+                    this.uncategorized_open = true;
+                    this.uncategorized_folded = false;
                     this.leave_to(Altitude::Everything, window, cx);
                 },
             )),
         };
         bar = bar.child(separator()).child(topic_crumb);
         if let Some(session) = session {
-            let title = self
-                .sessions
-                .iter()
-                .find(|known| known.id == session)
-                .map_or_else(|| "Untitled".into(), |known| one_line(known.title.as_deref()));
+            let known = self.sessions.iter().find(|known| known.id == session);
+            let title = known.map_or_else(|| "Untitled".into(), |known| one_line(known.title.as_deref()));
             bar = bar
                 .child(separator())
-                .child(Self::crumb("crumb-session", title, true));
+                .child(Self::crumb("crumb-session", title, true).when_some(
+                    known.cloned(),
+                    |crumb, known| {
+                        crumb.on_mouse_down(
+                            MouseButton::Right,
+                            Self::on_right_click(Focus::Session(Box::new(known)), cx),
+                        )
+                    },
+                ));
         }
         bar
     }
@@ -884,38 +1145,6 @@ impl Workspace {
         } else {
             Theme::ink_dim()
         }
-    }
-
-    /// "2 active · 1 waiting on you · 3 idle", leaving out zero counts; `None` when all are zero.
-    fn counts<'a>(&self, sessions: impl IntoIterator<Item = &'a SessionSummary>) -> Option<gpui::Div> {
-        let (mut active, mut waiting, mut idle) = (0_usize, 0_usize, 0_usize);
-        for session in sessions {
-            if self.feed.needs_you(session) {
-                waiting += 1;
-            } else if self.feed.is_active(session) {
-                active += 1;
-            } else {
-                idle += 1;
-            }
-        }
-        let parts = [
-            (active, format!("{active} active"), Theme::ink_dim()),
-            (waiting, format!("{waiting} waiting on you"), Theme::warn()),
-            (idle, format!("{idle} idle"), Theme::ink_dim()),
-        ];
-        let mut line = div().flex().text_xs().text_color(Theme::ink_dim());
-        let mut any = false;
-        for (count, label, color) in parts {
-            if count == 0 {
-                continue;
-            }
-            if any {
-                line = line.child("\u{a0}·\u{a0}");
-            }
-            line = line.child(div().text_color(color).child(label));
-            any = true;
-        }
-        any.then_some(line)
     }
 
     fn needs_you_chip() -> impl IntoElement {
@@ -1084,5 +1313,6 @@ impl Render for Workspace {
                     .child(editor.clone())
             }))
             .children(self.menu.as_ref().map(OpenMenu::overlay))
+            .children(self.choosing_overlay(cx))
     }
 }

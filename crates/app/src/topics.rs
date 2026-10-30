@@ -2,7 +2,8 @@ use gateway::GatewayError;
 use std::collections::HashMap;
 
 use model::decisions::{Decision, Group, on_page};
-use model::topics::{Placements, Suggestion, Topic};
+use model::preview::StartupPreview;
+use model::topics::{Filing, Suggestion, Topic};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -30,6 +31,13 @@ impl Hub {
                 .collect())
         })
         .await
+    }
+
+    /// The topic's own decisions, oldest first.
+    pub async fn decisions(&self, topic: TopicId) -> Result<Vec<Decision>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.decisions(&topic).await })
+            .await
     }
 
     pub async fn add_decision(&self, topic: TopicId, text: String) -> Result<Decision, GatewayError> {
@@ -64,7 +72,7 @@ impl Hub {
         .await
     }
 
-    pub async fn topics(&self) -> Result<(Vec<Topic>, Placements), GatewayError> {
+    pub async fn topics(&self) -> Result<Filing, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
             let topics = gateway.topics().await?;
@@ -76,7 +84,12 @@ impl Hub {
                 .zip(filed)
                 .flat_map(|(topic, sessions)| sessions.into_iter().map(|session| (session, topic.id.clone())))
                 .collect();
-            Ok((topics, placements))
+            let marks = gateway.history_marks().await?;
+            Ok(Filing {
+                topics,
+                placements,
+                marks,
+            })
         })
         .await
     }
@@ -120,16 +133,91 @@ impl Hub {
     pub async fn place_in_new(&self, session: SessionId, name: String) -> Result<Topic, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
-            let topic = gateway.create_topic(&name).await?;
+            let topic = gateway.create_topic(&name, None).await?;
             gateway.place(&session, &topic.id).await?;
             Ok(topic)
         })
         .await
     }
 
+    /// Creates a topic, under `parent` when given.
+    /// What a session started in the topic right now would be told.
+    pub async fn topic_startup(&self, topic: TopicId) -> Result<StartupPreview, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.topic_startup(&topic).await })
+            .await
+    }
+
+    pub async fn create_topic(&self, name: String, parent: Option<TopicId>) -> Result<Topic, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.create_topic(&name, parent.as_ref()).await })
+            .await
+    }
+
+    /// Closes the topic, or reopens it when `closed` is false.
+    pub async fn set_topic_closed(&self, topic: TopicId, closed: bool) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            if closed {
+                gateway.close_topic(&topic).await
+            } else {
+                gateway.reopen_topic(&topic).await
+            }
+        })
+        .await
+    }
+
+    /// Marks the session as history, or makes it active again when `history` is false.
+    pub async fn set_history(&self, session: SessionId, history: bool) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            if history {
+                gateway.mark_history(&session).await
+            } else {
+                gateway.unmark_history(&session).await
+            }
+        })
+        .await
+    }
+
+    pub async fn rename_topic(&self, topic: TopicId, name: String) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.rename_topic(&topic, &name).await })
+            .await
+    }
+
+    /// Moves the topic under `parent`, or to the top level when there is none.
+    pub async fn move_topic(&self, topic: TopicId, parent: Option<TopicId>) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.move_topic(&topic, parent.as_ref()).await })
+            .await
+    }
+
+    pub async fn merge_topic(&self, topic: TopicId, into: TopicId) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.merge_topic(&topic, &into).await })
+            .await
+    }
+
+    /// Deletes the topic. Its subtopics move up a level first, since rh refuses to delete a topic
+    /// that still has them; its sessions go back to Uncategorized.
     pub async fn delete_topic(&self, topic: TopicId) -> Result<(), GatewayError> {
         let gateway = self.inner.local.clone();
-        self.on_runtime(async move { gateway.delete_topic(&topic).await })
-            .await
+        self.on_runtime(async move {
+            let topics = gateway.topics().await?;
+            let above = topics
+                .iter()
+                .find(|known| known.id == topic)
+                .and_then(|known| known.parent.clone());
+            let subtopics = topics
+                .iter()
+                .filter(|known| known.parent.as_ref() == Some(&topic));
+            futures::future::try_join_all(
+                subtopics.map(|subtopic| gateway.move_topic(&subtopic.id, above.as_ref())),
+            )
+            .await?;
+            gateway.delete_topic(&topic).await
+        })
+        .await
     }
 }

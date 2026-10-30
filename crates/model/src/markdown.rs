@@ -254,6 +254,30 @@ fn level(heading: HeadingLevel) -> u8 {
     }
 }
 
+/// The words of a markdown snippet without its markup: no list markers, emphasis, code ticks or
+/// link targets, blocks joined by spaces. For one-line previews of a reply.
+pub fn plain(source: &str) -> String {
+    let mut words = Vec::new();
+    for block in parse(source) {
+        flatten(&block, &mut words);
+    }
+    words.join(" ")
+}
+
+fn flatten(block: &Block, words: &mut Vec<String>) {
+    let runs = |runs: &[Run]| runs.iter().map(|run| run.text.as_str()).collect::<String>();
+    match block {
+        Block::Heading { runs: line, .. } | Block::Paragraph(line) => words.push(runs(line)),
+        Block::List { items, .. } => items.iter().flatten().for_each(|inner| flatten(inner, words)),
+        Block::Quote(inner) => inner.iter().for_each(|inner| flatten(inner, words)),
+        Block::Code { text, .. } => words.push(text.trim().to_owned()),
+        Block::Table { head, rows } => {
+            words.extend(head.iter().chain(rows.iter().flatten()).map(|cell| runs(cell)));
+        }
+        Block::Rule => {}
+    }
+}
+
 pub fn parse(source: &str) -> Vec<Block> {
     let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut builder = Builder {
@@ -422,6 +446,15 @@ impl Parsed {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plain_keeps_the_words_and_drops_the_markup() {
+        assert_eq!(super::plain("- **whoami:** `rivet`"), "whoami: rivet");
+        assert_eq!(
+            super::plain("See [the PR](https://example.com) _now_."),
+            "See the PR now."
+        );
+    }
+
     use super::{Block, bare_links, parse};
 
     #[test]

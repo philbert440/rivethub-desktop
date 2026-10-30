@@ -8,10 +8,11 @@ use gpui::{
     ListAlignment, ListState, ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription, Task,
     Window, div, list, prelude::*, px, relative,
 };
-use model::chat::{ExchangeState, arrived, exchanges};
-use model::harness::ModelChoice;
+use model::chat::{ExchangeState, arrived, exchanges, totals};
+use model::harness::{HarnessOffer, ModelChoice};
 use model::prompt::{Attachment, Prompt, Switch, image_media_type};
 use model::session::{Decision, SessionSummary, SessionView, Switches};
+use model::usage::tokens;
 use term::GridSize;
 
 use crate::input::{PastedImage, Submitted, TextInput};
@@ -20,6 +21,7 @@ use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 use crate::transcript::{self, ExchangeView, Fold, Folds};
 
+pub(crate) mod plan;
 mod switch;
 
 use switch::Picker;
@@ -69,9 +71,8 @@ pub struct SessionPane {
     hovered_turn: Option<usize>,
     width: Option<Pixels>,
     composer: Entity<TextInput>,
-    takes_images: bool,
+    offer: Option<HarnessOffer>,
     switches: Switches,
-    models: Vec<ModelChoice>,
     picked: Switch,
     picking: Option<Picker>,
     attachments: Vec<Attachment>,
@@ -126,9 +127,8 @@ impl SessionPane {
             hovered_turn: None,
             width: None,
             composer,
-            takes_images: false,
+            offer: None,
             switches: Switches::default(),
-            models: Vec::new(),
             picked: Switch::default(),
             picking: None,
             attachments: Vec::new(),
@@ -154,8 +154,7 @@ impl SessionPane {
             let described = hub.describe(&summary).await;
             this.update(cx, |this, cx| {
                 if let Ok(Some(offer)) = offer {
-                    this.takes_images = offer.takes_images;
-                    this.models = offer.models;
+                    this.offer = Some(offer);
                 }
                 if let Ok(described) = described {
                     this.switches = described.switches;
@@ -218,16 +217,29 @@ impl SessionPane {
         .detach();
     }
 
+    fn takes_images(&self) -> bool {
+        self.offer.as_ref().is_some_and(|offer| offer.takes_images)
+    }
+
+    fn models(&self) -> &[ModelChoice] {
+        self.offer.as_ref().map_or(&[], |offer| offer.models.as_slice())
+    }
+
+    fn steers(&self) -> bool {
+        self.offer.as_ref().is_some_and(|offer| offer.steers)
+    }
+
     /// Clears the last attachment problem, or says why nothing can be attached here.
     fn accepts_attachments(&mut self, cx: &mut Context<Self>) -> bool {
-        self.attach_problem = (!self.takes_images).then(|| {
+        let takes_images = self.takes_images();
+        self.attach_problem = (!takes_images).then(|| {
             format!(
                 "{} doesn't take attachments in this session",
                 self.summary.id.harness().display_name()
             )
         });
         cx.notify();
-        self.takes_images
+        takes_images
     }
 
     /// Files dropped on the chat attach when rh takes them, which today means images only.
@@ -599,9 +611,13 @@ impl SessionPane {
     }
 
     fn header(&self, view: &SessionView, cx: &mut Context<Self>) -> gpui::Div {
-        let meta = [self.summary.model.as_deref(), self.summary.cwd.as_deref()]
+        let meta = self
+            .summary
+            .model
+            .as_deref()
+            .map(|model| self.model_label(model))
             .into_iter()
-            .flatten()
+            .chain(self.summary.cwd.clone())
             .collect::<Vec<_>>()
             .join(" · ");
         div()
@@ -659,7 +675,7 @@ impl SessionPane {
         let folded = {
             let view = self.handle.view();
             let view = view.read();
-            exchanges(view.turns(), view.live())
+            exchanges(view.turns(), view.live(), view.busy())
         };
         let previous = Arc::clone(&self.exchanges);
         let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
@@ -771,6 +787,7 @@ impl SessionPane {
         let folds = Arc::clone(&self.folds);
         let fetched = Arc::clone(&self.fetched);
         let previews = Arc::clone(&self.previews);
+        let plan = view.plan().clone();
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -789,6 +806,7 @@ impl SessionPane {
                             home: home.as_deref(),
                             fetched: &fetched,
                             previews: &previews,
+                            plan: &plan,
                         };
                         transcript::exchange(exchange, &context, window)
                     },
@@ -849,7 +867,8 @@ impl SessionPane {
             .child(
                 footer
                     .children(self.questions.read(cx).waiting().then(|| self.questions.clone()))
-                    .children(self.queue_dock())
+                    .children(self.plan_panel(&view, cx))
+                    .children(self.queue_dock(cx))
                     .child(
                         self.approval_card(&view)
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
@@ -916,13 +935,14 @@ impl SessionPane {
         if let Fold::Tool(exchange, step, tool) = fold {
             self.fetch_output(exchange, step, tool, cx);
         }
-        let index = match fold {
+        let row = match fold {
             Fold::Exchange(index)
             | Fold::Group(index, _)
             | Fold::Thought(index, _)
-            | Fold::Tool(index, _, _) => index,
+            | Fold::Tool(index, _, _) => Some(index),
+            Fold::Plan => None,
         };
-        if index < self.turns.item_count() {
+        if let Some(index) = row.filter(|index| *index < self.turns.item_count()) {
             self.turns.splice(index..index + 1, 1);
         }
         cx.notify();
@@ -1042,7 +1062,26 @@ impl SessionPane {
         )
     }
 
-    fn queue_dock(&self) -> Option<AnyElement> {
+    /// Puts a queued prompt back in the composer, after any draft, with its images.
+    fn edit_queued(&mut self, queued: &Prompt, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.handle.take_queued(queued) else {
+            return;
+        };
+        self.composer.update(cx, |composer, cx| {
+            let draft = composer.text().trim_end().to_owned();
+            let text = if draft.is_empty() {
+                prompt.text.clone()
+            } else {
+                format!("{draft}\n{}", prompt.text)
+            };
+            composer.set_text(&text, cx);
+        });
+        self.attachments.extend(prompt.attachments);
+        window.focus(&self.composer.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn queue_dock(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let queued = self.handle.queued();
         if queued.is_empty() {
             return None;
@@ -1063,7 +1102,8 @@ impl SessionPane {
                     if queued.len() == 1 { "message" } else { "messages" }
                 )))
                 .children(queued.into_iter().enumerate().map(|(index, prompt)| {
-                    let handle = self.handle.clone();
+                    let (steering, unqueuing) = (self.handle.clone(), self.handle.clone());
+                    let (steered, dropped, queued) = (prompt.clone(), prompt.clone(), prompt.clone());
                     let images = match prompt.attachments.len() {
                         0 => None,
                         1 => Some("1 image".to_owned()),
@@ -1083,17 +1123,64 @@ impl SessionPane {
                         .children(
                             images.map(|images| div().text_xs().text_color(Theme::ink_dim()).child(images)),
                         )
+                        .when(self.steers(), |row| {
+                            row.child(
+                                div()
+                                    .id(("steer-queued", index))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(Theme::accent())
+                                    .on_click(move |_, _, _| steering.steer(steered.clone()))
+                                    .child("Steer"),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id(("edit-queued", index))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.edit_queued(&queued, window, cx);
+                                }))
+                                .child(crate::brand::icon("icons/rename.svg", 13., Theme::ink_dim())),
+                        )
                         .child(
                             div()
                                 .id(("unqueue", index))
                                 .cursor_pointer()
                                 .text_color(Theme::ink_dim())
-                                .on_click(move |_, _, _| handle.unqueue(index))
+                                .on_click(move |_, _, _| unqueuing.unqueue(dropped.clone()))
                                 .child("×"),
                         )
                 }))
                 .into_any_element(),
         )
+    }
+
+    /// The session so far, beside Send: how fast the replies streamed here came, what the session
+    /// wrote, and how much of what it read came from cache.
+    fn session_stats(&self, view: &SessionView) -> Option<impl IntoElement> {
+        let usage = totals(self.exchanges.iter().map(|view| &view.exchange));
+        let parts: Vec<String> = view
+            .pace()
+            .tokens_per_second()
+            .map(|rate| format!("{rate} tok/s"))
+            .into_iter()
+            .chain((usage.output > 0).then(|| format!("{} out", tokens(usage.output))))
+            .chain(
+                usage
+                    .cached_percent()
+                    .filter(|share| *share > 0)
+                    .map(|share| format!("{share}% cached")),
+            )
+            .collect();
+        (!parts.is_empty()).then(|| {
+            div()
+                .flex_none()
+                .px_3()
+                .text_xs()
+                .text_color(Theme::ink_dim())
+                .child(parts.join(" · "))
+        })
     }
 
     fn send_button(&self, busy: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1221,9 +1308,10 @@ impl SessionPane {
                     .pb_2()
                     .flex()
                     .items_center()
-                    .when(self.takes_images, |row| row.child(Self::attach_button(cx)))
+                    .when(self.takes_images(), |row| row.child(Self::attach_button(cx)))
                     .children(self.switch_chips(cx))
                     .child(div().flex_1())
+                    .children(self.session_stats(view))
                     .child(self.send_button(view.busy(), cx)),
             )
             .into_any_element()

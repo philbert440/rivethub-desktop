@@ -1,7 +1,11 @@
 mod ask;
 mod decisions;
+mod session;
+mod sessions;
 mod tidy;
 mod topics;
+
+use std::sync::Arc;
 
 use app::{Hub, Library, Tidy};
 use gpui::{
@@ -11,6 +15,7 @@ use gpui::{
 use model::decisions::Group;
 use model::markdown::Block;
 use model::memory::{Found, Period};
+use model::session::SessionSummary;
 use model::wiki::{Listing, Page};
 use model::{SessionId, TopicId};
 
@@ -19,6 +24,7 @@ use crate::input::{Submitted, TextInput};
 use crate::menu::OpenMenu;
 use crate::shell;
 use crate::theme::Theme;
+use crate::workspace::Listed;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Tab {
@@ -52,11 +58,12 @@ impl Tab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Focus {
     Topic(TopicId),
-    Search(String),
+    Session(Box<SessionSummary>),
 }
 
 pub enum MemoryEvent {
     OpenSession(SessionId),
+    OpenTopic(TopicId),
     TopicDeleted(TopicId),
 }
 
@@ -90,6 +97,10 @@ pub struct MemoryPage {
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
     tidy: Option<Tidy>,
+    viewing: Option<session::Viewing>,
+    listed: Arc<Listed>,
+    all_sessions: bool,
+    shown: bool,
     menu: Option<OpenMenu>,
     _submitted: [Subscription; 2],
 }
@@ -134,6 +145,10 @@ impl MemoryPage {
             deciding: None,
             page_scroll: ScrollHandle::new(),
             tidy: None,
+            viewing: None,
+            listed: Arc::default(),
+            all_sessions: false,
+            shown: false,
             menu: None,
             _submitted: [asked, found],
         };
@@ -147,10 +162,28 @@ impl MemoryPage {
                 self.select(Tab::Topics, cx);
                 self.open_topic(topic, cx);
             }
-            Focus::Search(text) => {
-                self.tab = Tab::Ask;
-                self.search(text, cx);
-            }
+            Focus::Session(session) => self.open_session(*session, cx),
+        }
+    }
+
+    /// The workspace's latest listing, which keeps the topic index and an open session's name current.
+    pub fn listed(&mut self, listed: Arc<Listed>, cx: &mut Context<Self>) {
+        if let Some(library) = self.library.as_mut() {
+            library.topics.clone_from(&listed.topics);
+        }
+        if let Some(viewing) = self.viewing.as_mut() {
+            viewing.relist(&listed.sessions);
+        }
+        self.listed = listed;
+        cx.notify();
+    }
+
+    /// Whether the shell is showing Memory; coming back to it refreshes the open session's page.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        let back = shown && !self.shown;
+        self.shown = shown;
+        if back {
+            self.refresh_session(cx);
         }
     }
 
@@ -162,6 +195,7 @@ impl MemoryPage {
 
     fn select(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;
+        self.viewing = None;
         self.problem = None;
         match tab {
             Tab::Ask => {}
@@ -194,7 +228,7 @@ impl MemoryPage {
             .rounded(px(18.))
             .bg(Theme::panel())
             .children(Tab::ALL.map(|tab| {
-                let here = tab == self.tab;
+                let here = tab == self.tab && self.viewing.is_none();
                 let ink = if here {
                     Theme::on_selected()
                 } else {
@@ -240,6 +274,7 @@ impl MemoryPage {
 impl Render for MemoryPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.tab {
+            _ if self.viewing.is_some() => self.session_page(window, cx),
             Tab::Ask => self.ask(cx),
             Tab::Topics => self.topics(window, cx),
             Tab::Tidy => self.tidy(cx),

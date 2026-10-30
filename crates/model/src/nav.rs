@@ -56,11 +56,11 @@ mod tests {
     }
 
     #[test]
-    fn zoom_out_from_a_forming_session_returns_to_everything() {
-        let forming = Altitude::Session {
+    fn zoom_out_from_an_uncategorized_session_returns_to_everything() {
+        let uncategorized = Altitude::Session {
             topic: None,
             session: session(),
         };
-        assert_eq!(forming.zoom_out(), Altitude::Everything);
+        assert_eq!(uncategorized.zoom_out(), Altitude::Everything);
     }
 }

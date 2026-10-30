@@ -1,5 +1,6 @@
 use gateway::GatewayError;
-use model::memory::{Found, Period, TagProposal, TermProposal, Verdict};
+use model::SessionId;
+use model::memory::{Found, Period, SessionMemory, TagProposal, TermProposal, Verdict};
 use model::topics::Topic;
 use model::wiki::{Listing, Page};
 
@@ -24,6 +25,28 @@ impl Hub {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.recall(&query, period).await })
             .await
+    }
+
+    pub async fn session_memory(&self, session: SessionId) -> Result<SessionMemory, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.session_memory(&session).await })
+            .await
+    }
+
+    /// Several sessions' memory, read together and in order; a session whose memory couldn't be
+    /// read comes back as `None`.
+    pub async fn session_memories(
+        &self,
+        sessions: Vec<SessionId>,
+    ) -> Result<Vec<Option<SessionMemory>>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move {
+            let read =
+                futures::future::join_all(sessions.iter().map(|session| gateway.session_memory(session)))
+                    .await;
+            Ok(read.into_iter().map(Result::ok).collect())
+        })
+        .await
     }
 
     pub async fn library(&self) -> Result<Library, GatewayError> {

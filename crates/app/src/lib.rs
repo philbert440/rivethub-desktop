@@ -17,13 +17,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gateway::{Endpoint, Gateway, GatewayError, Identity};
-use model::HarnessId;
 use model::agents::{Agent, Roster};
 use model::harness::HarnessOffer;
 use model::prefs::Preferences;
+use model::preview::Previews;
 use model::prompt::{Attachment, image_media_type};
 use model::search::SessionMatch;
 use model::session::{Described, SessionSummary};
+use model::{HarnessId, TopicId};
 use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 
@@ -248,6 +249,29 @@ impl Hub {
         .await
     }
 
+    /// What each session is doing now, or last said, asked of the node each one lives on. A node
+    /// that can't preview (an older rh, or out of reach) just has no previews.
+    pub async fn previews(&self, sessions: Vec<SessionSummary>) -> Previews {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let mut by_node: HashMap<Option<String>, Vec<model::SessionId>> = HashMap::new();
+            for session in sessions {
+                by_node.entry(session.node).or_default().push(session.id);
+            }
+            let asked = futures::future::join_all(by_node.into_iter().map(|(node, ids)| {
+                let hub = hub.clone();
+                async move {
+                    let gateway = hub.gateway_for(node.as_deref()).await.ok()?;
+                    gateway.previews(&ids).await.ok()
+                }
+            }))
+            .await;
+            Ok(asked.into_iter().flatten().flatten().collect())
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     /// Every session every reachable node lists, across all of its harnesses, newest first.
     pub async fn all_sessions(&self) -> Result<AllSessions, GatewayError> {
         let hub = self.clone();
@@ -340,17 +364,22 @@ impl Hub {
         .await
     }
 
-    /// Starts a harness on `node`, or on this client's own node when it is `None`.
+    /// Starts a harness on `node`, or on this client's own node when it is `None`, in `topic` and
+    /// working in `cwd` when given.
     pub async fn start_session(
         &self,
         node: Option<String>,
         harness: HarnessId,
         model: Option<String>,
+        topic: Option<TopicId>,
+        cwd: Option<String>,
     ) -> Result<SessionSummary, GatewayError> {
         let hub = self.clone();
         self.on_runtime(async move {
             let gateway = hub.gateway_for(node.as_deref()).await?;
-            let mut summary = gateway.start_session(&harness, model.as_deref()).await?;
+            let mut summary = gateway
+                .start_session(&harness, model.as_deref(), topic.as_ref(), cwd.as_deref())
+                .await?;
             summary.node = node;
             Ok(summary)
         })
@@ -408,6 +437,21 @@ impl Hub {
             hub.offers(node.as_deref(), &gateway).await
         })
         .await
+    }
+
+    /// The label a node's harness offers for `model`, from the offers already read.
+    pub fn model_label(&self, node: Option<&str>, harness: &HarnessId, model: &str) -> Option<String> {
+        let key = node.filter(|node| !self.is_local(node)).unwrap_or_default();
+        self.inner
+            .offers
+            .read()
+            .get(key)?
+            .iter()
+            .find(|offer| &offer.id == harness)?
+            .models
+            .iter()
+            .find(|choice| choice.id == model)
+            .map(|choice| choice.label.clone())
     }
 
     /// A node's harness list, read once per run: asking rh again re-runs its model discovery,

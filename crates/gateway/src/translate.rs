@@ -1,12 +1,14 @@
 use model::{
     HarnessId, NativeSessionId, SessionId,
+    plan::{Plan, Step, StepStatus},
     session::{
         Activity, Approval, ContextUsage, Role, SessionEvent, SessionStatus, SessionSummary, ToolCall,
         ToolState, Turn,
     },
+    usage::Usage,
 };
 use wire::gateway::sessions::{
-    HarnessTranscriptTurn, SessionMessageRole, TranscriptBlock, TranscriptToolStatus,
+    HarnessTranscriptTurn, MessageUsage, SessionMessageRole, TranscriptBlock, TranscriptToolStatus,
 };
 use wire::harness::{HarnessEvent, HarnessSessionStatus, HarnessSessionSummary, HarnessStatus};
 
@@ -87,9 +89,7 @@ pub fn attachment(raw: wire::gateway::uploads::UploadCreated) -> model::prompt::
     }
 }
 
-pub fn prompt(
-    prompt: &model::prompt::Prompt,
-) -> Result<wire::gateway::sessions::SessionPostRequest, GatewayError> {
+fn attachments(prompt: &model::prompt::Prompt) -> Option<Vec<wire::gateway::agents::UserTurnAttachment>> {
     let attachments = prompt
         .attachments
         .iter()
@@ -99,6 +99,19 @@ pub fn prompt(
             name: Some(attachment.name.clone()),
         })
         .collect::<Vec<_>>();
+    Some(attachments).filter(|list| !list.is_empty())
+}
+
+pub fn steer(prompt: &model::prompt::Prompt) -> wire::gateway::sessions::SessionSteerRequest {
+    wire::gateway::sessions::SessionSteerRequest {
+        text: prompt.text.clone(),
+        attachments: attachments(prompt),
+    }
+}
+
+pub fn prompt(
+    prompt: &model::prompt::Prompt,
+) -> Result<wire::gateway::sessions::SessionPostRequest, GatewayError> {
     let thinking = prompt
         .switch
         .effort
@@ -116,7 +129,7 @@ pub fn prompt(
         agent: None,
         thinking,
         system_prompt: None,
-        attachments: Some(attachments).filter(|list| !list.is_empty()),
+        attachments: attachments(prompt),
         harness: None,
         model: prompt.switch.model.clone(),
         working_dir: None,
@@ -140,6 +153,49 @@ pub fn found(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::mem
             at_ms: hit.created_at.timestamp_millis(),
         })
         .collect()
+}
+
+pub fn session_memory(raw: wire::gateway::memory::MemorySummaryDagResponse) -> model::memory::SessionMemory {
+    use model::memory::{MessageTally, SessionMemory, Summary, SummaryKind, Vector};
+    use wire::gateway::memory::{SummaryKind as Kind, VectorState};
+    let vector = |state| match state {
+        VectorState::Embedded => Vector::Embedded,
+        VectorState::Pending => Vector::Pending,
+        VectorState::Failed => Vector::Failed,
+        VectorState::Skipped => Vector::Skipped,
+    };
+    let tally = raw.messages;
+    SessionMemory {
+        summaries: raw
+            .summaries
+            .into_iter()
+            .map(|node| Summary {
+                id: node.id,
+                parent: node.parent_id,
+                kind: match node.kind {
+                    Kind::Leaf => SummaryKind::Leaf,
+                    Kind::Branch => SummaryKind::Branch,
+                    Kind::Root => SummaryKind::Root,
+                },
+                text: node.content,
+                messages: node.message_count,
+                from_ms: node.earliest_at.map(|at| at.timestamp_millis()),
+                to_ms: node.latest_at.map(|at| at.timestamp_millis()),
+                vector: vector(node.vector),
+            })
+            .collect(),
+        messages: MessageTally {
+            total: tally.total,
+            user: tally.user,
+            assistant: tally.assistant,
+            system: tally.system,
+            tool: tally.tool,
+            embedded: tally.embedded,
+            pending: tally.pending,
+            failed: tally.failed,
+            skipped: tally.skipped,
+        },
+    }
 }
 
 pub fn browse_window(period: model::memory::Period) -> Option<wire::gateway::memory::BrowseWindow> {
@@ -245,6 +301,7 @@ pub fn offer(raw: wire::harness::HarnessOffering) -> model::harness::HarnessOffe
         chat: raw.chat,
         lists_sessions: capabilities.observation.list_sessions,
         takes_images: capabilities.image_attachments.unwrap_or(false),
+        steers: capabilities.control.steering.unwrap_or(false),
         models: capabilities
             .models
             .unwrap_or_default()
@@ -290,6 +347,40 @@ pub fn summary(raw: HarnessSessionSummary) -> SessionSummary {
     }
 }
 
+fn plan(entries: Vec<wire::harness::PlanEntry>) -> Plan {
+    Plan {
+        steps: entries
+            .into_iter()
+            .map(|entry| Step {
+                id: None,
+                content: entry.content,
+                status: match entry.status {
+                    wire::harness::PlanStatus::Pending => StepStatus::Pending,
+                    wire::harness::PlanStatus::InProgress => StepStatus::InProgress,
+                    wire::harness::PlanStatus::Completed => StepStatus::Completed,
+                },
+            })
+            .collect(),
+    }
+}
+
+/// What a turn reports as it ends. rh counts cache reads and writes in its prompt tokens.
+fn reported(raw: &wire::stream::LlmUsage) -> Usage {
+    Usage {
+        input: raw.prompt_tokens,
+        cached: raw.cached_tokens.or(raw.cache_read_tokens).unwrap_or(0),
+        output: raw.completion_tokens,
+    }
+}
+
+fn usage(raw: &MessageUsage) -> Usage {
+    Usage {
+        input: raw.prompt_tokens,
+        cached: raw.cached_tokens,
+        output: raw.completion_tokens,
+    }
+}
+
 fn turn(raw: HarnessTranscriptTurn) -> Turn {
     let ends_with_text = raw.last_block.is_none_or(|block| block == TranscriptBlock::Text);
     Turn {
@@ -301,7 +392,7 @@ fn turn(raw: HarnessTranscriptTurn) -> Turn {
         text: raw.text,
         thinking: raw.thinking.unwrap_or_default(),
         model: raw.model,
-        output_tokens: raw.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
+        usage: raw.usage.as_ref().map(usage).unwrap_or_default(),
         started_at_ms: raw.started_at_ms,
         ended_at_ms: raw.ended_at_ms,
         files: raw
@@ -390,7 +481,8 @@ pub fn event(raw: HarnessEvent) -> Option<SessionEvent> {
             reason,
         }),
         HarnessEvent::ApprovalResolved { request_id, .. } => SessionEvent::ApprovalResolved { request_id },
-        HarnessEvent::TurnComplete { .. } => SessionEvent::TurnComplete,
+        HarnessEvent::Plan { entries, .. } => SessionEvent::Plan(plan(entries)),
+        HarnessEvent::TurnComplete { usage, .. } => SessionEvent::TurnComplete(usage.as_ref().map(reported)),
         HarnessEvent::Error { message, .. } => SessionEvent::Error(message),
         HarnessEvent::Transcript {
             turns,

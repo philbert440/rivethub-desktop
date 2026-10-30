@@ -2,6 +2,7 @@ mod chat;
 mod error;
 mod events;
 mod memory;
+mod previews;
 mod terminal;
 mod tls;
 mod tool_input;
@@ -18,9 +19,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use model::prompt::{Attachment, Prompt};
-use model::{HarnessId, SessionId, session::SessionSummary};
+use model::{HarnessId, SessionId, TopicId, session::SessionSummary};
 use rustls::ClientConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The roles a memory search leaves out, so it finds only what people and agents said.
 const SAID_ONLY: &str = "tool,system";
@@ -45,6 +46,12 @@ pub struct Gateway {
     base_url: String,
 }
 
+/// A node's harness list, each entry decoded on its own.
+#[derive(Deserialize)]
+struct Offerings {
+    harnesses: Vec<serde_json::Value>,
+}
+
 #[derive(Serialize)]
 struct Retitle<'a> {
     title: &'a str,
@@ -59,6 +66,10 @@ struct CreateSession<'a> {
     agent_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    topic_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
 }
 
 impl Gateway {
@@ -81,10 +92,24 @@ impl Gateway {
         Ok(list.sessions.into_iter().map(translate::summary).collect())
     }
 
+    /// A harness this client doesn't know, from an rh newer or older than its own, is left out
+    /// rather than failing the whole node; a list it can read none of is an error.
     pub async fn harnesses(&self) -> Result<Vec<model::harness::HarnessOffer>, GatewayError> {
         let url = format!("{}/api/harnesses", self.base_url);
-        let list: wire::harness::HarnessOfferingList = self.get_json(&url).await?;
-        Ok(list.harnesses.into_iter().map(translate::offer).collect())
+        let list: Offerings = self.get_json(&url).await?;
+        let listed = list.harnesses.len();
+        let offers: Vec<_> = list
+            .harnesses
+            .into_iter()
+            .filter_map(|raw| serde_json::from_value::<wire::harness::HarnessOffering>(raw).ok())
+            .map(translate::offer)
+            .collect();
+        if offers.is_empty() && listed > 0 {
+            return Err(GatewayError::Refused(
+                "this app can't read any of the harnesses this node offers".into(),
+            ));
+        }
+        Ok(offers)
     }
 
     pub async fn mesh(&self) -> Result<Vec<model::mesh::Node>, GatewayError> {
@@ -140,15 +165,21 @@ impl Gateway {
         Ok(translate::hits(found))
     }
 
+    /// Starts a harness, in `topic` when there is one (rh files the session there and hands it the
+    /// topic's startup memory) and working in `cwd` when given.
     pub async fn start_session(
         &self,
         harness: &HarnessId,
         model: Option<&str>,
+        topic: Option<&TopicId>,
+        cwd: Option<&str>,
     ) -> Result<SessionSummary, GatewayError> {
         self.create_session(CreateSession {
             harness: Some(harness.as_str()),
             agent_id: None,
             model,
+            topic_id: topic.map(TopicId::as_str),
+            cwd,
         })
         .await
     }
@@ -158,6 +189,8 @@ impl Gateway {
             harness: None,
             agent_id: Some(agent_id),
             model: None,
+            topic_id: None,
+            cwd: None,
         })
         .await
     }
@@ -179,6 +212,15 @@ impl Gateway {
         } else {
             Err(GatewayError::Refused("turn not accepted".into()))
         }
+    }
+
+    /// Hands `prompt` to the turn running in `session`; false when none is running, so it goes as
+    /// a turn instead.
+    pub async fn steer(&self, session: &SessionId, prompt: &Prompt) -> Result<bool, GatewayError> {
+        let url = format!("{}/api/harness-sessions/{session}/steer", self.base_url);
+        let steered: wire::gateway::sessions::SessionSteerResponse =
+            Self::read_json(self.http.post(url).json(&translate::steer(prompt)).send().await)?.await?;
+        Ok(steered.outcome != wire::harness::SteerOutcome::PromptRequired)
     }
 
     pub async fn upload(

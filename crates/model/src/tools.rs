@@ -1,3 +1,5 @@
+use crate::plan::{StepStatus, Todos};
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ToolInput {
     Command {
@@ -27,6 +29,7 @@ pub enum ToolInput {
         description: String,
     },
     Ask(Vec<Question>),
+    Todos(Todos),
     Fields(Vec<(String, String)>),
     #[default]
     Unknown,
@@ -47,6 +50,13 @@ pub struct QuestionOption {
     pub description: Option<String>,
 }
 
+impl QuestionOption {
+    /// Whether the agent suggests this option, as it marks one by ending its label "(Recommended)".
+    pub fn recommended(&self) -> bool {
+        self.label.trim_end().ends_with("(Recommended)")
+    }
+}
+
 /// The next turn that answers `questions` with the labels picked for each, in order. A lone question
 /// is answered with its labels; several are each prefixed with their header so the agent can match
 /// them up, and unanswered ones are left out.
@@ -61,6 +71,7 @@ pub fn answer(questions: &[Question], picked: &[Vec<String>]) -> String {
         .map(|(question, labels)| {
             let labels = labels.join(", ");
             match question.header.as_deref().or(question.question.as_deref()) {
+                Some(prefix) if prefix.ends_with(['?', ':']) => format!("{prefix} {labels}"),
                 Some(prefix) => format!("{prefix}: {labels}"),
                 None => labels,
             }
@@ -112,6 +123,20 @@ pub fn label(name: &str, input: &ToolInput, cwd: Option<&str>, home: Option<&str
             .iter()
             .find_map(|question| question.question.as_deref().or(question.header.as_deref()))
             .map_or_else(|| name.to_owned(), first_line),
+        ToolInput::Todos(todos) => {
+            let named = || todos.items.iter().filter(|todo| !todo.content.is_empty());
+            named()
+                .find(|todo| todo.status == Some(StepStatus::InProgress))
+                .or_else(|| named().next())
+                .map_or_else(
+                    || match todos.items.len() {
+                        0 => name.to_owned(),
+                        1 => "Updates 1 item".to_owned(),
+                        count => format!("Updates {count} items"),
+                    },
+                    |todo| first_line(&todo.content),
+                )
+        }
         ToolInput::Fields(fields) => fields
             .first()
             .map_or_else(|| name.to_owned(), |(_, value)| first_line(value)),
@@ -265,6 +290,29 @@ mod tests {
             ),
             "Auth: JWT\nCache: Redis"
         );
+        let asked_only = |question: &str| Question {
+            question: Some(question.into()),
+            header: None,
+            multi_select: false,
+            options: Vec::new(),
+        };
+        assert_eq!(
+            answer(
+                &[asked_only("Which color?"), asked_only("Size")],
+                &[picks(&["Green"]), picks(&["Large"])]
+            ),
+            "Which color? Green\nSize: Large"
+        );
+    }
+
+    #[test]
+    fn an_option_is_recommended_only_by_its_closing_mark() {
+        let option = |label: &str| QuestionOption {
+            label: label.to_owned(),
+            description: None,
+        };
+        assert!(option("Postgres (Recommended) ").recommended());
+        assert!(!option("(Recommended) is not Postgres").recommended());
     }
 
     fn line(change: Change, text: &str) -> DiffLine {

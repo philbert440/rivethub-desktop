@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::prompt::SentFile;
 use crate::session::{Role, ToolCall, ToolState, Turn};
 use crate::tools::ToolInput;
+use crate::usage::Usage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
@@ -79,7 +80,7 @@ pub struct Exchange {
     pub answer: String,
     pub state: ExchangeState,
     pub model: Option<String>,
-    pub output_tokens: u64,
+    pub usage: Usage,
     /// When the person sent the prompt, in epoch milliseconds.
     pub asked_at_ms: Option<i64>,
     /// When the exchange began: the prompt, or for a reply that came without one its first turn.
@@ -97,7 +98,7 @@ impl Exchange {
             answer: String::new(),
             state: ExchangeState::Completed,
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             asked_at_ms,
             started_at_ms: asked_at_ms,
             ended_at_ms: None,
@@ -142,7 +143,7 @@ impl Exchange {
         if turn.model.is_some() {
             self.model.clone_from(&turn.model);
         }
-        self.output_tokens += turn.output_tokens;
+        self.usage += turn.usage;
         if !turn.thinking.trim().is_empty() {
             self.steps.push(Step::Thought(turn.thinking.clone()));
         }
@@ -181,7 +182,9 @@ impl Exchange {
     }
 }
 
-pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
+/// The transcript folded into exchanges. A prompt with no reply yet counts as running while the
+/// session is `busy`; once it isn't, it got none.
+pub fn exchanges(turns: &[Turn], live: Option<&Turn>, busy: bool) -> Vec<Exchange> {
     let mut out: Vec<Exchange> = Vec::new();
     for turn in turns.iter().chain(live) {
         match turn.role {
@@ -215,12 +218,13 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
         } else {
             last.state
         };
-        if last.state == ExchangeState::Completed && last.answer.is_empty() && last.prompt.is_some() {
-            last.state = if last.steps.is_empty() {
-                ExchangeState::Working
-            } else {
-                last.state
-            };
+        if busy
+            && last.state == ExchangeState::Completed
+            && last.answer.is_empty()
+            && last.prompt.is_some()
+            && last.steps.is_empty()
+        {
+            last.state = ExchangeState::Working;
         }
     }
     for exchange in &mut out {
@@ -232,6 +236,15 @@ pub fn exchanges(turns: &[Turn], live: Option<&Turn>) -> Vec<Exchange> {
         }
     }
     out
+}
+
+/// Everything the exchanges read and wrote.
+pub fn totals<'a>(exchanges: impl IntoIterator<Item = &'a Exchange>) -> Usage {
+    let mut usage = Usage::default();
+    for exchange in exchanges {
+        usage += exchange.usage;
+    }
+    usage
 }
 
 /// Whether a transcript that had `count` exchanges, the last in state `last`, moved on to where a
@@ -343,6 +356,7 @@ mod tests {
     use super::{ExchangeState, Step, arrived, elapsed, exchanges, group_summary, thought_summary};
     use crate::session::{Role, ToolCall, ToolState, Turn};
     use crate::tools::ToolInput;
+    use crate::usage::Usage;
 
     fn turn(role: Role, text: &str, tools: &[(&str, ToolState)]) -> Turn {
         Turn {
@@ -351,7 +365,7 @@ mod tests {
             text: text.into(),
             thinking: String::new(),
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             files: Vec::new(),
             started_at_ms: None,
             ended_at_ms: None,
@@ -381,7 +395,7 @@ mod tests {
             turn(Role::Assistant, "Fixed.", &[]),
             turn(Role::User, "thanks", &[]),
         ];
-        let folded = exchanges(&turns, None);
+        let folded = exchanges(&turns, None, true);
         assert_eq!(folded.len(), 2);
         assert_eq!(folded[0].answer, "Fixed.");
         assert_eq!(folded[0].tool_count(), 3);
@@ -394,7 +408,7 @@ mod tests {
     fn a_reply_that_ends_in_text_after_tools_is_the_answer() {
         let mut last = turn(Role::Assistant, "All done.", &[("Bash", ToolState::Done)]);
         last.ends_with_text = true;
-        let folded = exchanges(&[turn(Role::User, "go", &[]), last], None);
+        let folded = exchanges(&[turn(Role::User, "go", &[]), last], None, false);
         assert_eq!(folded[0].answer, "All done.");
         assert_eq!(folded[0].tool_count(), 1);
     }
@@ -406,7 +420,7 @@ mod tests {
             turn(Role::Assistant, "", &[("Bash", ToolState::Done)]),
             turn(Role::User, "[Request interrupted by user for tool use]", &[]),
         ];
-        let folded = exchanges(&turns, None);
+        let folded = exchanges(&turns, None, false);
         assert_eq!(folded.len(), 1);
         assert_eq!(folded[0].state, ExchangeState::Stopped);
     }
@@ -415,23 +429,37 @@ mod tests {
     fn a_live_turn_keeps_the_exchange_working() {
         let turns = [turn(Role::User, "go", &[])];
         let live = turn(Role::Assistant, "Partial", &[]);
-        let folded = exchanges(&turns, Some(&live));
+        let folded = exchanges(&turns, Some(&live), true);
         assert_eq!(folded[0].state, ExchangeState::Working);
         assert_eq!(folded[0].answer, "Partial");
     }
 
     #[test]
+    fn a_prompt_with_no_reply_is_running_only_while_the_session_is_busy() {
+        let asked = [turn(Role::User, "go", &[])];
+        let state = |busy| {
+            exchanges(&asked, None, busy)
+                .first()
+                .map(|exchange| exchange.state)
+        };
+        assert_eq!(state(true), Some(ExchangeState::Working));
+        assert_eq!(state(false), Some(ExchangeState::Completed));
+    }
+
+    #[test]
     fn a_send_or_a_finished_turn_is_an_arrival_but_streaming_is_not() {
-        let asked = exchanges(&[turn(Role::User, "go", &[])], None);
+        let asked = exchanges(&[turn(Role::User, "go", &[])], None, true);
         assert!(arrived(0, None, &asked));
         let streaming = exchanges(
             &[turn(Role::User, "go", &[])],
             Some(&turn(Role::Assistant, "Wor", &[])),
+            true,
         );
         assert!(!arrived(1, Some(ExchangeState::Working), &streaming));
         let done = exchanges(
             &[turn(Role::User, "go", &[]), turn(Role::Assistant, "Done.", &[])],
             None,
+            false,
         );
         assert!(arrived(1, Some(ExchangeState::Working), &done));
         assert!(!arrived(1, Some(ExchangeState::Completed), &done));
@@ -476,14 +504,15 @@ mod tests {
             timed(Role::Assistant, "Looking.", 3_000, 20_000),
             timed(Role::Assistant, "Done.", 21_000, 43_400),
         ];
-        let done = exchanges(&turns, None);
+        let done = exchanges(&turns, None, false);
         assert_eq!(done[0].took_ms(), Some(42_400));
         assert_eq!(done[0].verdict(), "Completed in 42s");
-        let running = exchanges(&turns[..1], Some(&turns[1]));
+        let running = exchanges(&turns[..1], Some(&turns[1]), true);
         assert_eq!(running[0].took_ms(), None);
         let untimed = exchanges(
             &[turn(Role::User, "go", &[]), turn(Role::Assistant, "ok", &[])],
             None,
+            false,
         );
         assert_eq!(untimed[0].verdict(), "Completed");
     }

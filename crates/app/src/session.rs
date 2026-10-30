@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use model::SessionId;
 use model::prompt::Prompt;
 use model::session::{Decision, SessionEvent, SessionView};
-use parking_lot::RwLock;
+use model::usage::{Pace, Stopwatch};
+use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 
@@ -18,7 +19,8 @@ enum Command {
     Send(Prompt),
     Answer(Prompt),
     Stop,
-    Unqueue(usize),
+    Steer(Prompt),
+    Unqueue(Prompt),
     Decide { request_id: String, decision: Decision },
 }
 
@@ -62,8 +64,20 @@ impl SessionHandle {
         self.queue.read().iter().cloned().collect()
     }
 
-    pub fn unqueue(&self, index: usize) {
-        let _ = self.commands.try_send(Command::Unqueue(index));
+    pub fn unqueue(&self, prompt: Prompt) {
+        let _ = self.commands.try_send(Command::Unqueue(prompt));
+    }
+
+    /// Hands a queued prompt to the turn that is running; with none running it goes as the next
+    /// turn.
+    pub fn steer(&self, prompt: Prompt) {
+        let _ = self.commands.try_send(Command::Steer(prompt));
+    }
+
+    /// Takes a queued prompt back out of the queue, to change before it goes; one already sent is
+    /// gone.
+    pub fn take_queued(&self, prompt: &Prompt) -> Option<Prompt> {
+        take(&self.queue, prompt)
     }
 
     pub fn decide(&self, request_id: String, decision: Decision) {
@@ -78,6 +92,8 @@ struct Actor {
     view: Arc<RwLock<SessionView>>,
     queue: Arc<RwLock<VecDeque<Prompt>>>,
     revision: watch::Sender<u64>,
+    stopwatch: Mutex<Stopwatch>,
+    clock: Instant,
 }
 
 impl Actor {
@@ -90,12 +106,41 @@ impl Actor {
     }
 
     async fn apply(&self, event: SessionEvent) {
-        let finished = event == SessionEvent::TurnComplete;
-        self.view.write().apply(event);
+        let finished = matches!(event, SessionEvent::TurnComplete(_));
+        let paced = self.time(&event);
+        {
+            let mut view = self.view.write();
+            if let Some(pace) = paced {
+                view.paced(pace);
+            }
+            view.apply(event);
+        }
         self.changed();
         if finished {
             self.drain().await;
         }
+    }
+
+    /// Times the model's share of the turn from the stream; the end of a turn yields its pace.
+    fn time(&self, event: &SessionEvent) -> Option<Pace> {
+        let at = self.now_ms();
+        let mut watch = self.stopwatch.lock();
+        match event {
+            SessionEvent::AssistantText(_)
+            | SessionEvent::Reasoning(_)
+            | SessionEvent::ToolFinished { .. }
+            | SessionEvent::ApprovalResolved { .. } => watch.resume(at),
+            SessionEvent::ToolStarted { .. } | SessionEvent::ApprovalRequested(_) => watch.pause(at),
+            SessionEvent::TurnComplete(usage) => {
+                return watch.stop(at, usage.map_or(0, |usage| usage.output));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     async fn drain(&self) {
@@ -116,7 +161,10 @@ impl Actor {
         };
         match outcome {
             Ok(()) => {
-                self.view.write().accepted();
+                let mut watch = Stopwatch::default();
+                watch.resume(self.now_ms());
+                *self.stopwatch.lock() = watch;
+                self.view.write().accepted(&prompt, epoch_ms());
                 self.changed();
             }
             Err(err) if err.is_turn_in_flight() => {
@@ -124,6 +172,35 @@ impl Actor {
                 self.changed();
             }
             Err(err) => self.fail(&err.to_string()),
+        }
+    }
+
+    async fn steer(&self, prompt: Prompt) -> Result<(), gateway::GatewayError> {
+        let Some(prompt) = take(&self.queue, &prompt) else {
+            return Ok(());
+        };
+        self.changed();
+        let steered = match self.gateway().await {
+            Ok(gateway) => gateway.steer(&self.id, &prompt).await,
+            Err(err) => Err(err),
+        };
+        match steered {
+            Ok(true) => {
+                self.view.write().steered(&prompt, epoch_ms());
+                self.changed();
+                Ok(())
+            }
+            Ok(false) => {
+                self.queue.write().push_front(prompt);
+                self.changed();
+                self.drain().await;
+                Ok(())
+            }
+            Err(err) => {
+                self.queue.write().push_front(prompt);
+                self.changed();
+                Err(err)
+            }
         }
     }
 
@@ -197,8 +274,9 @@ impl Actor {
                     Ok(())
                 }
             }
-            Command::Unqueue(index) => {
-                self.queue.write().remove(index);
+            Command::Steer(prompt) => self.steer(prompt).await,
+            Command::Unqueue(prompt) => {
+                take(&self.queue, &prompt);
                 self.changed();
                 Ok(())
             }
@@ -217,6 +295,19 @@ impl Actor {
     }
 }
 
+/// Takes `prompt` out of the queue where it sits now; one already sent is gone.
+fn take(queue: &RwLock<VecDeque<Prompt>>, prompt: &Prompt) -> Option<Prompt> {
+    let mut queue = queue.write();
+    let at = queue.iter().position(|queued| queued == prompt)?;
+    queue.remove(at)
+}
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+}
+
 pub fn spawn(runtime: &Handle, hub: crate::Hub, id: SessionId, node: Option<String>) -> SessionHandle {
     let view = Arc::new(RwLock::new(SessionView::default()));
     let queue = Arc::new(RwLock::new(VecDeque::new()));
@@ -229,6 +320,8 @@ pub fn spawn(runtime: &Handle, hub: crate::Hub, id: SessionId, node: Option<Stri
         view: Arc::clone(&view),
         queue: Arc::clone(&queue),
         revision: revision_tx,
+        stopwatch: Mutex::new(Stopwatch::default()),
+        clock: Instant::now(),
     };
     runtime.spawn(actor.run(commands_rx));
     SessionHandle {

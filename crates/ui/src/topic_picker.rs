@@ -24,6 +24,8 @@ pub struct TopicPicker {
     input: Entity<TextInput>,
     topics: Vec<Topic>,
     no_topic: Option<&'static str>,
+    creates: bool,
+    heading: Option<String>,
     _input: [Subscription; 2],
 }
 
@@ -38,8 +40,24 @@ impl TopicPicker {
             input,
             topics,
             no_topic,
+            creates: true,
+            heading: None,
             _input: [submitted, typed],
         }
+    }
+
+    /// A line above the field saying what the pick is for.
+    #[must_use]
+    pub fn headed(mut self, heading: String) -> Self {
+        self.heading = Some(heading);
+        self
+    }
+
+    /// Offers only the topics given, with no Create row: for picking an existing topic.
+    #[must_use]
+    pub fn without_create(mut self) -> Self {
+        self.creates = false;
+        self
     }
 
     /// Enter picks the first topic shown; with nothing shown it creates the typed name, and a
@@ -51,7 +69,8 @@ impl TopicPicker {
                 Some(_) => PickerEvent::NoTopic,
                 None => return,
             },
-            None => PickerEvent::Create(text.to_owned()),
+            None if self.creates => PickerEvent::Create(text.to_owned()),
+            None => return,
         };
         cx.emit(event);
     }
@@ -111,6 +130,14 @@ impl Render for TopicPicker {
             .flex()
             .flex_col()
             .gap_1()
+            .children(self.heading.clone().map(|heading| {
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(heading)
+            }))
             .child(
                 div()
                     .px_3()
@@ -123,7 +150,7 @@ impl Render for TopicPicker {
             .when_some(self.no_topic.filter(|_| typed.is_empty()), |list, label| {
                 list.child(Self::row(("none", 0), label.to_owned(), cx, PickerEvent::NoTopic))
             })
-            .when(!typed.trim().is_empty() && !exact, |list| {
+            .when(self.creates && !typed.trim().is_empty() && !exact, |list| {
                 list.child(Self::row(
                     ("create", 0),
                     format!("Create topic “{typed}”"),

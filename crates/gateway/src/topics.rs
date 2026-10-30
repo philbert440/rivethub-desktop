@@ -1,10 +1,12 @@
 use model::decisions::Decision;
-use model::topics::{Suggestion, Topic};
+use model::preview::{StartupPart, StartupPreview};
+use model::topics::{Directory, HistoryMarks, Suggestion, Topic};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded, DecisionUpdate, PlacementReply,
-    PlacementRequest, TopicCreateRequest, TopicDecision, TopicDecisionList, TopicList, TopicRecord,
-    TopicSessionList,
+    PlacementRequest, SessionHistoryList, SessionHistoryMark, StartupContext, TopicCreateRequest,
+    TopicDecision, TopicDecisionList, TopicDirectory, TopicList, TopicMergeRequest, TopicRecord,
+    TopicSessionList, TopicUpdate,
 };
 
 use crate::{Gateway, GatewayError, translate};
@@ -16,6 +18,12 @@ fn topic(record: TopicRecord, last_active_ms: Option<i64>) -> Topic {
         name: record.name,
         parent: record.parent.map(TopicId::new),
         last_active_ms,
+        updated_ms: record.updated_at.timestamp_millis(),
+        closed_ms: record.closed_at.map(|at| at.timestamp_millis()),
+        directory: record.directory.map(|directory| match directory {
+            TopicDirectory::Local { node, path } => Directory::Local { node, path },
+            TopicDirectory::Shared { path } => Directory::Shared { path },
+        }),
     }
 }
 
@@ -57,15 +65,17 @@ impl Gateway {
             .collect())
     }
 
-    pub async fn create_topic(&self, name: &str) -> Result<Topic, GatewayError> {
+    /// Creates a topic, under `parent` when given. rh's refusals (a name taken, too deep) come back
+    /// as `Conflict` carrying rh's own message.
+    pub async fn create_topic(&self, name: &str, parent: Option<&TopicId>) -> Result<Topic, GatewayError> {
         let url = self.api_url(&["api", "topics"])?;
         let body = TopicCreateRequest {
             name: name.to_owned(),
             aliases: Vec::new(),
-            parent: None,
+            parent: parent.map(|parent| parent.as_str().to_owned()),
             directory: None,
         };
-        let created: TopicRecord = Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
+        let created: TopicRecord = Self::refusable(self.http.post(url).json(&body).send().await).await?;
         Ok(topic(created, None))
     }
 
@@ -96,6 +106,112 @@ impl Gateway {
         Ok(())
     }
 
+    pub async fn rename_topic(&self, topic: &TopicId, name: &str) -> Result<(), GatewayError> {
+        self.update_topic(
+            topic,
+            TopicUpdate {
+                name: Some(name.to_owned()),
+                ..TopicUpdate::default()
+            },
+        )
+        .await
+    }
+
+    /// Moves a topic under `parent`, or to the top level when there is none. rh nests one level
+    /// deep, so a subtopic can't take subtopics and a topic with subtopics can't move under another.
+    pub async fn move_topic(&self, topic: &TopicId, parent: Option<&TopicId>) -> Result<(), GatewayError> {
+        self.update_topic(
+            topic,
+            TopicUpdate {
+                parent: Some(parent.map(|parent| parent.as_str().to_owned())),
+                ..TopicUpdate::default()
+            },
+        )
+        .await
+    }
+
+    async fn update_topic(&self, topic: &TopicId, update: TopicUpdate) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str()])?;
+        let _: TopicRecord = Self::refusable(self.http.patch(url).json(&update).send().await).await?;
+        Ok(())
+    }
+
+    /// Merges a topic into another: its sessions, subtopics and names move there, and its old
+    /// address redirects to it.
+    pub async fn merge_topic(&self, topic: &TopicId, into: &TopicId) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "merge"])?;
+        let body = TopicMergeRequest {
+            into: into.as_str().to_owned(),
+        };
+        let _: TopicRecord = Self::refusable(self.http.post(url).json(&body).send().await).await?;
+        Ok(())
+    }
+
+    /// Closes a topic you're done with; it is past until one of its sessions is active again.
+    pub async fn close_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
+        self.post_topic(topic, "close").await
+    }
+
+    pub async fn reopen_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
+        self.post_topic(topic, "reopen").await
+    }
+
+    async fn post_topic(&self, topic: &TopicId, verb: &str) -> Result<(), GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), verb])?;
+        let _: TopicRecord = Self::read_json(self.http.post(url).send().await)?.await?;
+        Ok(())
+    }
+
+    /// When each session was marked as history.
+    pub async fn history_marks(&self) -> Result<HistoryMarks, GatewayError> {
+        let url = self.api_url(&["api", "sessions", "history"])?;
+        let list: SessionHistoryList = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(list
+            .sessions
+            .iter()
+            .map(|mark| {
+                (
+                    translate::session(&mark.session_id),
+                    mark.marked_at.timestamp_millis(),
+                )
+            })
+            .collect())
+    }
+
+    /// Marks a session as history: it leaves its topic's active sessions until it is active again.
+    pub async fn mark_history(&self, session: &SessionId) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "history"])?;
+        let _: SessionHistoryMark = Self::read_json(self.http.put(url).send().await)?.await?;
+        Ok(())
+    }
+
+    pub async fn unmark_history(&self, session: &SessionId) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "history"])?;
+        Self::check(self.http.delete(url).send().await.map_err(GatewayError::Http)?)
+            .await
+            .map(drop)
+    }
+
+    /// What a session started in the topic right now would be told; rh answers 503 when startup
+    /// memory isn't set up on the node.
+    pub async fn topic_startup(&self, topic: &TopicId) -> Result<StartupPreview, GatewayError> {
+        let url = self.api_url(&["api", "topics", topic.as_str(), "startup"])?;
+        let context: StartupContext = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(StartupPreview {
+            sections: context
+                .sections
+                .into_iter()
+                .map(|section| StartupPart {
+                    title: section.title,
+                    text: section.text,
+                })
+                .collect(),
+            tokens: context.tokens,
+        })
+    }
+
     /// The topic's own decisions, oldest first.
     pub async fn decisions(&self, topic: &TopicId) -> Result<Vec<Decision>, GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str(), "decisions"])?;
@@ -109,7 +225,7 @@ impl Gateway {
             text: text.to_owned(),
             session_id: None,
         };
-        let added: TopicDecision = Self::decided(self.http.post(url).json(&body).send().await).await?;
+        let added: TopicDecision = Self::refusable(self.http.post(url).json(&body).send().await).await?;
         Ok(translate::decision(added))
     }
 
@@ -123,7 +239,7 @@ impl Gateway {
         let body = DecisionUpdate {
             text: text.to_owned(),
         };
-        let edited: TopicDecision = Self::decided(self.http.patch(url).json(&body).send().await).await?;
+        let edited: TopicDecision = Self::refusable(self.http.patch(url).json(&body).send().await).await?;
         Ok(translate::decision(edited))
     }
 
@@ -146,13 +262,14 @@ impl Gateway {
             text: text.map(str::to_owned),
             session_id: None,
         };
-        let _: DecisionSuperseded = Self::decided(self.http.post(url).json(&body).send().await).await?;
+        let _: DecisionSuperseded = Self::refusable(self.http.post(url).json(&body).send().await).await?;
         Ok(())
     }
 
-    /// A decision write's reply. rh answers 409 for a decision already superseded and 400 for empty
-    /// text, and both come back as `Conflict` carrying rh's own message.
-    async fn decided<T: serde::de::DeserializeOwned>(
+    /// A topic or decision write's reply. rh's refusals (400 and 409: a name already taken, a
+    /// subtopic given subtopics, a decision already superseded, empty text) come back as
+    /// `Conflict` carrying rh's own message.
+    async fn refusable<T: serde::de::DeserializeOwned>(
         sent: Result<reqwest::Response, reqwest::Error>,
     ) -> Result<T, GatewayError> {
         match Self::read_json(sent)?.await {
@@ -164,8 +281,8 @@ impl Gateway {
         }
     }
 
-    /// Deletes a topic; its sessions go back to Forming. rh refuses category topics and topics
-    /// with child topics, and that refusal comes back as `Conflict` carrying rh's own message.
+    /// Deletes a topic; its sessions go back to Uncategorized. rh refuses category topics and topics
+    /// with subtopics, and that refusal comes back as `Conflict` carrying rh's own message.
     pub async fn delete_topic(&self, topic: &TopicId) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str()])?;
         let reply = self.http.delete(url).send().await.map_err(GatewayError::Http)?;

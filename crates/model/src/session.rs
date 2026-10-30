@@ -1,6 +1,8 @@
 use crate::SessionId;
-use crate::prompt::SentFile;
+use crate::plan::Plan;
+use crate::prompt::{Prompt, SentFile};
 use crate::tools::{Question, ToolInput, ToolOutput};
+use crate::usage::{Pace, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -32,7 +34,7 @@ pub struct Turn {
     pub tools: Vec<ToolCall>,
     pub ends_with_text: bool,
     pub model: Option<String>,
-    pub output_tokens: u64,
+    pub usage: Usage,
     pub files: Vec<SentFile>,
     /// When the turn began and ended, in epoch milliseconds, where the harness recorded it.
     pub started_at_ms: Option<i64>,
@@ -48,7 +50,7 @@ impl Turn {
             tools: Vec::new(),
             ends_with_text: false,
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             files: Vec::new(),
             started_at_ms: None,
             ended_at_ms: None,
@@ -194,7 +196,10 @@ pub enum SessionEvent {
     ApprovalResolved {
         request_id: String,
     },
-    TurnComplete,
+    /// The agent's to-do list, whole, each time it changes.
+    Plan(Plan),
+    /// The turn ended, with the tokens it used when the harness reported them.
+    TurnComplete(Option<Usage>),
     Activity(Activity),
     Error(String),
 }
@@ -207,13 +212,33 @@ pub struct SessionView {
     context: Option<ContextUsage>,
     activity: Activity,
     error: Option<String>,
+    paced: Pace,
+    plan: Plan,
 }
 
 impl SessionView {
+    /// A turn streamed here wrote at this pace.
+    pub fn paced(&mut self, pace: Pace) {
+        self.paced += pace;
+    }
+
+    /// How fast the turns streamed here wrote, all told.
+    pub fn pace(&self) -> Pace {
+        self.paced
+    }
+
+    /// The to-do list the agent last sent while streaming here.
+    pub fn plan(&self) -> &Plan {
+        &self.plan
+    }
+
     pub fn apply(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::Snapshot { mut turns, context } => {
                 self.keep_outputs(&mut turns);
+                if let Some(plan) = written_plan(&turns) {
+                    self.plan = plan;
+                }
                 self.turns = turns;
                 self.live = None;
                 if context.is_some() {
@@ -222,12 +247,20 @@ impl SessionView {
             }
             SessionEvent::AssistantText(text) => {
                 let turn = self.live_turn();
+                if !turn.ends_with_text && !turn.tools.is_empty() && !turn.text.is_empty() {
+                    turn.text.push_str("\n\n");
+                }
                 turn.text.push_str(&text);
                 turn.ends_with_text = true;
             }
             SessionEvent::Reasoning(text) => self.live_turn().thinking.push_str(&text),
             SessionEvent::ToolStarted { id, name, input } => {
-                self.live_turn().tools.push(ToolCall {
+                if let ToolInput::Todos(todos) = &input {
+                    self.plan.revise(todos);
+                }
+                let turn = self.live_turn();
+                turn.ends_with_text = false;
+                turn.tools.push(ToolCall {
                     id: Some(id),
                     name,
                     state: ToolState::Running,
@@ -258,12 +291,13 @@ impl SessionView {
             SessionEvent::ApprovalResolved { request_id } => {
                 self.approvals.retain(|pending| pending.request_id != request_id);
             }
-            SessionEvent::TurnComplete => {
+            SessionEvent::TurnComplete(_) => {
                 if let Some(turn) = self.live.take() {
                     self.turns.push(turn);
                 }
                 self.activity = Activity::Idle;
             }
+            SessionEvent::Plan(plan) => self.plan = plan,
             SessionEvent::Activity(activity) => self.activity = activity,
             SessionEvent::Error(message) => self.error = Some(message),
         }
@@ -276,9 +310,40 @@ impl SessionView {
         self.error = None;
     }
 
-    /// A turn went through, so an earlier failure no longer stands.
-    pub fn accepted(&mut self) {
+    /// The running turn took `prompt` as it went: the reply so far stays above it and goes on
+    /// below it.
+    pub fn steered(&mut self, prompt: &Prompt, at_ms: i64) {
+        if let Some(turn) = self.live.take() {
+            self.turns.push(turn);
+        }
+        self.accepted(prompt, at_ms);
+    }
+
+    /// The harness took `prompt` at `at_ms`: it shows as sent until a transcript that records it
+    /// arrives, and an earlier failure no longer stands.
+    pub fn accepted(&mut self, prompt: &Prompt, at_ms: i64) {
         self.error = None;
+        self.activity = Activity::Working;
+        self.turns.push(Turn {
+            role: Role::User,
+            text: prompt.text.clone(),
+            thinking: String::new(),
+            tools: Vec::new(),
+            ends_with_text: true,
+            model: None,
+            usage: Usage::default(),
+            files: prompt
+                .attachments
+                .iter()
+                .map(|attachment| SentFile {
+                    media_type: attachment.media_type.clone(),
+                    name: Some(attachment.name.clone()),
+                    upload: None,
+                })
+                .collect(),
+            started_at_ms: Some(at_ms),
+            ended_at_ms: Some(at_ms),
+        });
     }
 
     fn live_turn(&mut self) -> &mut Turn {
@@ -357,10 +422,28 @@ impl SessionView {
     }
 }
 
+/// The plan the todo tool calls in `turns` add up to, when the agent made any.
+fn written_plan(turns: &[Turn]) -> Option<Plan> {
+    turns
+        .iter()
+        .flat_map(|turn| &turn.tools)
+        .fold(None, |plan: Option<Plan>, tool| match &tool.input {
+            ToolInput::Todos(todos) => {
+                let mut plan = plan.unwrap_or_default();
+                plan.revise(todos);
+                Some(plan)
+            }
+            _ => plan,
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolState, Turn};
+    use super::{Activity, Approval, Role, SessionEvent, SessionView, ToolCall, ToolState, Turn};
+    use crate::plan::{StepStatus, Todo, Todos};
+    use crate::prompt::Prompt;
     use crate::tools::{ToolInput, ToolOutput};
+    use crate::usage::Usage;
 
     fn said(role: Role, text: &str) -> Turn {
         Turn {
@@ -370,11 +453,99 @@ mod tests {
             tools: Vec::new(),
             ends_with_text: true,
             model: None,
-            output_tokens: 0,
+            usage: Usage::default(),
             files: Vec::new(),
             started_at_ms: None,
             ended_at_ms: None,
         }
+    }
+
+    #[test]
+    fn a_taken_prompt_shows_until_the_transcript_that_records_it_arrives() {
+        let mut view = SessionView::default();
+        view.accepted(&Prompt::new("hi"), 1);
+        let texts = |view: &SessionView| {
+            view.turns()
+                .iter()
+                .map(|turn| turn.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&view), ["hi"]);
+        view.apply(SessionEvent::Snapshot {
+            turns: vec![said(Role::User, "hi"), said(Role::Assistant, "hello")],
+            context: None,
+        });
+        assert_eq!(texts(&view), ["hi", "hello"]);
+    }
+
+    #[test]
+    fn a_steered_prompt_lands_between_the_reply_so_far_and_the_rest() {
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::AssistantText("Looking".into()));
+        view.steered(&Prompt::new("use ripgrep"), 1);
+        view.apply(SessionEvent::AssistantText("Using rg".into()));
+        let texts: Vec<&str> = view
+            .turns()
+            .iter()
+            .chain(view.live())
+            .map(|turn| turn.text.as_str())
+            .collect();
+        assert_eq!(texts, ["Looking", "use ripgrep", "Using rg"]);
+    }
+
+    #[test]
+    fn a_todo_tool_keeps_the_plan_and_a_reopened_transcript_rebuilds_it() {
+        let todos = |status| {
+            ToolInput::Todos(Todos {
+                items: vec![Todo {
+                    id: None,
+                    content: "test".into(),
+                    status: Some(status),
+                }],
+                merge: false,
+            })
+        };
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::ToolStarted {
+            id: "t1".into(),
+            name: "todo_write".into(),
+            input: todos(StepStatus::InProgress),
+        });
+        assert_eq!(
+            view.plan().current().map(|step| step.content.as_str()),
+            Some("test")
+        );
+        let mut done = said(Role::Assistant, "");
+        done.tools.push(ToolCall {
+            id: Some("t2".into()),
+            name: "todo_write".into(),
+            state: ToolState::Done,
+            input: todos(StepStatus::Completed),
+            output: None,
+        });
+        let mut reopened = SessionView::default();
+        reopened.apply(SessionEvent::Snapshot {
+            turns: vec![done],
+            context: None,
+        });
+        assert_eq!(reopened.plan().done(), 1);
+        assert!(reopened.plan().finished());
+    }
+
+    #[test]
+    fn text_after_tools_starts_a_paragraph_as_the_transcript_joins_it() {
+        let mut view = SessionView::default();
+        view.apply(SessionEvent::AssistantText("Starting.".into()));
+        view.apply(SessionEvent::ToolStarted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            input: ToolInput::Unknown,
+        });
+        view.apply(SessionEvent::AssistantText("One.".into()));
+        assert_eq!(
+            view.live().map(|turn| turn.text.as_str()),
+            Some("Starting.\n\nOne.")
+        );
     }
 
     #[test]
@@ -419,7 +590,7 @@ mod tests {
     fn snapshot_after_turn_complete_never_duplicates_the_turn() {
         let mut view = SessionView::default();
         view.apply(SessionEvent::AssistantText("Done.".into()));
-        view.apply(SessionEvent::TurnComplete);
+        view.apply(SessionEvent::TurnComplete(None));
         assert_eq!(view.turns().len(), 1);
         let turns = vec![said(Role::User, "go"), said(Role::Assistant, "Done.")];
         view.apply(SessionEvent::Snapshot {
@@ -463,7 +634,7 @@ mod tests {
             input: ToolInput::Ask(vec![question]),
         });
         view.apply(SessionEvent::AssistantText("Pick one.".into()));
-        view.apply(SessionEvent::TurnComplete);
+        view.apply(SessionEvent::TurnComplete(None));
         assert!(view.open_questions().is_some());
         let mut turns = view.turns().to_vec();
         turns.push(said(Role::User, "Which"));

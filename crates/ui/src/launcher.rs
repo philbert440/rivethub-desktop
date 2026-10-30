@@ -4,15 +4,20 @@ use gpui::{
     SharedString, Styled, Subscription, Window, div, prelude::*, px, rgb,
 };
 use model::agents::Agent;
-use model::harness::HarnessOffer;
+use model::harness::{HarnessOffer, ModelChoice};
 use model::prefs::LastLaunch;
 use model::topics::Topic;
 use model::{HarnessId, TopicId};
 
+use crate::input::{Submitted, TextInput};
 use crate::theme::Theme;
 use crate::topic_picker::{PickerEvent, TopicPicker};
 
 const DEFAULT_HARNESS: &str = "claude-code";
+/// A harness offering more models than this finds them as you type instead of listing them all.
+const LISTED_MODELS: usize = 20;
+/// How many models the finder shows for what was typed.
+const FOUND_MODELS: usize = 12;
 
 /// What a new session runs: one of your agents on its own node, or a harness on a chosen node
 /// (`None` is this client's node) with a model.
@@ -28,7 +33,7 @@ pub enum Choice {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Forming,
+    Uncategorized,
     In(TopicId),
     New(String),
 }
@@ -59,6 +64,7 @@ pub struct Launcher {
     last: Option<LastLaunch>,
     preset: Option<(TopicId, String)>,
     picker: Entity<TopicPicker>,
+    find_model: Entity<TextInput>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -76,13 +82,18 @@ impl Launcher {
             let target = match event {
                 PickerEvent::Chose(topic) => Target::In(topic.clone()),
                 PickerEvent::Create(name) => Target::New(name.clone()),
-                PickerEvent::NoTopic => Target::Forming,
+                PickerEvent::NoTopic => Target::Uncategorized,
                 PickerEvent::Dismissed => {
                     cx.emit(LauncherEvent::Dismissed);
                     return;
                 }
             };
             this.start(target, cx);
+        });
+        let find_model = cx.new(|cx| TextInput::new("Type to find a model", cx));
+        let typed = cx.observe(&find_model, |_, _, cx| cx.notify());
+        let found = cx.subscribe(&find_model, |this, _, Submitted(typed), cx| {
+            this.pick_first_model(typed, cx);
         });
         let last = hub.preferences().last_launch;
         let away = match &last {
@@ -125,7 +136,8 @@ impl Launcher {
             last,
             preset,
             picker,
-            _subscriptions: vec![choose_topic],
+            find_model,
+            _subscriptions: vec![choose_topic, typed, found],
         }
     }
 
@@ -289,8 +301,12 @@ impl Launcher {
             })
     }
 
-    fn label(text: &'static str) -> impl IntoElement {
-        div().px_1().text_xs().text_color(Theme::ink_dim()).child(text)
+    fn label(text: impl Into<SharedString>) -> impl IntoElement {
+        div()
+            .px_1()
+            .text_xs()
+            .text_color(Theme::ink_dim())
+            .child(text.into())
     }
 
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -325,6 +341,7 @@ impl Launcher {
             Self::chip(("launch-harness", index), selected)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.choice = Some(pick.clone());
+                    this.find_model.update(cx, |input, cx| input.set_text("", cx));
                     cx.notify();
                 }))
                 .child(offer.id.display_name().to_owned())
@@ -372,6 +389,8 @@ impl Launcher {
             .into_any_element()
     }
 
+    /// The harness's models as chips. A long list shows the chosen one and finds the rest as you
+    /// type, a few at a time.
     fn models(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let Some(Choice::Harness { node, harness, model }) = &self.choice else {
             return None;
@@ -380,8 +399,25 @@ impl Launcher {
         if offer.models.is_empty() {
             return None;
         }
-        let chips = offer.models.iter().enumerate().map(|(index, choice)| {
-            let selected = model.as_deref() == Some(choice.id.as_str());
+        let long = offer.models.len() > LISTED_MODELS;
+        let typed = self.find_model.read(cx).text().trim().to_owned();
+        let chosen = |choice: &&ModelChoice| model.as_deref() == Some(choice.id.as_str());
+        let (shown, hint): (Vec<&ModelChoice>, Option<String>) = match (long, typed.is_empty()) {
+            (false, _) => (offer.models.iter().collect(), None),
+            (true, true) => (offer.models.iter().filter(chosen).collect(), None),
+            (true, false) => {
+                let (found, more) = offer.suggest_models(&typed, FOUND_MODELS);
+                let hint = match (found.is_empty(), more) {
+                    (true, _) => Some(format!("No model matches “{typed}”")),
+                    (false, 0) => None,
+                    (false, more) => Some(format!("{more} more match, keep typing")),
+                };
+                let others = found.into_iter().filter(|choice| !chosen(choice));
+                (offer.models.iter().filter(chosen).chain(others).collect(), hint)
+            }
+        };
+        let chips = shown.into_iter().enumerate().map(|(index, choice)| {
+            let selected = chosen(&choice);
             let node = node.clone();
             let harness = harness.clone();
             let id = choice.id.clone();
@@ -392,18 +428,61 @@ impl Launcher {
                         harness: harness.clone(),
                         model: Some(id.clone()),
                     });
+                    this.find_model.update(cx, |input, cx| input.set_text("", cx));
                     cx.notify();
                 }))
                 .child(choice.label.clone())
         });
+        let label = if long {
+            format!("Model · {} offered", offer.models.len())
+        } else {
+            "Model".to_owned()
+        };
         Some(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(Self::label("Model"))
-                .child(div().flex().flex_wrap().gap(px(6.)).children(chips)),
+                .child(Self::label(label))
+                .when(long, |list| {
+                    list.child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded(px(10.))
+                            .bg(Theme::card())
+                            .child(self.find_model.clone()),
+                    )
+                })
+                .child(div().flex().flex_wrap().gap(px(6.)).children(chips))
+                .children(hint.map(|hint| div().px_1().text_xs().text_color(Theme::ink_dim()).child(hint))),
         )
+    }
+
+    /// Enter in the model finder picks its first match.
+    fn pick_first_model(&mut self, typed: &str, cx: &mut Context<Self>) {
+        let Some(Choice::Harness { node, harness, .. }) = self.choice.clone() else {
+            return;
+        };
+        let first = self
+            .offers()
+            .iter()
+            .find(|offer| offer.id == harness)
+            .and_then(|offer| {
+                offer
+                    .suggest_models(typed, 1)
+                    .0
+                    .first()
+                    .map(|choice| choice.id.clone())
+            });
+        if let Some(model) = first {
+            self.choice = Some(Choice::Harness {
+                node,
+                harness,
+                model: Some(model),
+            });
+            cx.notify();
+        }
     }
 
     fn topic(&self, cx: &mut Context<Self>) -> impl IntoElement {

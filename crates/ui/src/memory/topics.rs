@@ -9,7 +9,7 @@ use model::wiki::{Page, loose, readable, section, without_decisions};
 use super::{MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
 use crate::menu::{Menu, MenuEvent, OpenMenu};
-use crate::text::{ago, now_ms};
+use crate::text::{ago, ago_phrase, now_ms};
 use crate::theme::Theme;
 
 const LIST_WIDTH: f32 = 300.;
@@ -90,6 +90,7 @@ impl MemoryPage {
         if !same_page {
             self.decisions = None;
             self.deciding = None;
+            self.all_sessions = false;
         }
         if let Some(root) = root.clone() {
             self.load_decisions(root, cx);
@@ -143,7 +144,15 @@ impl MemoryPage {
                     this.topic_deleted(topic, cx);
                     cx.emit(MemoryEvent::TopicDeleted(topic.clone()));
                 }
-                MenuEvent::ViewInMemory(_) | MenuEvent::Closed => {}
+                MenuEvent::ViewInMemory(_)
+                | MenuEvent::Filed
+                | MenuEvent::Rename(_)
+                | MenuEvent::MoveInto(_)
+                | MenuEvent::MergeInto(_)
+                | MenuEvent::Open(_)
+                | MenuEvent::MoveSession(_)
+                | MenuEvent::Unplace(_)
+                | MenuEvent::Closed => {}
             }
             cx.notify();
         });
@@ -360,10 +369,13 @@ impl MemoryPage {
                     window,
                 );
                 head.child(
-                    div()
-                        .text_2xl()
-                        .text_color(Theme::ink())
-                        .child(read.page.title.clone()),
+                    self.beside_workspace_button(
+                        div()
+                            .text_2xl()
+                            .text_color(Theme::ink())
+                            .child(read.page.title.clone()),
+                        cx,
+                    ),
                 )
                 .child(
                     div()
@@ -385,9 +397,10 @@ impl MemoryPage {
                         .child(
                             div()
                                 .text_color(Theme::ink_dim())
-                                .child(format!("updated {} ago", ago(now_ms(), read.page.updated_ms))),
+                                .child(format!("updated {}", ago_phrase(now_ms(), read.page.updated_ms))),
                         ),
                 )
+                .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx))
                 .when(read.blocks.is_empty(), |head| {
                     head.child(
@@ -400,10 +413,14 @@ impl MemoryPage {
             }
             (Some(Opened::Topic(_)), None) if self.library.is_some() => head
                 .child(
-                    div()
-                        .text_color(Theme::ink_dim())
-                        .child("Memory hasn't started this topic's page yet."),
+                    self.beside_workspace_button(
+                        div()
+                            .text_color(Theme::ink_dim())
+                            .child("Memory hasn't started this topic's page yet."),
+                        cx,
+                    ),
                 )
+                .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx)),
             (Some(_), None) => head.child(div().text_color(Theme::ink_dim()).child("Loading…")),
             (None, None) => head.child(

@@ -32,11 +32,9 @@ impl HarnessId {
             "grok-build" => "Grok",
             "codex" => "Codex",
             "kimi-code" => "Kimi",
-            "qwen-code" => "Qwen",
             "hermes" => "Hermes",
             "opencode" => "opencode",
             "cursor" => "Cursor",
-            "pi" => "Pi",
             other => other,
         }
     }
