@@ -2724,7 +2724,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -7604,7 +7604,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=a775ce7882292f848e9343f3788d24d586bf6e23#a775ce7882292f848e9343f3788d24d586bf6e23"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=c43c759ec357d80c905c52b3bda3d065f4a0dd46#c43c759ec357d80c905c52b3bda3d065f4a0dd46"
 dependencies = [
  "base64 0.22.1",
  "chrono",
