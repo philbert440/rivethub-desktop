@@ -27,7 +27,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "d898e88d271aa8ca956cde066bfd40438004bc35" }
+wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "3dc64cbd7d9885f69e5003fc6264d9a1cdea2792" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pki-types = "1"
@@ -60,8 +60,3 @@ missing_panics_doc = "allow"
 lto = "thin"
 codegen-units = 1
 
-
-# Local development only: the driver event lives on rh branch feat/view-sync. Repin `wire` above to
-# that branch's merged rev and drop this patch before any PR.
-[patch."https://github.com/philbert440/rivethub-runtime"]
-wire = { path = "/home/phil/work/rh-viewsync/crates/wire" }

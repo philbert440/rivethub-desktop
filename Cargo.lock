@@ -7604,6 +7604,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.7.0"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=3dc64cbd7d9885f69e5003fc6264d9a1cdea2792#3dc64cbd7d9885f69e5003fc6264d9a1cdea2792"
 dependencies = [
  "base64 0.22.1",
  "chrono",
