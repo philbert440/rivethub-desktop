@@ -49,6 +49,15 @@ impl Gateway {
         }
     }
 
+    /// Keeps the session out of this node's trash review until it is used again.
+    pub async fn keep_session(&self, session: &SessionId) -> Result<(), GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = self.api_url(&["api", "sessions", &segment, "keep"])?;
+        Self::check(self.http.put(url).send().await.map_err(GatewayError::Http)?)
+            .await
+            .map(drop)
+    }
+
     /// Deletes what memory holds of each session and hides it from the lists until it is used
     /// again, saying what became of each. One session's refusal never stops the others.
     pub async fn delete_sessions(

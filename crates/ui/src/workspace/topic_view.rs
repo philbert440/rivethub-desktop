@@ -128,6 +128,7 @@ impl Workspace {
                     .items_center()
                     .gap_3()
                     .child(title)
+                    .children(self.topic_glyph(step))
                     .child(
                         div()
                             .id("topic-rename")

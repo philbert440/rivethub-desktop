@@ -1,12 +1,14 @@
 mod chat;
 mod error;
 mod events;
+mod flagged;
 mod memory;
 mod pairing;
 mod plugins;
 mod previews;
 mod socket;
 mod tasks;
+mod tenancy;
 mod terminal;
 mod tidy;
 mod tls;
@@ -18,6 +20,7 @@ mod trash;
 pub use chat::SessionStream;
 pub use error::GatewayError;
 pub use events::{PluginEvent, WorkspaceEvent};
+pub use plugins::panel;
 pub use terminal::{TermInput, TermOutput, TerminalStream};
 pub use tls::certificates;
 
@@ -338,6 +341,15 @@ impl Gateway {
         let renamed: wire::harness::HarnessSessionSummary =
             Self::read_json(self.http.put(url).json(&Retitle { title }).send().await)?.await?;
         Ok(translate::summary(renamed))
+    }
+
+    /// The session's transcript as its node reads it now.
+    pub async fn transcript(&self, session: &SessionId) -> Result<Vec<model::session::Turn>, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = format!("{}/api/harness-sessions/{segment}/transcript", self.base_url);
+        let read: wire::gateway::sessions::HarnessSessionTranscriptResponse =
+            Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::transcript(read.turns))
     }
 
     /// Starts a new chat that carries this session's conversation up to the reply to its

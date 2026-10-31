@@ -19,17 +19,69 @@ pub fn ghost() -> Arc<Image> {
     Arc::clone(&GHOST)
 }
 
+/// The app's fonts, which it draws with and hands its plug-ins' web panels.
+pub const FACES: [webview::Face; 8] = [
+    face(
+        "Roboto Flex",
+        400,
+        false,
+        include_bytes!("../assets/fonts/RobotoFlex-400.ttf"),
+    ),
+    face(
+        "Roboto Flex",
+        500,
+        false,
+        include_bytes!("../assets/fonts/RobotoFlex-500.ttf"),
+    ),
+    face(
+        "Roboto Flex",
+        600,
+        false,
+        include_bytes!("../assets/fonts/RobotoFlex-600.ttf"),
+    ),
+    face(
+        "Roboto Flex",
+        700,
+        false,
+        include_bytes!("../assets/fonts/RobotoFlex-700.ttf"),
+    ),
+    face(
+        "JetBrains Mono",
+        400,
+        false,
+        include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+    ),
+    face(
+        "JetBrains Mono",
+        600,
+        false,
+        include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf"),
+    ),
+    face(
+        "JetBrains Mono",
+        700,
+        false,
+        include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+    ),
+    face(
+        "JetBrains Mono",
+        400,
+        true,
+        include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
+    ),
+];
+
+const fn face(family: &'static str, weight: u16, italic: bool, data: &'static [u8]) -> webview::Face {
+    webview::Face {
+        family,
+        weight,
+        italic,
+        data,
+    }
+}
+
 pub fn fonts() -> Vec<Cow<'static, [u8]>> {
-    vec![
-        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-400.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-500.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-600.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/RobotoFlex-700.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf").as_slice()),
-    ]
+    FACES.iter().map(|face| Cow::Borrowed(face.data)).collect()
 }
 
 pub struct Icons;

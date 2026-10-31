@@ -1,6 +1,12 @@
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream};
+mod stream;
+
+pub use stream::Parsed;
+
+use pulldown_cmark::{
+    CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd, TextMergeStream,
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Marks {
@@ -15,6 +21,8 @@ pub struct Run {
     pub marks: Marks,
     pub code: bool,
     pub link: Option<String>,
+    /// The wiki page a `[[slug]]` link names, in a page parsed with `parse_page`.
+    pub page: Option<String>,
 }
 
 impl Run {
@@ -59,7 +67,22 @@ struct Style {
     bold: usize,
     italic: usize,
     strike: usize,
-    link: Vec<String>,
+    link: Vec<Target>,
+}
+
+/// Where a link goes: an address, or a wiki page by its slug.
+#[derive(Clone)]
+enum Target {
+    Url(String),
+    Page(String),
+}
+
+fn target(kind: LinkType, url: String) -> Target {
+    if matches!(kind, LinkType::WikiLink { .. }) {
+        Target::Page(url)
+    } else {
+        Target::Url(url)
+    }
 }
 
 enum Frame {
@@ -109,24 +132,33 @@ impl Builder {
         if self.runs().is_none() {
             self.stack.push(Frame::Paragraph(Vec::new()));
         }
-        let link = self.style.link.last().cloned();
-        if code || link.is_some() {
-            self.push_run(text, code, link);
+        let target = self.style.link.last().cloned();
+        if code || target.is_some() {
+            self.push_run(text, code, target);
             return;
         }
         let mut from = 0;
         for url in bare_links(text) {
             self.push_run(&text[from..url.start], false, None);
-            self.push_run(&text[url.clone()], false, Some(text[url.clone()].to_owned()));
+            self.push_run(
+                &text[url.clone()],
+                false,
+                Some(Target::Url(text[url.clone()].to_owned())),
+            );
             from = url.end;
         }
         self.push_run(&text[from..], false, None);
     }
 
-    fn push_run(&mut self, text: &str, code: bool, link: Option<String>) {
+    fn push_run(&mut self, text: &str, code: bool, target: Option<Target>) {
         if text.is_empty() {
             return;
         }
+        let (link, page) = match target {
+            Some(Target::Url(url)) => (Some(url), None),
+            Some(Target::Page(slug)) => (None, Some(slug)),
+            None => (None, None),
+        };
         let run = Run {
             text: text.to_owned(),
             marks: Marks {
@@ -136,10 +168,17 @@ impl Builder {
             },
             code,
             link,
+            page,
         };
         if let Some(runs) = self.runs() {
             match runs.last_mut() {
-                Some(last) if !code && !last.code && last.marks == run.marks && last.link == run.link => {
+                Some(last)
+                    if !code
+                        && !last.code
+                        && last.marks == run.marks
+                        && last.link == run.link
+                        && last.page == run.page =>
+                {
                     last.text.push_str(&run.text);
                 }
                 _ => runs.push(run),
@@ -283,8 +322,46 @@ fn flatten(block: &Block, words: &mut Vec<String>) {
     }
 }
 
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS);
+
 pub fn parse(source: &str) -> Vec<Block> {
-    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    parse_with(source, OPTIONS)
+}
+
+/// A wiki page's markdown, where `[[slug]]` and `[[slug|text]]` link to other pages.
+pub fn parse_page(source: &str) -> Vec<Block> {
+    parse_with(source, OPTIONS.union(Options::ENABLE_WIKILINKS))
+}
+
+/// The pages a wiki page's `[[links]]` name, each once, in the order they first appear.
+pub fn page_links(blocks: &[Block]) -> Vec<String> {
+    let mut slugs = Vec::new();
+    let mut note = |runs: &[Run]| {
+        for slug in runs.iter().filter_map(|run| run.page.as_ref()) {
+            if !slugs.contains(slug) {
+                slugs.push(slug.clone());
+            }
+        }
+    };
+    let mut pending: Vec<&Block> = blocks.iter().rev().collect();
+    while let Some(block) = pending.pop() {
+        match block {
+            Block::Heading { runs, .. } | Block::Paragraph(runs) => note(runs),
+            Block::List { items, .. } => pending.extend(items.iter().flatten().rev()),
+            Block::Quote(inner) => pending.extend(inner.iter().rev()),
+            Block::Table { head, rows } => head
+                .iter()
+                .chain(rows.iter().flatten())
+                .for_each(|cell| note(cell)),
+            Block::Code { .. } | Block::Rule => {}
+        }
+    }
+    slugs
+}
+
+fn parse_with(source: &str, options: Options) -> Vec<Block> {
     let mut builder = Builder {
         stack: vec![Frame::Root(Vec::new())],
         style: Style::default(),
@@ -338,7 +415,9 @@ pub fn parse(source: &str) -> Vec<Block> {
                 Tag::Emphasis => builder.style.italic += 1,
                 Tag::Strong => builder.style.bold += 1,
                 Tag::Strikethrough => builder.style.strike += 1,
-                Tag::Link { dest_url, .. } => builder.style.link.push(dest_url.into_string()),
+                Tag::Link {
+                    link_type, dest_url, ..
+                } => builder.style.link.push(target(link_type, dest_url.into_string())),
                 _ => {}
             },
             Event::End(tag) => match tag {
@@ -384,72 +463,18 @@ pub fn parse(source: &str) -> Vec<Block> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Parsed {
-    pub blocks: Vec<Block>,
-    stable_len: usize,
-    stable_blocks: usize,
-}
-
-fn opens_block_alone(line: &str) -> bool {
-    let first = line.chars().next();
-    let numbered = line
-        .split_once(". ")
-        .is_some_and(|(head, _)| !head.is_empty() && head.chars().all(|c| c.is_ascii_digit()));
-    !matches!(first, None | Some(' ' | '\t' | '-' | '*' | '+' | '>' | '|')) && !numbered
-}
-
-fn stable_boundary(text: &str, from: usize) -> usize {
-    let mut fenced = false;
-    let mut boundary = from;
-    let mut offset = 0;
-    let mut previous_blank = false;
-    for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_end_matches(['\n', '\r']);
-        let fence = trimmed.trim_start().starts_with("```") || trimmed.trim_start().starts_with("~~~");
-        if !fenced && previous_blank && offset > from && opens_block_alone(trimmed) {
-            boundary = offset;
-        }
-        if fence {
-            fenced = !fenced;
-        }
-        previous_blank = !fenced && trimmed.trim().is_empty();
-        offset += line.len();
-    }
-    boundary
-}
-
-impl Parsed {
-    pub fn new(text: &str) -> Self {
-        Self::default().advance("", text)
-    }
-
-    #[must_use]
-    pub fn advance(&self, old_text: &str, text: &str) -> Self {
-        let reuse = old_text
-            .get(..self.stable_len)
-            .is_some_and(|stable| text.starts_with(stable));
-        let (kept_len, kept_blocks) = if reuse {
-            (self.stable_len, self.stable_blocks)
-        } else {
-            (0, 0)
-        };
-        let boundary = stable_boundary(text, kept_len);
-        let mut blocks: Vec<Block> = self.blocks[..kept_blocks].to_vec();
-        let settled = parse(&text[kept_len..boundary]);
-        let stable_blocks = kept_blocks + settled.len();
-        blocks.extend(settled);
-        blocks.extend(parse(&text[boundary..]));
-        Self {
-            blocks,
-            stable_len: boundary,
-            stable_blocks,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_page_parse_reads_wiki_links() {
+        let source = "- [[ct117]]\n- [[datahub-backup|the backup move]]";
+        assert_eq!(
+            super::page_links(&super::parse_page(source)),
+            ["ct117", "datahub-backup"]
+        );
+        assert_eq!(super::page_links(&super::parse(source)), Vec::<String>::new());
+    }
+
     #[test]
     fn plain_keeps_the_words_and_drops_the_markup() {
         assert_eq!(super::plain("- **whoami:** `rivet`"), "whoami: rivet");
@@ -544,18 +569,5 @@ mod tests {
     fn an_unclosed_fence_while_streaming_still_renders_as_code() {
         let blocks = parse("Here:\n\n```py\nprint(1)");
         assert!(matches!(&blocks[1], Block::Code { text, .. } if text.starts_with("print(1)")));
-    }
-
-    #[test]
-    fn streaming_parses_match_a_full_parse_at_every_step() {
-        let text = "# Plan\n\nFirst paragraph with **bold**.\n\n- one\n- two\n\n- three\n\n```rust\nfn main() {\n\n    println!(\"x\");\n}\n```\n\nAfter the code.\n\n1. first\n2. second\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nDone.";
-        let mut parsed = super::Parsed::default();
-        let mut previous = "";
-        for end in (0..=text.len()).filter(|end| text.is_char_boundary(*end)) {
-            let now = &text[..end];
-            parsed = parsed.advance(previous, now);
-            assert_eq!(parsed.blocks, parse(now), "after {end} bytes");
-            previous = now;
-        }
     }
 }

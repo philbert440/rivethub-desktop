@@ -28,7 +28,7 @@ impl Workspace {
         self.listing = Listing::Loading;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let (listing, filing) = tokio::join!(hub.all_sessions(), hub.topics());
+            let (listing, filing, _) = tokio::join!(hub.all_sessions(), hub.topics(), hub.load_me());
             let listing = this
                 .update(cx, |this, cx| {
                     this.filed(filing, cx);
@@ -90,6 +90,7 @@ impl Workspace {
         self.placements = filing.placements;
         self.marks = filing.marks;
         self.filed_by = filing.filed_by;
+        self.visibility = filing.visibility;
         self.remembered = filing.remembered;
         self.conversations = filing.conversations;
     }
@@ -262,8 +263,12 @@ fn missing_note(missing: &[app::Missing], local: Option<&str>) -> Option<String>
                     refused.push(node);
                 }
             }
-            None => failed.push(format!("{node}: {}", gap.error)),
-            Some(harness) => failed.push(format!("{} on {node}: {}", harness.display_name(), gap.error)),
+            None => failed.push(format!("{node}: {}", gap.error.reason())),
+            Some(harness) => failed.push(format!(
+                "{} on {node}: {}",
+                harness.display_name(),
+                gap.error.reason()
+            )),
         }
     }
     let mut parts = Vec::new();

@@ -224,6 +224,8 @@ mod tests {
             updated_ms: 0,
             closed_ms: None,
             directory: None,
+            owner: None,
+            visibility: None,
         }
     }
 

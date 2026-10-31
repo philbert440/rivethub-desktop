@@ -7,7 +7,7 @@ use model::{
 use wire::harness::{HarnessSessionStatus, HarnessSessionSummary};
 
 use crate::GatewayError;
-pub use stream::{Running, event};
+pub use stream::{Running, event, transcript};
 
 pub fn session(id: &wire::session_id::SessionId) -> SessionId {
     let raw = id.as_str();

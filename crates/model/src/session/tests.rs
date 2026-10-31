@@ -211,6 +211,31 @@ fn a_question_stays_open_until_a_reply_follows_it() {
 }
 
 #[test]
+fn a_question_answered_in_the_terminal_is_no_longer_open() {
+    let question = crate::tools::Question {
+        question: Some("Which?".into()),
+        header: None,
+        multi_select: false,
+        options: Vec::new(),
+    };
+    let mut view = SessionView::default();
+    view.apply(SessionEvent::ToolStarted {
+        id: "ask".into(),
+        name: "AskUserQuestion".into(),
+        input: ToolInput::Ask(vec![question]),
+    });
+    view.apply(SessionEvent::ToolFinished {
+        id: "ask".into(),
+        failed: false,
+        output: ToolOutput {
+            text: "The user answered: Blue".into(),
+            exit_code: None,
+        },
+    });
+    assert!(view.open_questions().is_none());
+}
+
+#[test]
 fn a_snapshot_keeps_the_live_output_of_a_tool_it_lists_without_one() {
     let mut view = SessionView::default();
     view.apply(SessionEvent::ToolStarted {
