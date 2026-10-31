@@ -20,6 +20,8 @@ actions!(topic_rail, [CancelDecision]);
 /// How many of the newest sessions catch-up reads, and how many of their summaries it shows.
 const CAUGHT_SESSIONS: usize = 6;
 const CAUGHT_SHOWN: usize = 4;
+/// About how much of a catch-up line its three lines hold; a longer one offers the rest.
+const CAUGHT_LONG: usize = 130;
 
 pub enum RailEvent {
     OpenSession(Box<SessionSummary>),
@@ -54,6 +56,8 @@ pub struct TopicRail {
     adding: Option<Adding>,
     watched: Vec<(SessionId, i64)>,
     caught: Vec<Caught>,
+    /// The catch-up lines opened to their whole text.
+    caught_open: Vec<SessionId>,
     startup: Option<StartupPreview>,
     startup_open: bool,
 }
@@ -78,6 +82,7 @@ impl TopicRail {
             adding: None,
             watched: Vec::new(),
             caught: Vec::new(),
+            caught_open: Vec::new(),
             startup: None,
             startup_open: false,
         }
@@ -384,6 +389,25 @@ impl TopicRail {
                 .child(Self::label("CATCH-UP".into()))
                 .children(self.caught.iter().enumerate().map(|(index, line)| {
                     let session = line.session.clone();
+                    let opened = self.caught_open.contains(&line.session.id);
+                    let toggled = line.session.id.clone();
+                    let more = (line.text.chars().count() > CAUGHT_LONG).then(|| {
+                        div()
+                            .id(("caught-more", index))
+                            .text_xs()
+                            .text_color(Theme::accent())
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                if let Some(at) = this.caught_open.iter().position(|id| *id == toggled) {
+                                    this.caught_open.remove(at);
+                                } else {
+                                    this.caught_open.push(toggled.clone());
+                                }
+                                cx.notify();
+                            }))
+                            .child(if opened { "Show less" } else { "Show more" })
+                    });
                     div()
                         .id(("caught", index))
                         .flex()
@@ -409,11 +433,14 @@ impl TopicRail {
                         )
                         .child(
                             div()
+                                .w_full()
+                                .min_w_0()
                                 .text_sm()
                                 .text_color(Theme::ink())
-                                .line_clamp(2)
+                                .when(!opened, |text| text.line_clamp(3).text_ellipsis())
                                 .child(one_line(Some(&line.text))),
                         )
+                        .children(more)
                 }))
                 .into_any_element(),
         )
