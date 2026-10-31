@@ -116,7 +116,7 @@ impl EventEmitter<PastedImage> for TextInput {}
 impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle: cx.focus_handle().tab_stop(true),
             multiline: false,
             purpose: Purpose::Message,
             content: SharedString::default(),

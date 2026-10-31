@@ -104,6 +104,9 @@ impl Hub {
                     .insert(placed.session.clone(), placed.topic.clone());
                 filing.filed_by.insert(placed.session.clone(), placed.by);
                 filing.remembered.push(placed.summary());
+                if let Some(visibility) = placed.visibility {
+                    filing.visibility.insert(placed.session, visibility);
+                }
             }
             filing.topics = topics;
             Ok(filing)

@@ -90,7 +90,7 @@ pub struct Exchange {
 }
 
 impl Exchange {
-    fn new(prompt: Option<String>, files: Vec<SentFile>, asked_at_ms: Option<i64>) -> Self {
+    pub(crate) fn new(prompt: Option<String>, files: Vec<SentFile>, asked_at_ms: Option<i64>) -> Self {
         Self {
             prompt,
             files,

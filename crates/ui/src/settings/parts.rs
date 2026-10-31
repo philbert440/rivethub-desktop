@@ -161,7 +161,7 @@ pub fn segments() -> Div {
 }
 
 /// One choice in `segments`, filled while it's the chosen one.
-pub fn segment(id: &'static str, label: &'static str, here: bool) -> Stateful<Div> {
+pub fn segment(id: &'static str, label: impl Into<SharedString>, here: bool) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(30.))
@@ -178,7 +178,7 @@ pub fn segment(id: &'static str, label: &'static str, here: bool) -> Stateful<Di
                     .hover(|chip| chip.bg(Theme::raised()))
             }
         })
-        .child(label)
+        .child(label.into())
 }
 
 /// An outlined pill button.

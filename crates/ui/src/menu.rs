@@ -1,5 +1,7 @@
+mod sharing;
 mod words;
 
+pub use sharing::Sharing;
 pub use words::Noun;
 
 use std::future::Future;
@@ -8,12 +10,14 @@ use app::Hub;
 use gateway::GatewayError;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, IntoElement, MouseDownEvent, ParentElement,
-    Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred, div, prelude::*, px,
+    Pixels, Point, Render, SharedString, Styled, Subscription, Window, anchored, deferred, div, prelude::*,
+    px,
 };
 use model::plugin::view::Action;
 use model::plugin::{PluginRef, SessionAction};
 use model::session::{SessionSummary, TaskStop};
 use model::trash::Deletion;
+use model::visibility::Offer;
 use model::{SessionId, TaskId, TopicId};
 
 use words::Doomed;
@@ -29,8 +33,8 @@ pub enum MenuEvent {
     SessionDeleted(SessionId),
     /// The delegated task the session ran was stopped.
     TaskStopped,
-    /// A topic was closed, reopened or moved to the top level, or a session marked as history or
-    /// made active.
+    /// A topic was closed, reopened, moved to the top level, shared or marked private, or a session
+    /// marked as history, made active, shared or marked private.
     Filed,
     Rename(TopicId),
     MoveInto(TopicId),
@@ -53,7 +57,8 @@ pub enum MenuEvent {
 pub struct Lift(pub Option<TopicId>);
 
 /// The right-click menu on a topic or session: show it in Memory; rename, move, merge, close or
-/// delete a topic; open, move or file a session, or run a plug-in's entry on it.
+/// delete a topic; open, move or file a session, or run a plug-in's entry on it; share either, or
+/// mark it private.
 pub struct Menu {
     hub: Hub,
     view: Option<Focus>,
@@ -61,6 +66,7 @@ pub struct Menu {
     stop: Option<Doomed>,
     close: Option<(TopicId, bool)>,
     history: Option<(SessionId, bool)>,
+    sharing: Option<(Sharing, Offer)>,
     edits: Option<(TopicId, Option<Lift>, bool)>,
     moves: Option<(SessionSummary, bool)>,
     noun: Noun,
@@ -96,6 +102,7 @@ impl Menu {
             stop: None,
             close: None,
             history: None,
+            sharing: None,
             edits: None,
             moves: None,
             noun: Noun::Topic,
@@ -121,6 +128,11 @@ impl Menu {
     /// Offers Mark as history, or Make active when the session is already `history`.
     pub fn filing(mut self, session: SessionId, history: bool) -> Self {
         self.history = Some((session, history));
+        self
+    }
+
+    pub fn sharing(mut self, item: Sharing, offer: Offer) -> Self {
+        self.sharing = Some((item, offer));
         self
     }
 
@@ -255,7 +267,7 @@ impl Menu {
         .detach();
     }
 
-    fn item(id: &'static str, label: &'static str) -> gpui::Stateful<Div> {
+    fn item(id: &'static str, label: impl Into<SharedString>) -> gpui::Stateful<Div> {
         div()
             .id(id)
             .px_3()
@@ -263,7 +275,7 @@ impl Menu {
             .rounded(px(10.))
             .cursor_pointer()
             .hover(|item| item.bg(Theme::selected()).text_color(Theme::on_selected()))
-            .child(label)
+            .child(label.into())
     }
 
     fn emits(
@@ -414,6 +426,7 @@ impl Menu {
         let moves = open.split_off(open.len().min(1));
         let edits = self.topic_edits(cx);
         let plugged = self.plugin_items(cx);
+        let shares = self.sharing_items(cx);
         let grouped = !open.is_empty() || !edits.is_empty();
         div()
             .flex()
@@ -433,7 +446,7 @@ impl Menu {
                 items.child(Self::divider()).children(plugged)
             })
             .when(
-                grouped && (self.close.is_some() || self.history.is_some()),
+                grouped && (self.close.is_some() || self.history.is_some() || !shares.is_empty()),
                 |items| items.child(Self::divider()),
             )
             .when_some(
@@ -466,6 +479,7 @@ impl Menu {
                     )))
                 },
             )
+            .children(shares)
             .children(
                 [("stop", &self.stop), ("delete", &self.delete)]
                     .into_iter()

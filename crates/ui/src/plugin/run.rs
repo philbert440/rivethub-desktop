@@ -136,7 +136,15 @@ impl Plugins {
         if let Some(top) = top {
             top.update(cx, |frame, cx| frame.retarget(view, params, cx));
         } else {
-            let frame = self.frame(plugin.clone(), view, params, context.clone(), Placement::Page, cx);
+            let frame = self.frame(
+                plugin.clone(),
+                view,
+                params,
+                context.clone(),
+                Placement::Page,
+                None,
+                cx,
+            );
             let shown = Self::show(frame, Origin::Page(key.clone()), cx);
             self.pages.entry(key.clone()).or_default().push(shown);
             self.settle(&key, cx);
@@ -186,7 +194,7 @@ impl Plugins {
                 .map_or(Origin::Card, |dialog| dialog.under.clone()),
             other => other.clone(),
         };
-        let frame = self.frame(plugin, view, params, context, Placement::Dialog, cx);
+        let frame = self.frame(plugin, view, params, context, Placement::Dialog, None, cx);
         let shown = Self::show(frame, Origin::Dialog, cx);
         self.dialog = Some(Dialog { shown, under });
         cx.notify();

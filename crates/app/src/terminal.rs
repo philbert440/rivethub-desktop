@@ -30,6 +30,7 @@ enum Command {
 pub struct TerminalHandle {
     screen: Arc<RwLock<Screen>>,
     state: Arc<RwLock<TerminalState>>,
+    problem: Arc<RwLock<Option<String>>>,
     revision: watch::Receiver<u64>,
     commands: mpsc::Sender<Command>,
 }
@@ -41,6 +42,11 @@ impl TerminalHandle {
 
     pub fn state(&self) -> TerminalState {
         *self.state.read()
+    }
+
+    /// Why the last attempt to open the terminal failed, while it keeps trying again.
+    pub fn problem(&self) -> Option<String> {
+        self.problem.read().clone()
     }
 
     pub fn revisions(&self) -> watch::Receiver<u64> {
@@ -68,6 +74,7 @@ struct Actor {
     session: SessionId,
     screen: Arc<RwLock<Screen>>,
     state: Arc<RwLock<TerminalState>>,
+    problem: Arc<RwLock<Option<String>>>,
     revision: watch::Sender<u64>,
 }
 
@@ -99,6 +106,7 @@ impl Actor {
             match attached {
                 Ok(mut stream) => {
                     retry.reset();
+                    *self.problem.write() = None;
                     // The node replays the terminal's output to every attach, so the screen starts
                     // over rather than showing it twice after a reconnect.
                     *self.screen.write() = Screen::new(size);
@@ -154,7 +162,10 @@ impl Actor {
                         }
                     }
                 }
-                Err(err) => tracing::warn!(%err, session = %self.session, "terminal attach failed"),
+                Err(err) => {
+                    tracing::warn!(%err, session = %self.session, "terminal attach failed");
+                    *self.problem.write() = Some(err.reason());
+                }
             }
             self.set_state(TerminalState::Connecting);
             let wait = tokio::time::sleep(retry.next_wait());
@@ -191,6 +202,7 @@ pub fn spawn(
 ) -> TerminalHandle {
     let screen = Arc::new(RwLock::new(Screen::new(size)));
     let state = Arc::new(RwLock::new(TerminalState::default()));
+    let problem = Arc::new(RwLock::new(None));
     let (revision_tx, revision) = watch::channel(0);
     let (commands, commands_rx) = mpsc::channel(INPUT_BUFFER);
     let actor = Actor {
@@ -199,12 +211,14 @@ pub fn spawn(
         session,
         screen: Arc::clone(&screen),
         state: Arc::clone(&state),
+        problem: Arc::clone(&problem),
         revision: revision_tx,
     };
     runtime.spawn(actor.run(commands_rx));
     TerminalHandle {
         screen,
         state,
+        problem,
         revision,
         commands,
     }

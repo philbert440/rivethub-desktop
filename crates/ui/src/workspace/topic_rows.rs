@@ -292,6 +292,7 @@ impl Workspace {
                     .text_color(Theme::ink())
                     .child(one_line(session.title.as_deref())),
             )
+            .children(self.session_glyph(&session.id))
             .child(
                 div()
                     .flex_none()

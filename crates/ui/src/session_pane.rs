@@ -77,6 +77,11 @@ pub struct SessionPane {
     renaming: Option<Renaming>,
     /// The exchange a fork is being started after, until the fork opens or fails.
     forking: Option<usize>,
+    /// For a fork made here: the conversation it carries from the chat it was forked from, shown to
+    /// read above its own, the line that ends it, and that chat.
+    carried: Vec<model::chat::Exchange>,
+    forked_from: Option<String>,
+    fork_source: Option<SessionSummary>,
     /// Whether the session's stream was down when the transcript was last folded.
     lost: bool,
     awaiting_title: bool,
@@ -110,6 +115,7 @@ impl SessionPane {
             }
         });
         Self::read_offer(&hub, &summary, cx);
+        Self::read_fork(&hub, &summary, cx);
         let questions = cx.new(|cx| QuestionCard::new(handle.clone(), cx));
         let asking = cx.observe(&questions, |_, _, cx| cx.notify());
         Self {
@@ -138,6 +144,9 @@ impl SessionPane {
             attach_problem: None,
             renaming: None,
             forking: None,
+            carried: Vec::new(),
+            forked_from: None,
+            fork_source: None,
             lost: false,
             awaiting_title: false,
             escaped: None,
@@ -238,7 +247,7 @@ impl SessionPane {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let (folded, lost) = {
+        let (own, lost) = {
             let view = self.handle.view();
             let view = view.read();
             (
@@ -246,6 +255,7 @@ impl SessionPane {
                 view.lost(),
             )
         };
+        let folded: Vec<_> = self.carried.iter().cloned().chain(own).collect();
         let previous = Arc::clone(&self.exchanges);
         let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
             && folded
