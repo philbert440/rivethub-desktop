@@ -284,6 +284,9 @@ impl Workspace {
                                 .text_color(Theme::warn_container())
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                     this.open(open.clone(), window, cx);
+                                    if let Some(pane) = this.pane.clone() {
+                                        pane.update(cx, |pane, cx| pane.answer(window, cx));
+                                    }
                                 }))
                                 .child("Answer"),
                         )
