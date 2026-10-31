@@ -146,11 +146,19 @@ impl Workspace {
                         .collect::<Vec<_>>()
                 }),
             )
-            .h(px(HISTORY_BOX));
-            // The wheel over the box scrolls the box alone; GPUI would move the page along with it.
+            .h(px(HISTORY_BOX))
+            .track_scroll(&self.screen.history_scroll);
+            let held = self.screen.history_scroll.0.borrow().base_handle.clone();
+            // GPUI scrolls every box under the wheel at once, so the page holds still while the
+            // box has room to move, and takes the wheel once the box is at its top or end.
             div()
                 .id("history-all-box")
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .on_scroll_wheel(move |_, _, cx| {
+                    let (offset, room) = (held.offset().y, held.max_offset().y);
+                    if offset <= px(0.) && offset >= -room {
+                        cx.stop_propagation();
+                    }
+                })
                 .child(rows)
                 .into_any_element()
         } else {
