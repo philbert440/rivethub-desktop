@@ -476,7 +476,11 @@ impl MemoryPage {
         };
         // Its own scope when open, or the paragraph keeps the clamped layout and runs off the card.
         let scope = format!("summary-{}-{}", summary.id, if open { "open" } else { "short" });
-        let text = markdown_view::blocks(shown, &scope, Theme::ink().into(), window);
+        let text = if open {
+            markdown_view::blocks(shown, &scope, Theme::ink().into(), window)
+        } else {
+            markdown_view::clamped_blocks(shown, &scope, Theme::ink().into(), window)
+        };
         let toggle = summary.id.clone();
         let indent = px(INDENT * f32::from(u8::try_from(depth.min(4)).unwrap_or(4)));
         div()
