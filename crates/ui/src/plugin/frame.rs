@@ -101,6 +101,9 @@ pub struct Frame {
     pub(super) params: Option<Params>,
     pub(super) context: About,
     pub(super) placement: Placement,
+    /// What the header calls the view until it answers, or when it can't: its page's title, else
+    /// its plug-in's name.
+    pub(super) named: String,
     /// How many pages lie under this one.
     depth: usize,
     shown: Shown,
@@ -139,6 +142,7 @@ impl Frame {
             params,
             context,
             placement,
+            named: String::new(),
             depth: 0,
             shown: Shown::Waiting,
             loading: false,

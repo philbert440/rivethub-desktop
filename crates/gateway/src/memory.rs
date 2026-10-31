@@ -64,6 +64,29 @@ impl Gateway {
         Ok(owned(Self::read_json(self.http.get(url).send().await)?.await?))
     }
 
+    /// Whether the wiki has a page at this slug, or one it moved: rh answers it, or says it has
+    /// none. Asks for the headers alone, since a page can run to megabytes.
+    pub async fn wiki_page_exists(&self, slug: &str) -> Result<bool, GatewayError> {
+        let url = self.api_url(&["api", "wiki", slug])?;
+        let status = self
+            .http
+            .head(url)
+            .send()
+            .await
+            .map_err(GatewayError::Http)?
+            .status();
+        if status.is_success() || status.is_redirection() {
+            return Ok(true);
+        }
+        match status.as_u16() {
+            400 | 404 => Ok(false),
+            code => Err(GatewayError::Status {
+                status: code,
+                detail: String::new(),
+            }),
+        }
+    }
+
     pub async fn wiki_page(&self, slug: &str) -> Result<model::wiki::Page, GatewayError> {
         let url = self.api_url(&["api", "wiki", slug])?;
         let page: WikiPageResponse = Self::read_json(self.http.get(url).send().await)?.await?;

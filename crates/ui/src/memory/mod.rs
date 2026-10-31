@@ -4,6 +4,7 @@ mod decisions;
 mod entities;
 mod entity_edit;
 mod flagged;
+mod links;
 mod members;
 mod mentions;
 mod proposals;
@@ -125,6 +126,7 @@ pub struct MemoryPage {
     flagged: flagged::Flagged,
     catalog: Option<Catalog>,
     browse: entities::Browse,
+    links: links::Links,
     entity_find: Entity<TextInput>,
     viewing: Option<session::Viewing>,
     remembering: Option<conversation::Remembered>,
@@ -187,6 +189,7 @@ impl MemoryPage {
             flagged: flagged::Flagged::default(),
             catalog: None,
             browse: entities::Browse::default(),
+            links: links::Links::default(),
             entity_find,
             viewing: None,
             remembering: None,
