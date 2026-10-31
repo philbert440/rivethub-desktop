@@ -197,7 +197,9 @@ impl MemoryPage {
         cx: &mut Context<Self>,
     ) {
         let input = cx.new(|cx| {
-            let mut input = TextInput::new("What the wiki should say", cx).multiline();
+            let mut input = TextInput::new("What the wiki should say", cx)
+                .multiline()
+                .keeping();
             input.set_text(text, cx);
             input
         });
@@ -216,9 +218,10 @@ impl MemoryPage {
     }
 
     /// Saves the page's text through the topic or entity that owns it, which writes the page when
-    /// the wiki hasn't yet.
+    /// the wiki hasn't yet. A save that fails opens the editor again with what was typed.
     fn save_text(&mut self, target: TopicId, part: Part, text: String, cx: &mut Context<Self>) {
-        self.browse.editing = None;
+        self.problem = None;
+        let editor = self.browse.editing.take();
         cx.notify();
         let edit = match part {
             Part::Now => PageEdit {
@@ -237,7 +240,12 @@ impl MemoryPage {
                 match saved {
                     Ok(Owned { page: Some(page), .. }) => this.page_saved(&target, page),
                     Ok(Owned { page: None, .. }) => this.problem = Some("rh kept no page for it.".into()),
-                    Err(err) => this.problem = Some(format!("saving it failed: {err}")),
+                    Err(err) => {
+                        this.problem = Some(format!("saving it failed: {err}"));
+                        if this.browse.editing.is_none() {
+                            this.browse.editing = editor;
+                        }
+                    }
                 }
                 cx.notify();
             })
