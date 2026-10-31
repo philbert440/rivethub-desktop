@@ -114,6 +114,24 @@ pub struct Summary {
     /// Whether `text` is only the summary's start, as a session's outline gives it; the whole is
     /// read on its own.
     pub truncated: bool,
+    /// How many summaries roll up into this one, when it was read a level at a time.
+    pub children: Option<u64>,
+}
+
+/// How many summaries a session's memory holds of each kind, and how many sit at the top level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SummaryCounts {
+    pub leaves: u64,
+    pub branches: u64,
+    pub roots: u64,
+    pub embedded: u64,
+    pub top: u64,
+}
+
+impl SummaryCounts {
+    pub fn total(self) -> u64 {
+        self.leaves + self.branches + self.roots
+    }
 }
 
 /// A session's messages in memory, by who sent them and whether each is embedded.
@@ -135,6 +153,8 @@ pub struct MessageTally {
 pub struct SessionMemory {
     pub summaries: Vec<Summary>,
     pub messages: MessageTally,
+    /// The whole memory's counts, when `summaries` is only the part of it read so far.
+    pub counts: Option<SummaryCounts>,
 }
 
 impl SessionMemory {
@@ -172,6 +192,22 @@ impl SessionMemory {
             }
         }
         outline
+    }
+
+    /// How many summaries the memory holds of each kind: as rh counted them, or as read.
+    pub fn counts(&self) -> SummaryCounts {
+        if let Some(counts) = self.counts {
+            return counts;
+        }
+        let count = |kind| u64::try_from(self.summaries_of(kind)).unwrap_or(u64::MAX);
+        SummaryCounts {
+            leaves: count(SummaryKind::Leaf),
+            branches: count(SummaryKind::Branch),
+            roots: count(SummaryKind::Root),
+            embedded: u64::try_from(self.embedded_summaries()).unwrap_or(u64::MAX),
+            top: u64::try_from(self.outline().iter().filter(|(depth, _)| *depth == 0).count())
+                .unwrap_or(u64::MAX),
+        }
     }
 
     pub fn embedded_summaries(&self) -> usize {
@@ -235,6 +271,7 @@ mod tests {
             to_ms: Some(from_ms),
             vector: Vector::Embedded,
             truncated: false,
+            children: None,
         }
     }
 
@@ -247,6 +284,7 @@ mod tests {
                 summary("last", Some("root"), SummaryKind::Leaf, 40),
             ],
             messages: MessageTally::default(),
+            counts: None,
         };
         assert_eq!(memory.latest().map(|summary| summary.id.as_str()), Some("last"));
         assert!(SessionMemory::default().latest().is_none());
@@ -263,6 +301,7 @@ mod tests {
                 summary("orphan", Some("gone"), SummaryKind::Leaf, 30),
             ],
             messages: MessageTally::default(),
+            counts: None,
         };
         let outline: Vec<(usize, &str)> = memory
             .outline()

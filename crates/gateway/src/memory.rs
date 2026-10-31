@@ -2,9 +2,9 @@ use model::memory::{Found, Period, SessionMemory, Stats, Summary, TagProposal, T
 use model::wiki::{EntityMention, Listing, Owned, PageEdit};
 use model::{SessionId, TopicId};
 use wire::gateway::memory::{
-    MemorySearchResponse, MemoryStatsResponse, MemorySummaryDagResponse, MemorySummaryNode,
-    MemoryTagsDecideRequest, PendingTagListResult, TagDecisionResult, TagEntryPair, TagTaxonomyDecideRequest,
-    TagTaxonomyListResult,
+    MemorySearchResponse, MemoryStatsResponse, MemorySummaryChildren, MemorySummaryDagResponse,
+    MemorySummaryNode, MemoryTagsDecideRequest, PendingTagListResult, TagDecisionResult, TagEntryPair,
+    TagTaxonomyDecideRequest, TagTaxonomyListResult,
 };
 use wire::gateway::topics::TopicPage;
 use wire::gateway::wiki::{WikiPageEdit, WikiPageResponse, WikiTopicList};
@@ -55,6 +55,41 @@ impl Gateway {
         url.query_pairs_mut().append_pair("outline", "true");
         let dag: MemorySummaryDagResponse = Self::read_json(self.http.get(url).send().await)?.await?;
         Ok(translate::session_memory(dag))
+    }
+
+    /// A window of a session's top-level summaries, each with its child count, and the whole
+    /// memory's counts. An rh without the tree answers the whole outline, with no counts.
+    pub async fn session_tree(
+        &self,
+        session: &SessionId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionMemory, GatewayError> {
+        let id = translate::wire_session(session)?.to_string();
+        let mut url = self.api_url(&["api", "memory", "summaries", &id])?;
+        url.query_pairs_mut()
+            .append_pair("tree", "true")
+            .append_pair("outline", "true")
+            .append_pair("offset", &offset.to_string())
+            .append_pair("limit", &limit.to_string());
+        let dag: MemorySummaryDagResponse = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::session_memory(dag))
+    }
+
+    /// The summaries that roll up into one of a session's, each with its child count.
+    pub async fn summary_children(
+        &self,
+        session: &SessionId,
+        summary: &str,
+    ) -> Result<Vec<Summary>, GatewayError> {
+        let id = translate::wire_session(session)?.to_string();
+        let url = self.api_url(&["api", "memory", "summaries", &id, summary, "children"])?;
+        let children: MemorySummaryChildren = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(children
+            .summaries
+            .into_iter()
+            .map(translate::memory_summary)
+            .collect())
     }
 
     /// One of a session's summaries, whole.

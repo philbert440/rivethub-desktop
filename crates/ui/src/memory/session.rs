@@ -4,7 +4,7 @@ use gpui::{
     AnyElement, ClickEvent, Context, Hsla, IntoElement, ListState, ParentElement, Styled, Task, Window, div,
     list, prelude::*, px,
 };
-use model::memory::{SessionMemory, Summary, SummaryKind, Vector};
+use model::memory::{SessionMemory, Summary, Vector};
 use model::session::SessionSummary;
 use model::topics::FiledBy;
 
@@ -19,12 +19,11 @@ const COLUMN: f32 = 860.;
 const INDENT: f32 = 24.;
 const CLAMP: usize = 3;
 const REFRESH: Duration = Duration::from_secs(10);
-
 /// The session Memory is showing, with its summaries parsed once they load.
 pub(super) struct Viewing {
-    session: SessionSummary,
-    recalled: Option<Recalled>,
-    loading: bool,
+    pub(super) session: SessionSummary,
+    pub(super) recalled: Option<Recalled>,
+    pub(super) loading: bool,
     _refresh: Task<()>,
 }
 
@@ -108,36 +107,6 @@ impl MemoryPage {
         }
     }
 
-    fn load_session(&mut self, cx: &mut Context<Self>) {
-        let Some(viewing) = self.viewing.as_mut() else {
-            return;
-        };
-        viewing.loading = true;
-        let id = viewing.session.id.clone();
-        let hub = self.hub.clone();
-        cx.spawn(async move |this, cx| {
-            let memory = hub.session_memory(id.clone()).await;
-            this.update(cx, |this, cx| {
-                let Some(viewing) = this.viewing.as_mut().filter(|viewing| viewing.session.id == id) else {
-                    return;
-                };
-                viewing.loading = false;
-                match memory {
-                    Ok(memory)
-                        if viewing.recalled.as_ref().map(|recalled| &recalled.memory) == Some(&memory) => {}
-                    Ok(memory) => {
-                        viewing.recalled = Some(Recalled::new(memory, viewing.recalled.take()));
-                        this.problem = None;
-                        cx.notify();
-                    }
-                    Err(err) => this.failed(&err, cx),
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     pub(super) fn session_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(viewing) = &self.viewing else {
             return div().into_any_element();
@@ -178,6 +147,7 @@ impl MemoryPage {
         let rows = list(
             rows.clone(),
             cx.processor(|this: &mut Self, row: usize, window: &mut Window, cx| {
+                this.read_ahead(row, cx);
                 this.recalled_row(row, window, cx)
             }),
         )
@@ -207,9 +177,18 @@ impl MemoryPage {
             .get(row - 1)
             .and_then(|(depth, place)| Some((*depth, recalled.memory.summaries.get(*place)?)));
         let Some((depth, summary)) = found else {
+            if row == recalled.order.len() + 1 {
+                return div()
+                    .px_8()
+                    .pb(px(32.))
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child("Reading more summaries…")
+                    .into_any_element();
+            }
             return div().into_any_element();
         };
-        let last = row == recalled.order.len();
+        let last = row == recalled.order.len() && !recalled.more_left();
         div()
             .px_8()
             .pb(px(if last { 32. } else { 8. }))
@@ -368,39 +347,12 @@ impl MemoryPage {
     }
 
     /// What the session is made of in memory, and how much of it search can find by meaning.
-    /// Reads one of the open session's summaries whole, for a summary opened past its start.
-    fn read_whole(&self, summary: String, cx: &mut Context<Self>) {
-        let Some(viewing) = self.viewing.as_ref() else {
-            return;
-        };
-        let id = viewing.session.id.clone();
-        let hub = self.hub.clone();
-        cx.spawn(async move |this, cx| {
-            let read = hub.session_summary(id.clone(), summary).await;
-            this.update(cx, |this, cx| {
-                let Some(viewing) = this.viewing.as_mut().filter(|viewing| viewing.session.id == id) else {
-                    return;
-                };
-                match read {
-                    Ok(whole) => {
-                        if let Some(recalled) = viewing.recalled.as_mut() {
-                            recalled.read_whole(whole);
-                        }
-                        cx.notify();
-                    }
-                    Err(err) => this.failed(&err, cx),
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     fn parts(memory: &SessionMemory) -> impl IntoElement {
         let tally = memory.messages;
-        let summaries = u32::try_from(memory.summaries.len()).unwrap_or(u32::MAX);
-        let embedded_summaries = u32::try_from(memory.embedded_summaries()).unwrap_or(u32::MAX);
-        let kinds = |kind| u32::try_from(memory.summaries_of(kind)).unwrap_or(u32::MAX);
+        let held = memory.counts();
+        let count = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+        let summaries = count(held.total());
+        let embedded_summaries = count(held.embedded);
         let mut embedding = counts(&[
             (tally.pending, "message waiting", "messages waiting"),
             (tally.failed, "message failed", "messages failed"),
@@ -437,9 +389,9 @@ impl MemoryPage {
                 "Summaries",
                 summaries.to_string(),
                 counts(&[
-                    (kinds(SummaryKind::Root), "root", "roots"),
-                    (kinds(SummaryKind::Branch), "branch", "branches"),
-                    (kinds(SummaryKind::Leaf), "leaf", "leaves"),
+                    (count(held.roots), "root", "roots"),
+                    (count(held.branches), "branch", "branches"),
+                    (count(held.leaves), "leaf", "leaves"),
                 ]),
             ))
     }
@@ -467,7 +419,7 @@ impl MemoryPage {
 
     /// SUMMARIES over the list, or why there are none yet.
     fn summaries_heading(memory: &SessionMemory, noun: &str) -> AnyElement {
-        if memory.summaries.is_empty() {
+        if memory.counts().total() == 0 {
             let note = if memory.messages.total == 0 {
                 format!("Memory hasn't captured anything from this {noun}.")
             } else {

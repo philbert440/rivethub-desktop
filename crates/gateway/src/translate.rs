@@ -179,6 +179,7 @@ pub fn memory_summary(node: wire::gateway::memory::MemorySummaryNode) -> model::
             VectorState::Skipped => Vector::Skipped,
         },
         truncated: node.truncated,
+        children: node.children,
     }
 }
 
@@ -198,6 +199,13 @@ pub fn session_memory(raw: wire::gateway::memory::MemorySummaryDagResponse) -> m
             failed: tally.failed,
             skipped: tally.skipped,
         },
+        counts: raw.counts.map(|counts| model::memory::SummaryCounts {
+            leaves: counts.leaves,
+            branches: counts.branches,
+            roots: counts.roots,
+            embedded: counts.embedded,
+            top: counts.top,
+        }),
     }
 }
 

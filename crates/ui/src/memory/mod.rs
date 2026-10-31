@@ -11,6 +11,7 @@ mod mentions;
 mod proposals;
 mod recalled;
 mod session;
+mod session_reads;
 mod sessions;
 mod stats;
 mod tidy;

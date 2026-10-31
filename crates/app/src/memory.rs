@@ -68,6 +68,29 @@ impl Hub {
             .await
     }
 
+    /// A window of a session's top-level summaries, with the whole memory's counts.
+    pub async fn session_tree(
+        &self,
+        session: SessionId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionMemory, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.session_tree(&session, offset, limit).await })
+            .await
+    }
+
+    /// The summaries that roll up into one of a session's.
+    pub async fn summary_children(
+        &self,
+        session: SessionId,
+        summary: String,
+    ) -> Result<Vec<Summary>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.summary_children(&session, &summary).await })
+            .await
+    }
+
     /// One of a session's summaries, whole, for one its outline cut short.
     pub async fn session_summary(
         &self,
