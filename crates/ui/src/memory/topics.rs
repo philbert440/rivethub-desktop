@@ -16,13 +16,13 @@ const LIST_WIDTH: f32 = 300.;
 const PAGE_COLUMN: f32 = 820.;
 
 fn reading(page: Page) -> Reading {
-    let blocks = model::markdown::parse(&readable(&page.markdown));
+    let blocks = model::markdown::parse_page(&readable(&page.markdown));
     Reading { page, blocks }
 }
 
 /// A topic's page, whose Decisions section the page view shows itself, editable.
 fn topic_reading(page: Page) -> Reading {
-    let blocks = model::markdown::parse(&readable(&without_decisions(&page.markdown)));
+    let blocks = model::markdown::parse_page(&readable(&without_decisions(&page.markdown)));
     Reading { page, blocks }
 }
 
@@ -120,6 +120,7 @@ impl MemoryPage {
             None => self.page_scroll.set_offset(Point::default()),
         }
         self.opened = Some(Opened::Topic(topic));
+        self.check_links(cx);
         cx.notify();
     }
 
@@ -209,7 +210,7 @@ impl MemoryPage {
         cx.notify();
     }
 
-    fn open_page(&mut self, slug: String, cx: &mut Context<Self>) {
+    pub(super) fn open_page(&mut self, slug: String, cx: &mut Context<Self>) {
         self.opened = Some(Opened::Page(slug.clone()));
         self.reading = None;
         self.decisions = None;
@@ -225,6 +226,7 @@ impl MemoryPage {
                 match fetched {
                     Ok(page) => {
                         this.reading = Some(reading(page));
+                        this.check_links(cx);
                         cx.notify();
                     }
                     Err(err) => this.failed(&err, cx),
@@ -425,11 +427,12 @@ impl MemoryPage {
                 let owner = read.page.topic.clone().or_else(|| self.opened_root());
                 let editing = owner.as_ref().and_then(|owner| self.edit_field(owner, cx));
                 if editing.is_none() {
-                    blocks = markdown_view::blocks(
+                    blocks = markdown_view::page_blocks(
                         &read.blocks,
                         &format!("wiki-{}", read.page.slug),
                         Theme::ink().into(),
                         window,
+                        &self.page_links(cx),
                     );
                 }
                 let edit = owner.map(|owner| {

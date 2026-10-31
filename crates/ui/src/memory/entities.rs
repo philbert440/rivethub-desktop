@@ -20,12 +20,12 @@ const PAGE_COLUMN: f32 = 820.;
 /// An entity's page with its markdown parsed.
 pub(super) struct EntityReading {
     pub(super) page: Page,
-    blocks: Vec<Block>,
+    pub(super) blocks: Vec<Block>,
 }
 
 impl EntityReading {
     pub(super) fn new(page: Page) -> Self {
-        let blocks = model::markdown::parse(&readable(&page.markdown));
+        let blocks = model::markdown::parse_page(&readable(&page.markdown));
         Self { page, blocks }
     }
 }
@@ -115,6 +115,7 @@ impl MemoryPage {
                 match fetched {
                     Ok(Owned { page: Some(page), .. }) => {
                         this.browse.reading = Some(EntityReading::new(page));
+                        this.check_links(cx);
                     }
                     Ok(Owned { page: None, .. }) => this.browse.unwritten = true,
                     Err(err) => this.failed(&err, cx),
@@ -447,11 +448,12 @@ impl MemoryPage {
         if let Some(field) = self.edit_field(id, cx) {
             return field;
         }
-        let blocks = markdown_view::blocks(
+        let blocks = markdown_view::page_blocks(
             &reading.blocks,
             &format!("entity-{}", reading.page.slug),
             Theme::ink().into(),
             window,
+            &self.page_links(cx),
         );
         div()
             .flex()

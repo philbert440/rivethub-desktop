@@ -238,7 +238,10 @@ impl MemoryPage {
             let saved = hub.edit_page(target.clone(), edit).await;
             this.update(cx, |this, cx| {
                 match saved {
-                    Ok(Owned { page: Some(page), .. }) => this.page_saved(&target, page),
+                    Ok(Owned { page: Some(page), .. }) => {
+                        this.page_saved(&target, page);
+                        this.check_links(cx);
+                    }
                     Ok(Owned { page: None, .. }) => this.problem = Some("rh kept no page for it.".into()),
                     Err(err) => {
                         this.problem = Some(format!("saving it failed: {err}"));

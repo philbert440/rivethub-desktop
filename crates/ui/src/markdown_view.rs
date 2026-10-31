@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+use std::rc::Rc;
+use std::sync::Arc;
+
 use gpui::{
     AnyElement, App, ClickEvent, FontStyle, FontWeight, Hsla, InteractiveText, IntoElement, ParentElement,
     RenderOnce, SharedString, StrikethroughStyle, Styled, StyledText, TextRun, UnderlineStyle, Window, div,
@@ -8,33 +12,81 @@ use model::markdown::{Block, Run};
 use crate::copy;
 use crate::theme::Theme;
 
-/// Inline text, whose web links open in the browser when clicked.
-fn styled(runs: &[Run], base: Hsla, bold_all: bool, id: &str, window: &Window) -> AnyElement {
-    let text = styled_text(runs, base, bold_all, window);
+/// The wiki pages a page's `[[links]]` can open: the ones rh has, and what opening one does. A
+/// link to a page rh doesn't have reads as plain text.
+#[derive(Clone)]
+pub struct PageLinks {
+    pub known: Arc<HashSet<String>>,
+    pub open: OpenPage,
+}
+
+/// Opens the wiki page a clicked link names, by its slug.
+pub type OpenPage = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
+/// Where clicking a run goes.
+enum Go {
+    Url(String),
+    Page(String),
+}
+
+fn go(run: &Run, links: Option<&PageLinks>) -> Option<Go> {
+    if let Some(url) = run.url() {
+        return Some(Go::Url(url.to_owned()));
+    }
+    let slug = run.page.as_ref()?;
+    links
+        .is_some_and(|links| links.known.contains(slug))
+        .then(|| Go::Page(slug.clone()))
+}
+
+/// Inline text, whose web links open in the browser and whose page links open the page.
+fn styled(
+    runs: &[Run],
+    base: Hsla,
+    bold_all: bool,
+    id: &str,
+    window: &Window,
+    links: Option<&PageLinks>,
+) -> AnyElement {
+    let text = styled_text(runs, base, bold_all, window, links);
     let mut ranges = Vec::new();
-    let mut urls = Vec::new();
+    let mut targets = Vec::new();
     let mut offset = 0;
     for run in runs {
-        if let Some(url) = run.url() {
+        if let Some(target) = go(run, links) {
             ranges.push(offset..offset + run.text.len());
-            urls.push(url.to_owned());
+            targets.push(target);
         }
         offset += run.text.len();
     }
-    if urls.is_empty() {
+    if targets.is_empty() {
         return text.into_any_element();
     }
+    let open = links.map(|links| links.open.clone());
     InteractiveText::new(SharedString::from(format!("text-{id}")), text)
-        .on_click(ranges, move |index, _, cx| {
-            if let Some(url) = urls.get(index) {
+        .on_click(ranges, move |index, window, cx| match targets.get(index) {
+            Some(Go::Url(url)) => {
                 cx.stop_propagation();
                 cx.open_url(url);
             }
+            Some(Go::Page(slug)) => {
+                cx.stop_propagation();
+                if let Some(open) = &open {
+                    open(slug, window, cx);
+                }
+            }
+            None => {}
         })
         .into_any_element()
 }
 
-fn styled_text(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> StyledText {
+fn styled_text(
+    runs: &[Run],
+    base: Hsla,
+    bold_all: bool,
+    window: &Window,
+    links: Option<&PageLinks>,
+) -> StyledText {
     let prose = window.text_style().font();
     let text: String = runs.iter().map(|run| run.text.as_str()).collect();
     let text_runs = runs
@@ -55,13 +107,13 @@ fn styled_text(runs: &[Run], base: Hsla, bold_all: bool, window: &Window) -> Sty
             TextRun {
                 len: run.text.len(),
                 font: face,
-                color: if run.url().is_some() {
+                color: if go(run, links).is_some() {
                     Theme::accent().into()
                 } else {
                     base
                 },
                 background_color: run.code.then(|| Theme::card().into()),
-                underline: run.url().is_some().then(|| UnderlineStyle {
+                underline: go(run, links).is_some().then(|| UnderlineStyle {
                     thickness: px(1.),
                     color: Some(Theme::accent().into()),
                     wavy: false,
@@ -166,14 +218,42 @@ impl RenderOnce for CodeBlock {
 }
 
 pub fn blocks(blocks: &[Block], scope: &str, base: Hsla, window: &Window) -> Vec<AnyElement> {
+    linked(blocks, scope, base, window, None)
+}
+
+/// A wiki page's blocks, whose `[[links]]` to pages rh has open them.
+pub fn page_blocks(
+    blocks: &[Block],
+    scope: &str,
+    base: Hsla,
+    window: &Window,
+    links: &PageLinks,
+) -> Vec<AnyElement> {
+    linked(blocks, scope, base, window, Some(links))
+}
+
+fn linked(
+    blocks: &[Block],
+    scope: &str,
+    base: Hsla,
+    window: &Window,
+    links: Option<&PageLinks>,
+) -> Vec<AnyElement> {
     blocks
         .iter()
         .enumerate()
-        .map(|(index, block)| render(block, &format!("{scope}-{index}"), base, window))
+        .map(|(index, block)| render(block, &format!("{scope}-{index}"), base, window, links))
         .collect()
 }
 
-fn list(start: Option<u64>, items: &[Vec<Block>], scope: &str, base: Hsla, window: &Window) -> AnyElement {
+fn list(
+    start: Option<u64>,
+    items: &[Vec<Block>],
+    scope: &str,
+    base: Hsla,
+    window: &Window,
+    links: Option<&PageLinks>,
+) -> AnyElement {
     div()
         .w_full()
         .flex()
@@ -199,17 +279,17 @@ fn list(start: Option<u64>, items: &[Vec<Block>], scope: &str, base: Hsla, windo
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .children(blocks(item, &format!("{scope}-{index}"), base, window)),
+                        .children(linked(item, &format!("{scope}-{index}"), base, window, links)),
                 )
         }))
         .into_any_element()
 }
 
-fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement {
+fn render(block: &Block, scope: &str, base: Hsla, window: &Window, links: Option<&PageLinks>) -> AnyElement {
     match block {
         Block::Paragraph(runs) => div()
             .w_full()
-            .child(styled(runs, base, false, scope, window))
+            .child(styled(runs, base, false, scope, window, links))
             .into_any_element(),
         Block::Heading { level, runs } => {
             let size = match level {
@@ -222,10 +302,10 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                 .w_full()
                 .pt_2()
                 .text_size(px(size))
-                .child(styled(runs, Theme::ink().into(), true, scope, window))
+                .child(styled(runs, Theme::ink().into(), true, scope, window, links))
                 .into_any_element()
         }
-        Block::List { start, items } => list(*start, items, scope, base, window),
+        Block::List { start, items } => list(*start, items, scope, base, window, links),
         Block::Quote(inner) => div()
             .w_full()
             .pl_3()
@@ -234,7 +314,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
             .flex()
             .flex_col()
             .gap_2()
-            .children(blocks(inner, scope, Theme::ink_dim().into(), window))
+            .children(linked(inner, scope, Theme::ink_dim().into(), window, links))
             .into_any_element(),
         Block::Code { language, text } => CodeBlock {
             id: SharedString::from(format!("code-{scope}")),
@@ -267,6 +347,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                                         true,
                                         &format!("{scope}-head-{column}"),
                                         window,
+                                        links,
                                     ))
                                 })),
                         )
@@ -279,6 +360,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window) -> AnyElement
                                         false,
                                         &format!("{scope}-{line}-{column}"),
                                         window,
+                                        links,
                                     ))
                                 }),
                             )
