@@ -115,6 +115,7 @@ impl MemoryPage {
             Some(block) => self.page_scroll.scroll_to_top_of_item(block + 1),
             None => self.page_scroll.set_offset(Point::default()),
         }
+        self.section = at;
         self.check_links(cx);
         cx.notify();
     }
@@ -211,6 +212,7 @@ impl MemoryPage {
         self.decisions = None;
         self.deciding = None;
         self.page_scroll.set_offset(Point::default());
+        self.section = None;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let fetched = hub.wiki_page(slug.clone()).await;

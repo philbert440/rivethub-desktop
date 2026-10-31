@@ -124,6 +124,8 @@ pub struct MemoryPage {
     decisions: Option<Vec<Group>>,
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
+    /// The open subtopic's section among the page's blocks, which the page keeps at its top.
+    section: Option<usize>,
     tidy: Option<Tidy>,
     review: proposals::Review,
     trash: trash::Sweep,
@@ -189,6 +191,7 @@ impl MemoryPage {
             decisions: None,
             deciding: None,
             page_scroll: ScrollHandle::new(),
+            section: None,
             tidy: None,
             review: proposals::Review::default(),
             trash: trash::Sweep::default(),
