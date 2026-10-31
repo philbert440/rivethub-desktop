@@ -20,12 +20,12 @@ const PAGE_COLUMN: f32 = 820.;
 /// An entity's page with its markdown parsed.
 pub(super) struct EntityReading {
     pub(super) page: Page,
-    blocks: Vec<Block>,
+    pub(super) blocks: Vec<Block>,
 }
 
 impl EntityReading {
     pub(super) fn new(page: Page) -> Self {
-        let blocks = model::markdown::parse(&readable(&page.markdown));
+        let blocks = model::markdown::parse_page(&readable(&page.markdown));
         Self { page, blocks }
     }
 }
@@ -115,6 +115,7 @@ impl MemoryPage {
                 match fetched {
                     Ok(Owned { page: Some(page), .. }) => {
                         this.browse.reading = Some(EntityReading::new(page));
+                        this.check_links(cx);
                     }
                     Ok(Owned { page: None, .. }) => this.browse.unwritten = true,
                     Err(err) => this.failed(&err, cx),
@@ -393,8 +394,8 @@ impl MemoryPage {
                     .child("⋯"),
             );
         let body = match (&self.browse.reading, self.browse.unwritten) {
-            (Some(reading), _) => self.page_body(reading, window, cx),
-            (None, true) => self.unwritten_body(cx),
+            (Some(reading), _) => self.page_body(id, reading, window, cx),
+            (None, true) => self.unwritten_body(id, cx),
             (None, false) => Self::quiet("Loading…"),
         };
         let mentioned = self
@@ -420,15 +421,15 @@ impl MemoryPage {
     }
 
     /// An entity the wiki hasn't written a page for yet; writing its text writes the page.
-    fn unwritten_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(field) = self.edit_field(cx) {
+    fn unwritten_body(&self, id: &TopicId, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(field) = self.edit_field(id, cx) {
             return field;
         }
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(Self::edit_buttons(String::new(), String::new(), cx))
+            .child(Self::edit_buttons(id, String::new(), String::new(), cx))
             .child(
                 div()
                     .text_color(Theme::ink_dim())
@@ -437,21 +438,29 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    fn page_body(&self, reading: &EntityReading, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(field) = self.edit_field(cx) {
+    fn page_body(
+        &self,
+        id: &TopicId,
+        reading: &EntityReading,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some(field) = self.edit_field(id, cx) {
             return field;
         }
-        let blocks = markdown_view::blocks(
+        let blocks = markdown_view::page_blocks(
             &reading.blocks,
             &format!("entity-{}", reading.page.slug),
             Theme::ink().into(),
             window,
+            &self.page_links(cx),
         );
         div()
             .flex()
             .flex_col()
             .gap_3()
             .child(Self::edit_buttons(
+                id,
                 reading.page.current_state.clone(),
                 reading.page.article.clone().unwrap_or_default(),
                 cx,

@@ -51,7 +51,7 @@ impl Deletion {
     pub fn refusal(self) -> Option<&'static str> {
         match self {
             Self::Deleted => None,
-            Self::Live => Some("it is live, with a chat or terminal running in it"),
+            Self::Live => Some("a turn or a terminal is still running in it"),
             Self::NotFound => Some("its node knows nothing of it"),
             Self::Failed => Some("its node couldn't delete it"),
         }

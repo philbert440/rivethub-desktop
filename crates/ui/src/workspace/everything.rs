@@ -236,6 +236,7 @@ impl Workspace {
                             .child(card.topic.name.clone())
                             .into_any_element(),
                     })
+                    .children(self.topic_glyph(card.topic))
                     .when(waiting > 0, |row| row.child(Self::needs_you_chip())),
             )
             .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
@@ -243,28 +244,36 @@ impl Workspace {
                 card.sessions.len(),
                 card.history + self.conversations_within(&card.topic.id)
             )))
-            .children(card.sessions.iter().take(CARD_SESSIONS).map(|session| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_none()
-                            .size(px(6.))
-                            .rounded(px(3.))
-                            .bg(self.dot(session)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(one_line(session.title.as_deref())),
-                    )
-            }))
+            .children(
+                card.sessions
+                    .iter()
+                    .take(CARD_SESSIONS)
+                    .map(|session| self.card_session(session)),
+            )
             .into_any_element()
+    }
+
+    fn card_session(&self, session: &SessionSummary) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(6.))
+                    .rounded(px(3.))
+                    .bg(self.dot(session)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .truncate()
+                    .text_xs()
+                    .text_color(Theme::ink_dim())
+                    .child(one_line(session.title.as_deref())),
+            )
+            .children(self.session_glyph(&session.id))
     }
 
     fn suggestion_chip(

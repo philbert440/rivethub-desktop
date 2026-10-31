@@ -7,6 +7,7 @@ mod listing;
 mod navigate;
 mod new_topic;
 mod placing;
+mod sharing;
 mod topic_edit;
 mod topic_path;
 mod topic_rows;
@@ -26,6 +27,7 @@ use model::notice::{Notice, NoticeKind};
 use model::preview::Previews;
 use model::session::SessionSummary;
 use model::topics::{FiledBy, FiledConversation, HistoryMarks, Placements, Suggestion, Topic};
+use model::visibility::SessionVisibility;
 use model::{Altitude, SessionId, TopicId};
 
 use crate::agent_editor::AgentEditor;
@@ -91,6 +93,7 @@ pub struct Workspace {
     placements: Placements,
     marks: HistoryMarks,
     filed_by: HashMap<SessionId, FiledBy>,
+    visibility: HashMap<SessionId, SessionVisibility>,
     /// Placed sessions as rh remembers them, so a topic's History reaches past what nodes list.
     remembered: Vec<SessionSummary>,
     /// The listed sessions, then the remembered ones no node lists, for the board and topic screen.
@@ -206,6 +209,7 @@ impl Workspace {
             placements: Placements::new(),
             marks: HistoryMarks::new(),
             filed_by: HashMap::new(),
+            visibility: HashMap::new(),
             remembered: Vec::new(),
             filed_sessions: Vec::new(),
             conversations: Vec::new(),

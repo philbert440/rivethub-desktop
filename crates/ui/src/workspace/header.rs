@@ -1,11 +1,15 @@
 use gpui::{
     App, Context, IntoElement, MouseButton, ParentElement, SharedString, Styled, Window, div, prelude::*, px,
 };
-use model::Altitude;
+use model::topics::Atlas;
+use model::{Altitude, SessionId, TopicId};
 
 use super::{ToggleSidePanel, Workspace};
 use crate::memory::Focus;
-use crate::text::one_line;
+use crate::text::{middle, one_line};
+
+/// About how many characters the location bar's topic and session chips share.
+const CRUMB_CHARS: usize = 72;
 use crate::theme::Theme;
 use crate::{brand, shell};
 
@@ -19,7 +23,7 @@ impl Workspace {
             .items_center()
             .gap_1()
             .min_w_0()
-            .max_w(gpui::relative(0.6))
+            .max_w(gpui::relative(0.75))
             .p_1()
             .rounded(px(16.))
             .border_1()
@@ -39,48 +43,50 @@ impl Workspace {
                     this.leave_to(Altitude::Everything, window, cx);
                 })),
             );
-        let (topic, session) = match &self.altitude {
-            Altitude::Everything => return bar,
-            Altitude::Topic(topic) => (Some(topic.clone()), None),
-            Altitude::Session { topic, session } => (topic.clone(), Some(session.clone())),
-        };
-        let topic_crumb = match topic {
-            Some(topic) => {
-                let name = self
-                    .topic(&topic)
-                    .map_or_else(|| topic.as_str().to_owned(), |known| known.name.clone());
-                let here = session.is_none();
-                match self.retitle_field(&topic, cx) {
-                    Some(field) => div().id("crumb-topic").child(field),
-                    None => Self::crumb("crumb-topic", name.into(), here)
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            Self::on_right_click(Focus::Topic(topic.clone()), cx),
-                        )
-                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            if here && event.click_count() == 2 {
-                                this.begin_retitle(topic.clone(), window, cx);
-                            } else {
-                                this.leave_to(Altitude::Topic(topic.clone()), window, cx);
-                            }
-                        })),
-                }
-            }
-            None => Self::crumb("crumb-uncategorized", "Uncategorized".into(), false).on_click(cx.listener(
-                |this, _: &gpui::ClickEvent, window, cx| {
-                    this.uncategorized_open = true;
-                    this.uncategorized_folded = false;
-                    this.leave_to(Altitude::Everything, window, cx);
-                },
-            )),
-        };
-        bar = bar.child(separator()).child(topic_crumb);
+        if self.altitude == Altitude::Everything {
+            return bar;
+        }
+        let (levels, session) = self.location();
+        let crumbs = levels.len().max(1) + usize::from(session.is_some());
+        let fits = (CRUMB_CHARS / crumbs).clamp(10, 28);
+        if levels.is_empty() {
+            bar = bar.child(separator()).child(
+                Self::crumb("crumb-uncategorized", "Uncategorized".into(), false).on_click(cx.listener(
+                    |this, _: &gpui::ClickEvent, window, cx| {
+                        this.uncategorized_open = true;
+                        this.uncategorized_folded = false;
+                        this.leave_to(Altitude::Everything, window, cx);
+                    },
+                )),
+            );
+        }
+        let deepest = levels.len().saturating_sub(1);
+        let root = levels.first().cloned();
+        for (depth, level) in levels.into_iter().enumerate() {
+            let name = self
+                .topic(&level)
+                .map_or_else(|| level.as_str().to_owned(), |known| known.name.clone());
+            let here = session.is_none() && depth == deepest;
+            let root = root.clone().unwrap_or_else(|| level.clone());
+            let crumb = Self::crumb(("crumb-topic", depth), middle(&name, fits).into(), here)
+                .on_mouse_down(
+                    MouseButton::Right,
+                    Self::on_right_click(Focus::Topic(level.clone()), cx),
+                )
+                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    if here && event.click_count() == 2 {
+                        this.begin_retitle(level.clone(), window, cx);
+                    } else if !here {
+                        this.go_to_level(&root, level.clone(), window, cx);
+                    }
+                }));
+            bar = bar.child(separator()).child(crumb);
+        }
         if let Some(session) = session {
             let known = self.sessions.iter().find(|known| known.id == session);
             let title = known.map_or_else(|| "Untitled".into(), |known| one_line(known.title.as_deref()));
-            bar = bar
-                .child(separator())
-                .child(Self::crumb("crumb-session", title, true).when_some(
+            bar = bar.child(separator()).child(
+                Self::crumb("crumb-session", middle(&title, fits).into(), true).when_some(
                     known.cloned(),
                     |crumb, known| {
                         crumb.on_mouse_down(
@@ -88,13 +94,49 @@ impl Workspace {
                             Self::on_right_click(Focus::Session(Box::new(known)), cx),
                         )
                     },
-                ));
+                ),
+            );
         }
         bar
     }
 
-    fn crumb(id: &'static str, label: SharedString, here: bool) -> gpui::Stateful<gpui::Div> {
+    /// Every topic level above where the workspace stands, root first, and the open session.
+    fn location(&self) -> (Vec<TopicId>, Option<SessionId>) {
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        let (deepest, session) = match &self.altitude {
+            Altitude::Everything => (None, None),
+            Altitude::Topic(root) => (Some(self.step_in(root)), None),
+            Altitude::Session { topic, session } => {
+                let own = self
+                    .sessions
+                    .iter()
+                    .find(|known| &known.id == session)
+                    .and_then(|known| atlas.topic_of(known))
+                    .cloned();
+                (own.or_else(|| topic.clone()), Some(session.clone()))
+            }
+        };
+        let mut levels: Vec<TopicId> = deepest
+            .as_ref()
+            .map(|deepest| atlas.lineage(deepest).into_iter().cloned().collect())
+            .unwrap_or_default();
+        levels.reverse();
+        (levels, session)
+    }
+
+    /// Opens the topic screen at `level`, a topic at or under `root`.
+    fn go_to_level(&mut self, root: &TopicId, level: TopicId, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_to(Altitude::Topic(root.clone()), window, cx);
+        self.screen.step = (&level != root).then_some(level);
+        self.screen.all_history = false;
+        self.sync_step(cx);
+        cx.notify();
+    }
+
+    fn crumb(id: impl Into<gpui::ElementId>, label: SharedString, here: bool) -> gpui::Stateful<gpui::Div> {
         let ink = if here { Theme::on_selected() } else { Theme::ink() };
+        let id = id.into();
+        let everything = id == gpui::ElementId::from("crumb-everything");
         div()
             .id(id)
             .flex()
@@ -116,7 +158,7 @@ impl Workspace {
                         .hover(|chip| chip.bg(Theme::raised()))
                 }
             })
-            .when(id == "crumb-everything", |chip| {
+            .when(everything, |chip| {
                 chip.child(brand::icon("icons/workspace.svg", 14., ink))
             })
             .child(div().min_w_0().truncate().child(label))

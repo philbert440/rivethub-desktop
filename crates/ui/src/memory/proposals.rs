@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use gateway::GatewayError;
 use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
 use model::TopicId;
 use model::memory::Verdict;
@@ -65,6 +66,39 @@ pub(super) fn verdict_button(
 
 pub(super) fn counted(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// What became of the proposals rh couldn't decide. One no longer pending was out of date, and rh
+/// set it aside; the others stay pending, with rh's reason.
+fn undecided(failed: &[(String, String)], tidy: Option<&app::Tidy>) -> Option<String> {
+    if failed.is_empty() {
+        return None;
+    }
+    let pending = |id: &str| {
+        tidy.is_none_or(|tidy| {
+            tidy.batches
+                .iter()
+                .any(|batch| batch.proposals.iter().any(|proposal| proposal.id == id))
+        })
+    };
+    let (stayed, set_aside): (Vec<_>, Vec<_>) = failed.iter().partition(|(id, _)| pending(id));
+    let mut said = Vec::new();
+    if !set_aside.is_empty() {
+        let them = if set_aside.len() == 1 { "it" } else { "them" };
+        said.push(format!(
+            "{} out of date, so memory set {them} aside.",
+            counted(set_aside.len(), "change was", "changes were")
+        ));
+    }
+    if !stayed.is_empty() {
+        let reasons: Vec<&str> = stayed.iter().map(|(_, why)| why.as_str()).collect();
+        said.push(format!(
+            "{} pending: {}",
+            counted(stayed.len(), "change stayed", "changes stayed"),
+            reasons.join("; ")
+        ));
+    }
+    Some(said.join(" "))
 }
 
 impl MemoryPage {
@@ -178,20 +212,22 @@ impl MemoryPage {
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let outcome = match decided {
-                Decided::One(id) => hub.decide_proposal(id, verdict).await.map(|()| Vec::new()),
+                Decided::One(id) => match hub.decide_proposal(id.clone(), verdict).await {
+                    Ok(()) => Ok(Vec::new()),
+                    Err(GatewayError::Conflict(why)) => Ok(vec![(id, why)]),
+                    Err(err) => Err(err),
+                },
                 Decided::Batch(id) => hub.decide_batch(id, verdict).await,
             };
+            let tidy = hub.tidy().await;
             this.update(cx, |this, cx| {
-                match outcome {
-                    Ok(failed) if failed.is_empty() => {}
-                    Ok(failed) => {
-                        this.problem = Some(format!(
-                            "{} of them stayed pending: {}",
-                            failed.len(),
-                            failed.join("; ")
-                        ));
-                    }
-                    Err(err) => this.problem = Some(format!("deciding it failed: {err}")),
+                this.problem = match outcome {
+                    Ok(failed) => undecided(&failed, tidy.as_ref().ok()),
+                    Err(err) => Some(format!("deciding it failed: {err}")),
+                };
+                match tidy {
+                    Ok(tidy) => this.tidy = Some(tidy),
+                    Err(err) => this.failed(&err, cx),
                 }
                 if verdict == Verdict::Accept {
                     cx.emit(MemoryEvent::Refiled);
@@ -200,7 +236,6 @@ impl MemoryPage {
                     this.load_library(cx);
                     this.load_pages(cx);
                 }
-                this.load_tidy(cx);
                 this.load_stats(cx);
             })
             .ok();

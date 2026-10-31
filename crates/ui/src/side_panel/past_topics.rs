@@ -7,8 +7,9 @@ use super::{PanelEvent, PastTopic, SidePanel};
 use crate::theme::Theme;
 
 impl SidePanel {
-    pub(super) fn past_topics(past: &[&PastTopic], cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn past_topics(&self, past: &[&PastTopic], cx: &mut Context<Self>) -> AnyElement {
         let now = crate::text::now_ms();
+        let me = self.hub.me();
         div()
             .flex()
             .flex_col()
@@ -43,6 +44,7 @@ impl SidePanel {
                             .text_color(Theme::ink())
                             .child(past.name.clone()),
                     )
+                    .children(crate::visibility::glyph(me.as_ref(), past.visibility.as_ref()))
                     .child(
                         div()
                             .text_xs()

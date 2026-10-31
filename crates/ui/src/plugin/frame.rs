@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use app::Hub;
+use gateway::GatewayError;
 use gpui::{
     Context, Entity, EventEmitter, IntoElement, ParentElement, Pixels, Point, Render, ScrollHandle, Styled,
     Subscription, Window, div, prelude::*,
@@ -15,6 +16,7 @@ use model::plugin::{Context as About, Params, PluginRef};
 
 use super::canvas::CanvasView;
 use super::form::FormView;
+use super::web_panel::WebPanelView;
 
 /// Where a view is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +43,29 @@ pub struct Pressed {
 enum Shown {
     Waiting,
     Ready(View),
-    Failed(String),
+    Failed(Refusal),
+}
+
+/// Why a view couldn't be shown: rh's sentence, and apart from it what rh names, such as the
+/// field it refused in the plug-in's answer.
+pub(super) struct Refusal {
+    pub(super) said: String,
+    pub(super) detail: Option<String>,
+}
+
+impl Refusal {
+    fn of(err: &GatewayError) -> Self {
+        match err {
+            GatewayError::Plugin { why, detail } => Self {
+                said: format!("The plug-in {why}."),
+                detail: detail.clone(),
+            },
+            other => Self {
+                said: other.to_string(),
+                detail: None,
+            },
+        }
+    }
 }
 
 pub(super) struct FormState {
@@ -77,6 +101,9 @@ pub struct Frame {
     pub(super) params: Option<Params>,
     pub(super) context: About,
     pub(super) placement: Placement,
+    /// What the header calls the view until it answers, or when it can't: its page's title, else
+    /// its plug-in's name.
+    pub(super) named: String,
     /// How many pages lie under this one.
     depth: usize,
     shown: Shown,
@@ -89,6 +116,7 @@ pub struct Frame {
     pub(super) sorts: HashMap<String, (usize, bool)>,
     pub(super) forms: HashMap<String, FormState>,
     pub(super) canvases: HashMap<String, (Entity<CanvasView>, Subscription)>,
+    pub(super) panels: HashMap<String, (Entity<WebPanelView>, Subscription)>,
     pub(super) pictures: HashMap<String, Picture>,
     pub(super) logs: HashMap<String, ScrollHandle>,
     pub(super) menu: Option<(Point<Pixels>, Vec<Button>)>,
@@ -114,6 +142,7 @@ impl Frame {
             params,
             context,
             placement,
+            named: String::new(),
             depth: 0,
             shown: Shown::Waiting,
             loading: false,
@@ -125,6 +154,7 @@ impl Frame {
             sorts: HashMap::new(),
             forms: HashMap::new(),
             canvases: HashMap::new(),
+            panels: HashMap::new(),
             pictures: HashMap::new(),
             logs: HashMap::new(),
             menu: None,
@@ -175,7 +205,7 @@ impl Frame {
                         this.shown = Shown::Ready(view);
                     }
                     Err(err) if matches!(this.shown, Shown::Ready(_)) => this.problem = Some(err.to_string()),
-                    Err(err) => this.shown = Shown::Failed(err.to_string()),
+                    Err(err) => this.shown = Shown::Failed(Refusal::of(&err)),
                 }
                 cx.notify();
             })
@@ -194,6 +224,7 @@ impl Frame {
             self.sorts.clear();
             self.forms.clear();
             self.canvases.clear();
+            self.panels.clear();
             self.logs.clear();
             self.shown = Shown::Waiting;
             self.scroll = ScrollHandle::new();
@@ -276,7 +307,9 @@ impl Frame {
                         state.refusal = Some(message);
                         state.view.update(cx, |form, cx| form.refused(fields, cx));
                     }
-                    (Ok(Answer::Refused { message, .. }), None) => this.problem = Some(message),
+                    (Ok(Answer::Refused { message, fields }), None) => {
+                        this.problem = Some(refused(message, &fields));
+                    }
                     (Err(err), _) => this.problem = Some(err.to_string()),
                 }
                 cx.notify();
@@ -311,4 +344,16 @@ impl Render for Frame {
             .child(content)
             .children(self.menu_overlay(cx))
     }
+}
+
+/// A refusal no form is there to show beside its fields: the message, then each field it names.
+fn refused(message: String, fields: &BTreeMap<String, String>) -> String {
+    if fields.is_empty() {
+        return message;
+    }
+    let named: Vec<String> = fields
+        .iter()
+        .map(|(field, why)| format!("{field}: {why}"))
+        .collect();
+    format!("{message} ({})", named.join("; "))
 }

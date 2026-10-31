@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/model", "crates/term", "crates/gateway", "crates/app", "crates/ui"]
+members = ["crates/model", "crates/term", "crates/webview", "crates/webview-gtk", "crates/gateway", "crates/app", "crates/ui"]
 
 [workspace.package]
 version = "0.7.0"
@@ -15,6 +15,7 @@ model = { path = "crates/model" }
 gateway = { path = "crates/gateway" }
 app = { path = "crates/app" }
 term = { path = "crates/term" }
+webview = { path = "crates/webview" }
 alacritty_terminal = "0.26.0"
 parking_lot = "0.12"
 pulldown-cmark = { version = "0.13", default-features = false }
@@ -27,7 +28,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "3dc64cbd7d9885f69e5003fc6264d9a1cdea2792" }
+wire = { git = "https://github.com/philbert440/rivethub-runtime", rev = "d340771b8264ea15e66e159a35e80b720b6f9893" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pki-types = "1"

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 
 use crate::session::SessionSummary;
+use crate::visibility::{SessionVisibility, Visibility};
 use crate::{SessionId, TopicId};
 
 const MAX_DEPTH: usize = 8;
@@ -21,6 +22,8 @@ pub struct Topic {
     pub updated_ms: i64,
     pub closed_ms: Option<i64>,
     pub directory: Option<Directory>,
+    pub owner: Option<String>,
+    pub visibility: Option<Visibility>,
 }
 
 /// Where a topic's sessions work: a path on one node, or a path every node shares.
@@ -73,6 +76,7 @@ pub struct FiledSession {
     pub by: FiledBy,
     /// The node that captured it, when rh recorded one.
     pub node: Option<String>,
+    pub visibility: Option<SessionVisibility>,
 }
 
 impl FiledSession {
@@ -105,6 +109,7 @@ pub struct Filing {
     /// The placed sessions as rh remembers them, for those no node lists any more.
     pub remembered: Vec<SessionSummary>,
     pub conversations: Vec<FiledConversation>,
+    pub visibility: HashMap<SessionId, SessionVisibility>,
 }
 
 /// Marked as history, and not active since: it stays out of its topic's active sessions and out of
