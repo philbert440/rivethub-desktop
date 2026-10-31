@@ -111,6 +111,9 @@ pub struct Summary {
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
     pub vector: Vector,
+    /// Whether `text` is only the summary's start, as a session's outline gives it; the whole is
+    /// read on its own.
+    pub truncated: bool,
 }
 
 /// A session's messages in memory, by who sent them and whether each is embedded.
@@ -231,6 +234,7 @@ mod tests {
             from_ms: Some(from_ms),
             to_ms: Some(from_ms),
             vector: Vector::Embedded,
+            truncated: false,
         }
     }
 

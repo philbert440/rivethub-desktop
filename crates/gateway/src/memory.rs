@@ -1,9 +1,10 @@
-use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
+use model::memory::{Found, Period, SessionMemory, Stats, Summary, TagProposal, TermProposal, Verdict};
 use model::wiki::{EntityMention, Listing, Owned, PageEdit};
 use model::{SessionId, TopicId};
 use wire::gateway::memory::{
-    MemorySearchResponse, MemoryStatsResponse, MemorySummaryDagResponse, MemoryTagsDecideRequest,
-    PendingTagListResult, TagDecisionResult, TagEntryPair, TagTaxonomyDecideRequest, TagTaxonomyListResult,
+    MemorySearchResponse, MemoryStatsResponse, MemorySummaryDagResponse, MemorySummaryNode,
+    MemoryTagsDecideRequest, PendingTagListResult, TagDecisionResult, TagEntryPair, TagTaxonomyDecideRequest,
+    TagTaxonomyListResult,
 };
 use wire::gateway::topics::TopicPage;
 use wire::gateway::wiki::{WikiPageEdit, WikiPageResponse, WikiTopicList};
@@ -47,11 +48,21 @@ impl Gateway {
         Ok(model::memory::said(translate::found(found)))
     }
 
+    /// A session's summaries as an outline: each one's start, which `session_summary` reads whole.
     pub async fn session_memory(&self, session: &SessionId) -> Result<SessionMemory, GatewayError> {
         let id = translate::wire_session(session)?.to_string();
-        let url = self.api_url(&["api", "memory", "summaries", &id])?;
+        let mut url = self.api_url(&["api", "memory", "summaries", &id])?;
+        url.query_pairs_mut().append_pair("outline", "true");
         let dag: MemorySummaryDagResponse = Self::read_json(self.http.get(url).send().await)?.await?;
         Ok(translate::session_memory(dag))
+    }
+
+    /// One of a session's summaries, whole.
+    pub async fn session_summary(&self, session: &SessionId, summary: &str) -> Result<Summary, GatewayError> {
+        let id = translate::wire_session(session)?.to_string();
+        let url = self.api_url(&["api", "memory", "summaries", &id, summary])?;
+        let node: MemorySummaryNode = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::memory_summary(node))
     }
 
     /// A conversation's summaries by its id, for a filed conversation that is no harness session.

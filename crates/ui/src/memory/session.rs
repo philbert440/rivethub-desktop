@@ -368,6 +368,34 @@ impl MemoryPage {
     }
 
     /// What the session is made of in memory, and how much of it search can find by meaning.
+    /// Reads one of the open session's summaries whole, for a summary opened past its start.
+    fn read_whole(&self, summary: String, cx: &mut Context<Self>) {
+        let Some(viewing) = self.viewing.as_ref() else {
+            return;
+        };
+        let id = viewing.session.id.clone();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let read = hub.session_summary(id.clone(), summary).await;
+            this.update(cx, |this, cx| {
+                let Some(viewing) = this.viewing.as_mut().filter(|viewing| viewing.session.id == id) else {
+                    return;
+                };
+                match read {
+                    Ok(whole) => {
+                        if let Some(recalled) = viewing.recalled.as_mut() {
+                            recalled.read_whole(whole);
+                        }
+                        cx.notify();
+                    }
+                    Err(err) => this.failed(&err, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn parts(memory: &SessionMemory) -> impl IntoElement {
         let tally = memory.messages;
         let summaries = u32::try_from(memory.summaries.len()).unwrap_or(u32::MAX);
@@ -495,8 +523,11 @@ impl MemoryPage {
             .flex_col()
             .gap_2()
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if let Some(recalled) = this.recalled_mut() {
-                    recalled.toggle(&toggle);
+                if this
+                    .recalled_mut()
+                    .is_some_and(|recalled| recalled.toggle(&toggle))
+                {
+                    this.read_whole(toggle.clone(), cx);
                 }
                 cx.notify();
             }))

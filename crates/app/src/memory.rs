@@ -2,7 +2,7 @@ use gateway::GatewayError;
 use std::collections::{HashMap, HashSet};
 
 use model::flagged::{FlaggedAction, FlaggedGroup};
-use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
+use model::memory::{Found, Period, SessionMemory, Stats, Summary, TagProposal, TermProposal, Verdict};
 use model::tidy::{Batch, Upkeep};
 use model::topics::Topic;
 use model::wiki::{EntityMention, Listing, Owned, Page, PageEdit};
@@ -65,6 +65,17 @@ impl Hub {
     pub async fn recall(&self, query: String, period: Period) -> Result<Vec<Found>, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.recall(&query, period).await })
+            .await
+    }
+
+    /// One of a session's summaries, whole, for one its outline cut short.
+    pub async fn session_summary(
+        &self,
+        session: SessionId,
+        summary: String,
+    ) -> Result<Summary, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.session_summary(&session, &summary).await })
             .await
     }
 
