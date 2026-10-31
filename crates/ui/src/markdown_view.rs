@@ -40,20 +40,13 @@ fn go(run: &Run, links: Option<&PageLinks>) -> Option<Go> {
 }
 
 /// Inline text, whose web links open in the browser and whose page links open the page.
-fn styled(
-    runs: &[Run],
-    base: Hsla,
-    bold_all: bool,
-    id: &str,
-    window: &Window,
-    links: Option<&PageLinks>,
-) -> AnyElement {
-    let text = styled_text(runs, base, bold_all, window, links);
+fn styled(runs: &[Run], base: Hsla, bold_all: bool, id: &str, window: &Window, set: Set<'_>) -> AnyElement {
+    let text = styled_text(runs, base, bold_all, window, set);
     let mut ranges = Vec::new();
     let mut targets = Vec::new();
     let mut offset = 0;
     for run in runs {
-        if let Some(target) = go(run, links) {
+        if let Some(target) = go(run, set.links) {
             ranges.push(offset..offset + run.text.len());
             targets.push(target);
         }
@@ -62,7 +55,7 @@ fn styled(
     if targets.is_empty() {
         return text.into_any_element();
     }
-    let open = links.map(|links| links.open.clone());
+    let open = set.links.map(|links| links.open.clone());
     InteractiveText::new(SharedString::from(format!("text-{id}")), text)
         .on_click(ranges, move |index, window, cx| match targets.get(index) {
             Some(Go::Url(url)) => {
@@ -80,20 +73,14 @@ fn styled(
         .into_any_element()
 }
 
-fn styled_text(
-    runs: &[Run],
-    base: Hsla,
-    bold_all: bool,
-    window: &Window,
-    links: Option<&PageLinks>,
-) -> StyledText {
+fn styled_text(runs: &[Run], base: Hsla, bold_all: bool, window: &Window, set: Set<'_>) -> StyledText {
     let prose = window.text_style().font();
     let text: String = runs.iter().map(|run| run.text.as_str()).collect();
     let text_runs = runs
         .iter()
         .filter(|run| !run.text.is_empty())
         .map(|run| {
-            let mut face = if run.code {
+            let mut face = if run.code && !set.prose_code {
                 font(Theme::MONO)
             } else {
                 prose.clone()
@@ -107,13 +94,13 @@ fn styled_text(
             TextRun {
                 len: run.text.len(),
                 font: face,
-                color: if go(run, links).is_some() {
+                color: if go(run, set.links).is_some() {
                     Theme::accent().into()
                 } else {
                     base
                 },
                 background_color: run.code.then(|| Theme::card().into()),
-                underline: go(run, links).is_some().then(|| UnderlineStyle {
+                underline: go(run, set.links).is_some().then(|| UnderlineStyle {
                     thickness: px(1.),
                     color: Some(Theme::accent().into()),
                     wavy: false,
@@ -217,8 +204,31 @@ impl RenderOnce for CodeBlock {
     }
 }
 
+/// How inline text is set: which page links open, and whether inline code takes the prose face.
+#[derive(Clone, Copy)]
+struct Set<'a> {
+    links: Option<&'a PageLinks>,
+    /// GPUI clamps text by measuring it in the paragraph's face alone, so a clamped line holding
+    /// code in another face runs past the edge and loses its ellipsis; clamped, inline code keeps
+    /// its shading but takes the prose face.
+    prose_code: bool,
+}
+
 pub fn blocks(blocks: &[Block], scope: &str, base: Hsla, window: &Window) -> Vec<AnyElement> {
-    linked(blocks, scope, base, window, None)
+    let set = Set {
+        links: None,
+        prose_code: false,
+    };
+    linked(blocks, scope, base, window, set)
+}
+
+/// Blocks the caller clamps to a few lines, which wrap and end in an ellipsis as plain text does.
+pub fn clamped_blocks(blocks: &[Block], scope: &str, base: Hsla, window: &Window) -> Vec<AnyElement> {
+    let set = Set {
+        links: None,
+        prose_code: true,
+    };
+    linked(blocks, scope, base, window, set)
 }
 
 /// A wiki page's blocks, whose `[[links]]` to pages rh has open them.
@@ -229,20 +239,18 @@ pub fn page_blocks(
     window: &Window,
     links: &PageLinks,
 ) -> Vec<AnyElement> {
-    linked(blocks, scope, base, window, Some(links))
+    let set = Set {
+        links: Some(links),
+        prose_code: false,
+    };
+    linked(blocks, scope, base, window, set)
 }
 
-fn linked(
-    blocks: &[Block],
-    scope: &str,
-    base: Hsla,
-    window: &Window,
-    links: Option<&PageLinks>,
-) -> Vec<AnyElement> {
+fn linked(blocks: &[Block], scope: &str, base: Hsla, window: &Window, set: Set<'_>) -> Vec<AnyElement> {
     blocks
         .iter()
         .enumerate()
-        .map(|(index, block)| render(block, &format!("{scope}-{index}"), base, window, links))
+        .map(|(index, block)| render(block, &format!("{scope}-{index}"), base, window, set))
         .collect()
 }
 
@@ -252,7 +260,7 @@ fn list(
     scope: &str,
     base: Hsla,
     window: &Window,
-    links: Option<&PageLinks>,
+    set: Set<'_>,
 ) -> AnyElement {
     div()
         .w_full()
@@ -279,17 +287,17 @@ fn list(
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .children(linked(item, &format!("{scope}-{index}"), base, window, links)),
+                        .children(linked(item, &format!("{scope}-{index}"), base, window, set)),
                 )
         }))
         .into_any_element()
 }
 
-fn render(block: &Block, scope: &str, base: Hsla, window: &Window, links: Option<&PageLinks>) -> AnyElement {
+fn render(block: &Block, scope: &str, base: Hsla, window: &Window, set: Set<'_>) -> AnyElement {
     match block {
         Block::Paragraph(runs) => div()
             .w_full()
-            .child(styled(runs, base, false, scope, window, links))
+            .child(styled(runs, base, false, scope, window, set))
             .into_any_element(),
         Block::Heading { level, runs } => {
             let size = match level {
@@ -302,10 +310,10 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window, links: Option
                 .w_full()
                 .pt_2()
                 .text_size(px(size))
-                .child(styled(runs, Theme::ink().into(), true, scope, window, links))
+                .child(styled(runs, Theme::ink().into(), true, scope, window, set))
                 .into_any_element()
         }
-        Block::List { start, items } => list(*start, items, scope, base, window, links),
+        Block::List { start, items } => list(*start, items, scope, base, window, set),
         Block::Quote(inner) => div()
             .w_full()
             .pl_3()
@@ -314,7 +322,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window, links: Option
             .flex()
             .flex_col()
             .gap_2()
-            .children(linked(inner, scope, Theme::ink_dim().into(), window, links))
+            .children(linked(inner, scope, Theme::ink_dim().into(), window, set))
             .into_any_element(),
         Block::Code { language, text } => CodeBlock {
             id: SharedString::from(format!("code-{scope}")),
@@ -347,7 +355,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window, links: Option
                                         true,
                                         &format!("{scope}-head-{column}"),
                                         window,
-                                        links,
+                                        set,
                                     ))
                                 })),
                         )
@@ -360,7 +368,7 @@ fn render(block: &Block, scope: &str, base: Hsla, window: &Window, links: Option
                                         false,
                                         &format!("{scope}-{line}-{column}"),
                                         window,
-                                        links,
+                                        set,
                                     ))
                                 }),
                             )

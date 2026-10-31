@@ -119,6 +119,28 @@ pub struct Listing {
     pub owner: Option<TopicId>,
 }
 
+/// The pages whose title holds what a person typed, those that start with it first, then the
+/// rest, each in the order given. A slug can name a page for something else entirely, so it
+/// doesn't count.
+pub fn titled<'a>(listings: &'a [Listing], query: &str) -> Vec<&'a Listing> {
+    let wanted = query.trim().to_lowercase();
+    let mut ranked: Vec<(u8, &Listing)> = listings
+        .iter()
+        .filter_map(|listing| {
+            let title = listing.title.to_lowercase();
+            if title.starts_with(&wanted) {
+                Some((0, listing))
+            } else if title.contains(&wanted) {
+                Some((1, listing))
+            } else {
+                None
+            }
+        })
+        .collect();
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, listing)| listing).collect()
+}
+
 /// Where a subtopic's section starts among a page's blocks. rh writes each subtopic as a `##`
 /// section headed with the subtopic's name, after the page's own `##` sections, so the last such
 /// heading wins; a section folded in from a merged page sits deeper.
@@ -238,7 +260,9 @@ pub fn readable(markdown: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Citation, mentioned_in, mentioning_topics, readable, section, without_decisions};
+    use super::{
+        Citation, Listing, mentioned_in, mentioning_topics, readable, section, titled, without_decisions,
+    };
     use crate::TopicId;
     use crate::markdown::parse;
 
@@ -319,5 +343,25 @@ mod tests {
         assert_eq!(section(&blocks, "summary"), Some(6));
         assert_eq!(section(&blocks, "tmux"), Some(4));
         assert_eq!(section(&blocks, "missing"), None);
+    }
+
+    #[test]
+    fn titled_keeps_pages_whose_title_holds_the_query_those_starting_with_it_first() {
+        let page = |slug: &str, title: &str| Listing {
+            slug: slug.to_owned(),
+            title: title.to_owned(),
+            updated_ms: 0,
+            owner: None,
+        };
+        let listings = [
+            page("rivethub-hub", "Datahub"),
+            page("desktop", "The RivetHub desktop"),
+            page("rivethub", "RivetHub"),
+        ];
+        let found: Vec<&str> = titled(&listings, " rivethub")
+            .into_iter()
+            .map(|listing| listing.slug.as_str())
+            .collect();
+        assert_eq!(found, ["rivethub", "desktop"]);
     }
 }

@@ -79,6 +79,8 @@ struct TopicScreen {
     step: Option<TopicId>,
     /// Whether History lists all its sessions rather than its newest few.
     all_history: bool,
+    /// Where all of a long History stands in its own box.
+    history_scroll: gpui::UniformListScrollHandle,
     /// A pill clicked once: the step into it waits out a double-click, which renames it instead.
     stepping: Option<(TopicId, gpui::Task<()>)>,
 }

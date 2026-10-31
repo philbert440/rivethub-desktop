@@ -171,6 +171,8 @@ impl Gateway {
                 ("scope", "messages"),
                 ("limit", "60"),
                 ("exclude_roles", SAID_ONLY),
+                ("snippet", "true"),
+                ("expand", "false"),
             ],
         )
         .map_err(|err| GatewayError::Refused(format!("search url: {err}")))?;

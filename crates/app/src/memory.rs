@@ -1,8 +1,8 @@
 use gateway::GatewayError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use model::flagged::{FlaggedAction, FlaggedGroup};
-use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
+use model::memory::{Found, Period, SessionMemory, Stats, Summary, TagProposal, TermProposal, Verdict};
 use model::tidy::{Batch, Upkeep};
 use model::topics::Topic;
 use model::wiki::{EntityMention, Listing, Owned, Page, PageEdit};
@@ -13,13 +13,31 @@ use crate::Hub;
 /// How many wiki pages are asked about at once.
 const WIKI_CHECKS: usize = 8;
 
-/// The topics, the wiki pages their root topics own, and the entities each root topic's sessions
-/// mention.
+/// The topics, and as far as they have been read, the wiki pages their root topics own and the
+/// entities each root topic's sessions mention. A root's page is read once it's wanted.
 #[derive(Debug, Default)]
 pub struct Library {
     pub topics: Vec<Topic>,
     pub pages: Vec<Page>,
     pub mentions: HashMap<TopicId, Vec<EntityMention>>,
+    /// The root topics whose page and mentions have been read, whether rh had a page or not.
+    pub read: HashSet<TopicId>,
+}
+
+impl Library {
+    /// Keeps what was read for a root topic, saying whether its page changed.
+    pub fn keep(&mut self, root: TopicId, owned: Owned) -> bool {
+        let before = self
+            .pages
+            .iter()
+            .position(|page| page.topic.as_ref() == Some(&root))
+            .map(|at| self.pages.remove(at));
+        let changed = before != owned.page;
+        self.pages.extend(owned.page);
+        self.mentions.insert(root.clone(), owned.mentions);
+        self.read.insert(root);
+        changed
+    }
 }
 
 /// What memory proposed and is waiting on a person for: tree changes in batches, then the
@@ -50,6 +68,17 @@ impl Hub {
             .await
     }
 
+    /// One of a session's summaries, whole, for one its outline cut short.
+    pub async fn session_summary(
+        &self,
+        session: SessionId,
+        summary: String,
+    ) -> Result<Summary, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.session_summary(&session, &summary).await })
+            .await
+    }
+
     pub async fn session_memory(&self, session: SessionId) -> Result<SessionMemory, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.session_memory(&session).await })
@@ -72,31 +101,13 @@ impl Hub {
         .await
     }
 
+    /// The topics alone; each root topic's page is read when it's wanted, with `topic_page`.
     pub async fn library(&self) -> Result<Library, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
-            let topics = gateway.topics().await?;
-            let roots: Vec<&Topic> = topics.iter().filter(|topic| topic.parent.is_none()).collect();
-            let owned =
-                futures::future::try_join_all(roots.iter().map(|topic| gateway.topic_page(&topic.id)))
-                    .await?;
-            let mut pages = Vec::new();
-            let mut mentions = HashMap::new();
-            for (
-                root,
-                Owned {
-                    page,
-                    mentions: named,
-                },
-            ) in roots.iter().zip(owned)
-            {
-                pages.extend(page);
-                mentions.insert(root.id.clone(), named);
-            }
             Ok(Library {
-                topics,
-                pages,
-                mentions,
+                topics: gateway.topics().await?,
+                ..Library::default()
             })
         })
         .await

@@ -7,6 +7,7 @@ fn job(raw: Job) -> FlaggedJob {
     FlaggedJob {
         id: raw.id,
         key: raw.key,
+        subject: raw.subject,
         payload: if raw.payload.as_map().is_empty() {
             String::new()
         } else {
