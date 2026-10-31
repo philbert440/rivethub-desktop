@@ -412,6 +412,7 @@ impl TopicRail {
                                 .text_sm()
                                 .text_color(Theme::ink())
                                 .line_clamp(2)
+                                .text_ellipsis()
                                 .child(one_line(Some(&line.text))),
                         )
                 }))
