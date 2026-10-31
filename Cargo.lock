@@ -219,7 +219,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "cpal",
  "futures",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "gateway"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "futures",
@@ -3768,7 +3768,7 @@ dependencies = [
 
 [[package]]
 name = "model"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "pulldown-cmark",
 ]
@@ -6356,7 +6356,7 @@ dependencies = [
 
 [[package]]
 name = "term"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alacritty_terminal",
  "parking_lot",
@@ -6840,7 +6840,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "app",
  "chrono",
@@ -7368,7 +7368,7 @@ dependencies = [
 
 [[package]]
 name = "webview"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "futures",
  "libloading",
@@ -7380,7 +7380,7 @@ dependencies = [
 
 [[package]]
 name = "webview-gtk"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "futures",
  "gtk",
