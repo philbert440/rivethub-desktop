@@ -1,9 +1,8 @@
-use gpui::{
-    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
 use model::topics::{FiledBy, FiledConversation};
 
-use super::session::{Recalled, badge};
+use super::recalled::Recalled;
+use super::session::badge;
 use super::{Focus, MemoryEvent, MemoryPage};
 use crate::text::{ago_phrase, now_ms};
 use crate::theme::Theme;
@@ -77,20 +76,13 @@ impl MemoryPage {
         .detach();
     }
 
-    pub(super) fn conversation_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(Remembered {
-            conversation,
-            filed,
-            recalled,
-        }) = &self.remembering
-        else {
+    pub(super) fn conversation_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(remembering) = &self.remembering else {
             return div().into_any_element();
         };
-        let title = conversation
-            .title
-            .clone()
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("{} conversation", conversation.channel));
+        if let Some(recalled) = &remembering.recalled {
+            return Self::recalled_page(&recalled.rows, cx);
+        }
         div()
             .id("memory-conversation")
             .size_full()
@@ -107,19 +99,33 @@ impl MemoryPage {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().text_2xl().text_color(Theme::ink()).child(title))
-                    .child(self.conversation_line(conversation, *filed, cx))
+                    .child(self.conversation_head(remembering, cx))
                     .children(
                         self.problem
                             .clone()
                             .map(|problem| div().text_xs().text_color(Theme::ink_dim()).child(problem)),
                     )
-                    .child(
-                        div()
-                            .pt_2()
-                            .child(Self::recall(recalled.as_ref(), "conversation", window, cx)),
-                    ),
+                    .child(div().pt_2().text_color(Theme::ink_dim()).child("Loading…")),
             )
+            .into_any_element()
+    }
+
+    /// The conversation's title, then its channel, where it's filed and when it was last active.
+    pub(super) fn conversation_head(&self, remembering: &Remembered, cx: &mut Context<Self>) -> AnyElement {
+        let Remembered {
+            conversation, filed, ..
+        } = remembering;
+        let title = conversation
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| format!("{} conversation", conversation.channel));
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_2xl().text_color(Theme::ink()).child(title))
+            .child(self.conversation_line(conversation, *filed, cx))
             .into_any_element()
     }
 

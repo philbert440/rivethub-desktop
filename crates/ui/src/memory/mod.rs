@@ -8,6 +8,7 @@ mod links;
 mod members;
 mod mentions;
 mod proposals;
+mod recalled;
 mod session;
 mod sessions;
 mod stats;
@@ -328,8 +329,8 @@ impl MemoryPage {
 impl Render for MemoryPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.tab {
-            _ if self.viewing.is_some() => self.session_page(window, cx),
-            _ if self.remembering.is_some() => self.conversation_page(window, cx),
+            _ if self.viewing.is_some() => self.session_page(cx),
+            _ if self.remembering.is_some() => self.conversation_page(cx),
             Tab::Ask => self.ask(cx),
             Tab::Topics => self.topics(window, cx),
             Tab::Entities => self.entities(window, cx),
