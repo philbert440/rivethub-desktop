@@ -5,7 +5,13 @@ use gpui::{
     div, list, prelude::*, px,
 };
 
+use app::Hub;
+use model::chat::exchanges;
+use model::fork::{ForkOrigin, carried};
+use model::session::SessionSummary;
+
 use super::{PaneEvent, SessionPane};
+use crate::text::one_line;
 use crate::theme::Theme;
 use crate::transcript::{self, Fold};
 
@@ -24,6 +30,7 @@ impl SessionPane {
             .exchanges
             .iter()
             .take(index + 1)
+            .skip(self.carried.len())
             .filter(|view| view.exchange.prompt.is_some())
             .count();
         if self.forking.is_some() {
@@ -40,9 +47,52 @@ impl SessionPane {
                 this.forking = None;
                 cx.notify();
                 match forked {
-                    Ok(forked) => cx.emit(PaneEvent::Forked(Box::new(forked))),
+                    Ok(forked) => {
+                        let origin = ForkOrigin {
+                            source: this.summary.id.clone(),
+                            node: this.summary.node.clone(),
+                            title: this.summary.title.clone(),
+                            prompts,
+                        };
+                        this.hub.remember_fork(&forked.id, &origin);
+                        cx.emit(PaneEvent::Forked(Box::new(forked)));
+                    }
                     Err(err) => cx.emit(PaneEvent::Failed(format!("forking failed: {err}"))),
                 }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// For a fork made here, reads the chat it was forked from and keeps the part the fork carries.
+    pub(super) fn read_fork(hub: &Hub, summary: &SessionSummary, cx: &mut Context<Self>) {
+        let Some(origin) = hub.fork_origin(&summary.id) else {
+            return;
+        };
+        let source = SessionSummary::remembered(
+            origin.source.clone(),
+            origin.title.clone(),
+            0,
+            origin.node.clone(),
+        );
+        let hub = hub.clone();
+        cx.spawn(async move |this, cx| {
+            let read = hub.transcript(&source).await;
+            this.update(cx, |this, cx| match read {
+                Ok(turns) => {
+                    let named = origin.title.as_deref().map_or_else(
+                        || "another chat".to_owned(),
+                        |title| format!("\u{201c}{}\u{201d}", one_line(Some(title))),
+                    );
+                    this.carried = carried(exchanges(&turns, None, false), origin.prompts);
+                    this.forked_from = Some(format!(
+                        "Forked from {named} · the conversation above came with it"
+                    ));
+                    this.fork_source = Some(source);
+                    this.refresh(cx);
+                }
+                Err(err) => tracing::warn!(%err, "the chat this fork came from couldn't be read"),
             })
             .ok();
         })
@@ -80,6 +130,7 @@ impl SessionPane {
         let plan = view.plan().clone();
         let forking = self.forking;
         let lost = self.lost;
+        let (carried, forked_from) = (self.carried.len(), self.forked_from.clone());
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
@@ -101,6 +152,7 @@ impl SessionPane {
                             plan: &plan,
                             forking: forking == Some(index),
                             lost,
+                            carried: transcript::carried(index, carried, forked_from.as_deref()),
                         };
                         transcript::exchange(exchange, &context, window)
                     },
@@ -208,7 +260,10 @@ impl SessionPane {
             return;
         }
         let hub = self.hub.clone();
-        let summary = self.summary.clone();
+        let summary = match &self.fork_source {
+            Some(source) if exchange < self.carried.len() => source.clone(),
+            _ => self.summary.clone(),
+        };
         cx.spawn(async move |this, cx| {
             let fetched = hub.tool_output(&summary, id.clone(), name).await;
             this.update(cx, |this, cx| {

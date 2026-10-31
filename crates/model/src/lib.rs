@@ -4,6 +4,7 @@ pub mod chat;
 pub mod decisions;
 pub mod entities;
 pub mod flagged;
+pub mod fork;
 pub mod harness;
 pub mod health;
 pub mod history;

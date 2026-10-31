@@ -343,6 +343,15 @@ impl Gateway {
         Ok(translate::summary(renamed))
     }
 
+    /// The session's transcript as its node reads it now.
+    pub async fn transcript(&self, session: &SessionId) -> Result<Vec<model::session::Turn>, GatewayError> {
+        let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
+        let url = format!("{}/api/harness-sessions/{segment}/transcript", self.base_url);
+        let read: wire::gateway::sessions::HarnessSessionTranscriptResponse =
+            Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::transcript(read.turns))
+    }
+
     /// Starts a new chat that carries this session's conversation up to the reply to its
     /// `prompts`th prompt.
     pub async fn fork(&self, session: &SessionId, prompts: u32) -> Result<SessionSummary, GatewayError> {
