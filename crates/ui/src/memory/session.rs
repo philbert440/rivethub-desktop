@@ -1,15 +1,14 @@
-use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Hsla, IntoElement, ParentElement, Styled, Task, Window, div, prelude::*,
-    px,
+    AnyElement, ClickEvent, Context, Hsla, IntoElement, ListState, ParentElement, Styled, Task, Window, div,
+    list, prelude::*, px,
 };
-use model::markdown::Block;
 use model::memory::{SessionMemory, Summary, SummaryKind, Vector};
 use model::session::SessionSummary;
 use model::topics::FiledBy;
 
+use super::recalled::Recalled;
 use super::sessions::link_button;
 use super::{Focus, MemoryEvent, MemoryPage};
 use crate::markdown_view;
@@ -20,35 +19,6 @@ const COLUMN: f32 = 860.;
 const INDENT: f32 = 24.;
 const CLAMP: usize = 3;
 const REFRESH: Duration = Duration::from_secs(10);
-
-/// A session's or conversation's memory with its summaries parsed, and which of them are open.
-pub(super) struct Recalled {
-    memory: SessionMemory,
-    blocks: HashMap<String, Vec<Block>>,
-    expanded: HashSet<String>,
-}
-
-impl Recalled {
-    /// Takes memory as it loaded, keeping open whatever was open before.
-    pub(super) fn new(memory: SessionMemory, before: Option<Self>) -> Self {
-        let blocks = memory
-            .summaries
-            .iter()
-            .map(|summary| (summary.id.clone(), model::markdown::parse(summary.text.trim())))
-            .collect();
-        Self {
-            memory,
-            blocks,
-            expanded: before.map(|before| before.expanded).unwrap_or_default(),
-        }
-    }
-
-    fn toggle(&mut self, summary: &str) {
-        if !self.expanded.remove(summary) {
-            self.expanded.insert(summary.to_owned());
-        }
-    }
-}
 
 /// The session Memory is showing, with its summaries parsed once they load.
 pub(super) struct Viewing {
@@ -168,11 +138,13 @@ impl MemoryPage {
         .detach();
     }
 
-    pub(super) fn session_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn session_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(viewing) = &self.viewing else {
             return div().into_any_element();
         };
-        let body = Self::recall(viewing.recalled.as_ref(), "session", window, cx);
+        if let Some(recalled) = &viewing.recalled {
+            return Self::recalled_page(&recalled.rows, cx);
+        }
         div()
             .id("memory-session")
             .size_full()
@@ -195,8 +167,81 @@ impl MemoryPage {
                             .clone()
                             .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
                     )
-                    .child(body),
+                    .child(div().text_color(Theme::ink_dim()).child("Loading…")),
             )
+            .into_any_element()
+    }
+
+    /// A session's or conversation's memory as rows, its head and then each summary, of which only
+    /// those in view are laid out and drawn.
+    pub(super) fn recalled_page(rows: &ListState, cx: &mut Context<Self>) -> AnyElement {
+        let rows = list(
+            rows.clone(),
+            cx.processor(|this: &mut Self, row: usize, window: &mut Window, cx| {
+                this.recalled_row(row, window, cx)
+            }),
+        )
+        .size_full();
+        div()
+            .size_full()
+            .flex()
+            .justify_center()
+            .child(div().w_full().max_w(px(COLUMN)).h_full().child(rows))
+            .into_any_element()
+    }
+
+    fn recalled_row(&self, row: usize, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        if row == 0 {
+            return div()
+                .px_8()
+                .pt_8()
+                .pb_2()
+                .child(self.recalled_head(cx))
+                .into_any_element();
+        }
+        let Some(recalled) = self.recalled() else {
+            return div().into_any_element();
+        };
+        let found = recalled
+            .order
+            .get(row - 1)
+            .and_then(|(depth, place)| Some((*depth, recalled.memory.summaries.get(*place)?)));
+        let Some((depth, summary)) = found else {
+            return div().into_any_element();
+        };
+        let last = row == recalled.order.len();
+        div()
+            .px_8()
+            .pb(px(if last { 32. } else { 8. }))
+            .child(Self::summary(row - 1, depth, summary, recalled, window, cx))
+            .into_any_element()
+    }
+
+    /// The open page's head: what it is, any problem, its parts and the summaries' heading.
+    fn recalled_head(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (head, noun) = match (&self.viewing, &self.remembering) {
+            (Some(viewing), _) => (
+                self.session_head(&viewing.session, cx).into_any_element(),
+                "session",
+            ),
+            (None, Some(remembering)) => (self.conversation_head(remembering, cx), "conversation"),
+            (None, None) => return div().into_any_element(),
+        };
+        let Some(recalled) = self.recalled() else {
+            return head;
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(head)
+            .children(
+                self.problem
+                    .clone()
+                    .map(|problem| div().text_xs().text_color(Theme::warn()).child(problem)),
+            )
+            .child(Self::parts(&recalled.memory))
+            .child(Self::summaries_heading(&recalled.memory, noun))
             .into_any_element()
     }
 
@@ -371,29 +416,17 @@ impl MemoryPage {
             ))
     }
 
-    /// What memory holds of a session or conversation, its parts and then its summaries.
-    pub(super) fn recall(
-        recalled: Option<&Recalled>,
-        noun: &str,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Some(recalled) = recalled else {
-            return div()
-                .text_color(Theme::ink_dim())
-                .child("Loading…")
-                .into_any_element();
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(Self::parts(&recalled.memory))
-            .child(Self::summaries(recalled, noun, window, cx))
-            .into_any_element()
+    /// The summaries being read: the open session's, or else the open conversation's.
+    fn recalled(&self) -> Option<&Recalled> {
+        match self.viewing.as_ref() {
+            Some(viewing) => viewing.recalled.as_ref(),
+            None => self
+                .remembering
+                .as_ref()
+                .and_then(|remembering| remembering.recalled.as_ref()),
+        }
     }
 
-    /// The summaries being read: the open session's, or else the open conversation's.
     fn recalled_mut(&mut self) -> Option<&mut Recalled> {
         match self.viewing.as_mut() {
             Some(viewing) => viewing.recalled.as_mut(),
@@ -404,8 +437,8 @@ impl MemoryPage {
         }
     }
 
-    fn summaries(recalled: &Recalled, noun: &str, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let memory = &recalled.memory;
+    /// SUMMARIES over the list, or why there are none yet.
+    fn summaries_heading(memory: &SessionMemory, noun: &str) -> AnyElement {
         if memory.summaries.is_empty() {
             let note = if memory.messages.total == 0 {
                 format!("Memory hasn't captured anything from this {noun}.")
@@ -419,25 +452,10 @@ impl MemoryPage {
                 .into_any_element();
         }
         div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .pt_2()
-                    .text_xs()
-                    .text_color(Theme::ink_dim())
-                    .child("SUMMARIES"),
-            )
-            .children(
-                memory
-                    .outline()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (depth, summary))| {
-                        Self::summary(index, depth, summary, recalled, window, cx)
-                    }),
-            )
+            .pt_2()
+            .text_xs()
+            .text_color(Theme::ink_dim())
+            .child("SUMMARIES")
             .into_any_element()
     }
 
