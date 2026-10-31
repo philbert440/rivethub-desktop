@@ -104,7 +104,7 @@ impl Frame {
     fn heading(&self) -> (String, Option<String>) {
         match &self.shown {
             Shown::Ready(view) => (view.title.clone(), view.subtitle.clone()),
-            Shown::Waiting | Shown::Failed(_) => (String::new(), None),
+            Shown::Waiting | Shown::Failed(_) => (self.named.clone(), None),
         }
     }
 
