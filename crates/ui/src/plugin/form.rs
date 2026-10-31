@@ -38,6 +38,23 @@ pub struct FormView {
 
 impl EventEmitter<FormSubmitted> for FormView {}
 
+/// The text a text, secret or number field starts with.
+fn given_text(field: &Field) -> Option<String> {
+    match &field.value {
+        Some(Value::Text(text)) => Some(text.clone()),
+        Some(Value::Number(number)) => Some(shown_number(*number)),
+        _ => None,
+    }
+}
+
+/// The value a toggle, select or file field starts with; a toggle starts off unless it says.
+fn given_choice(field: &Field) -> Option<Value> {
+    match field.input {
+        Input::Toggle => Some(field.value.clone().unwrap_or(Value::Bool(false))),
+        _ => field.value.clone(),
+    }
+}
+
 fn shown_number(number: f64) -> String {
     if number.fract() == 0. && number.abs() < 1e15 {
         format!("{number:.0}")
@@ -54,11 +71,7 @@ impl FormView {
             .iter()
             .map(|field| {
                 let text = |placeholder: &str, multiline: bool, secret: bool, cx: &mut Context<Self>| {
-                    let value = match &field.value {
-                        Some(Value::Text(text)) => Some(text.clone()),
-                        Some(Value::Number(number)) => Some(shown_number(*number)),
-                        _ => None,
-                    };
+                    let value = given_text(field);
                     let placeholder = placeholder.to_owned();
                     cx.new(move |cx| {
                         let mut input = TextInput::new(placeholder, cx).keeping();
@@ -86,8 +99,7 @@ impl FormView {
                         (Some(text(&hint, false, true, cx)), None)
                     }
                     Input::Number { .. } => (Some(text(&placeholder, false, false, cx)), None),
-                    Input::Toggle => (None, Some(field.value.clone().unwrap_or(Value::Bool(false)))),
-                    Input::Select { .. } | Input::File { .. } => (None, field.value.clone()),
+                    Input::Toggle | Input::Select { .. } | Input::File { .. } => (None, given_choice(field)),
                 };
                 let one_line = !matches!(field.input, Input::Text { multiline: true });
                 if let Some(input) = typed.as_ref().filter(|_| one_line) {
@@ -171,6 +183,21 @@ impl FormView {
         }
         cx.notify();
         self.problems.is_empty()
+    }
+
+    /// Puts every field back as the view gave it, once the plug-in took what was sent.
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        for entry in &mut self.entries {
+            if let Some(input) = &entry.typed {
+                let given = given_text(&entry.field).unwrap_or_default();
+                input.update(cx, |input, cx| input.set_text(&given, cx));
+            } else {
+                entry.chosen = given_choice(&entry.field);
+            }
+        }
+        self.problems.clear();
+        self.choosing = None;
+        cx.notify();
     }
 
     /// Shows what the plug-in said is wrong with which fields.

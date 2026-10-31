@@ -300,6 +300,7 @@ impl Frame {
                     (Ok(Answer::Done(actions)), state) => {
                         if let Some(state) = state {
                             state.refusal = None;
+                            state.view.update(cx, FormView::clear);
                         }
                         cx.emit(FrameEvent::Run(actions));
                     }
