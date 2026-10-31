@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gpui::{
     AnyElement, ClickEvent, Context, HighlightStyle, IntoElement, ParentElement, Styled, StyledText, div,
     prelude::*, px,
@@ -27,7 +29,7 @@ impl MemoryPage {
                 }
                 match found {
                     Ok(found) => {
-                        this.found = Some(found);
+                        this.found = Some(this.distinct(found));
                         cx.notify();
                     }
                     Err(err) => this.failed(&err, cx),
@@ -37,6 +39,26 @@ impl MemoryPage {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Each card once: of the hits that would show alike, the same words of the same kind from
+    /// the same harness in a session of the same name, or none, only the best ranked shows.
+    fn distinct(&self, found: Vec<Found>) -> Vec<Found> {
+        let mut seen = HashSet::new();
+        found
+            .into_iter()
+            .filter(|hit| {
+                let session = hit.session.as_ref();
+                seen.insert((
+                    hit.source,
+                    session.map(|id| id.harness().display_name().to_owned()),
+                    session
+                        .and_then(|id| self.known_session(id))
+                        .map(SessionSummary::name),
+                    hit.text.clone(),
+                ))
+            })
+            .collect()
     }
 
     fn pick_period(&mut self, period: Period, cx: &mut Context<Self>) {
