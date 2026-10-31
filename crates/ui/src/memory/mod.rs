@@ -4,6 +4,7 @@ mod decisions;
 mod entities;
 mod entity_edit;
 mod flagged;
+mod library;
 mod links;
 mod members;
 mod mentions;
@@ -16,6 +17,7 @@ mod tidy;
 mod topics;
 mod trash;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use app::{Hub, Library, Tidy};
@@ -111,6 +113,9 @@ pub struct MemoryPage {
     asked: Option<String>,
     found: Option<Vec<Found>>,
     library: Option<Library>,
+    /// The root topics whose page is on its way.
+    reading_roots: HashSet<TopicId>,
+    index_scroll: ScrollHandle,
     find: Entity<TextInput>,
     finding: Option<String>,
     loose: Vec<Listing>,
@@ -174,6 +179,8 @@ impl MemoryPage {
             asked: None,
             found: None,
             library: None,
+            reading_roots: HashSet::new(),
+            index_scroll: ScrollHandle::new(),
             find,
             finding: None,
             loose: Vec::new(),
