@@ -10,6 +10,7 @@ mod web_panel;
 pub use canvas::{Activate, ClearSelection, DeleteSelection, FitView, ZoomIn, ZoomOut};
 pub use frame::Frame;
 pub use settings::{PluginSettings, SettingsEvent};
+pub use web_panel::move_focus;
 
 use std::collections::HashMap;
 

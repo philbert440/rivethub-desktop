@@ -277,9 +277,10 @@ impl Panel {
         self.send(protocol::Command::Focus(focused));
     }
 
-    /// Gives the keyboard to the page's first element, as Tab coming into it does.
-    pub fn enter(&self) {
-        self.send(protocol::Command::Enter);
+    /// Gives the keyboard to the page's first element, as Tab coming into it does, or to its last
+    /// for Shift+Tab.
+    pub fn enter(&self, forward: bool) {
+        self.send(protocol::Command::Enter { forward });
     }
 
     /// Delivers `json` to the page as a `message` event's data.

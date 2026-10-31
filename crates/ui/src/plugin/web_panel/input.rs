@@ -170,14 +170,14 @@ impl WebPanelView {
 
     pub(super) fn watch_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.watch = vec![
-            cx.on_focus(&self.focus, window, |this, _, _| {
+            cx.on_focus(&self.focus, window, |this, _, cx| {
                 if let Some(panel) = &this.panel {
-                    // A click places the page's focus itself; the keyboard arriving puts it on the
-                    // page's first element.
+                    // A click places the page's focus itself; Tab arriving puts it on the page's
+                    // first element, and Shift+Tab on its last.
                     if this.pressed {
                         panel.focus(true);
                     } else {
-                        panel.enter();
+                        panel.enter(super::tabbed_forward(cx));
                     }
                 }
             }),

@@ -330,11 +330,26 @@ impl Page {
                     self.view.grab_focus();
                 }
             }
-            Command::Enter => {
-                if let Some(target) = self.window.window() {
-                    events::focus(&target, true);
-                }
-                self.view.child_focus(gtk::DirectionType::TabForward);
+            Command::Enter { forward } => {
+                // As in a browser, Tab from outside the page reaches its first element and
+                // Shift+Tab its last: whatever the page had focused before lets go first, then the
+                // page moves its own focus.
+                let Some(target) = self.window.window() else {
+                    return;
+                };
+                events::focus(&target, true);
+                self.view.grab_focus();
+                let (keyval, state) = if forward { (0xff09, 0) } else { (0xfe20, 1) };
+                self.view.evaluate_javascript(
+                    "document.activeElement?.blur()",
+                    None,
+                    None,
+                    gtk::gio::Cancellable::NONE,
+                    move |_| {
+                        events::key(&target, true, keyval, state);
+                        events::key(&target, false, keyval, state);
+                    },
+                );
             }
             Command::Post(json) => {
                 let script =

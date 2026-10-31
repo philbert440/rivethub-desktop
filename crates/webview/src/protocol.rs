@@ -9,7 +9,7 @@ use crate::{Cursor, Menu, Modifiers, Pointer, Rect, Size};
 pub const LIBRARY: &str = "librivethub_webview.so";
 
 /// Bumped whenever a message changes, so an app never drives a library from another build.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 pub const START: &[u8] = b"rivethub_webview_start\0";
 pub const SEND: &[u8] = b"rivethub_webview_send\0";
@@ -56,7 +56,9 @@ pub enum Command {
         modifiers: Modifiers,
     },
     Focus(bool),
-    Enter,
+    Enter {
+        forward: bool,
+    },
     Post(String),
     Restyle(String),
     Choose(Option<usize>),

@@ -9,14 +9,14 @@ use model::notice::NoticeKind;
 use model::{Page, SessionId};
 
 use crate::memory::{MemoryEvent, MemoryPage};
-use crate::plugin::{Entry, Plugins, PluginsEvent};
+use crate::plugin::{Entry, Plugins, PluginsEvent, move_focus};
 use crate::settings::{SettingsEvent, SettingsPage};
 use crate::text::one_line;
 use crate::tip::Tip;
 use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
 use crate::{appearance, brand, theme::Theme};
 
-gpui::actions!(shell, [OpenSettings]);
+gpui::actions!(shell, [OpenSettings, FocusNext, FocusPrevious]);
 
 const OPEN_WIDTH: f32 = 224.;
 const RAIL_WIDTH: f32 = 48.;
@@ -438,6 +438,8 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.show(Page::Settings, window, cx);
             }))
+            .on_action(|_: &FocusNext, window, cx| move_focus(true, window, cx))
+            .on_action(|_: &FocusPrevious, window, cx| move_focus(false, window, cx))
             .relative()
             .size_full()
             .flex()

@@ -28,6 +28,29 @@ const HEIGHTS: (f32, f32) = (48., 2400.);
 /// The page asked for these actions.
 pub struct Asked(pub Vec<Action>);
 
+/// Which way the keyboard last moved between the app's fields and panels, so a panel it lands in
+/// starts at its page's first element or its last.
+struct Tabbed {
+    forward: bool,
+}
+
+impl gpui::Global for Tabbed {}
+
+/// Moves the keyboard to the app's next or previous field or panel, as Tab and Shift+Tab do.
+pub fn move_focus(forward: bool, window: &mut Window, cx: &mut gpui::App) {
+    cx.set_global(Tabbed { forward });
+    if forward {
+        window.focus_next(cx);
+    } else {
+        window.focus_prev(cx);
+    }
+}
+
+/// Whether the keyboard last moved forward between the app's fields and panels.
+fn tabbed_forward(cx: &gpui::App) -> bool {
+    cx.try_global::<Tabbed>().is_none_or(|tabbed| tabbed.forward)
+}
+
 /// Why the page isn't showing.
 enum Trouble {
     /// It can't, such as with `WebKitGTK` missing; why, in words.
@@ -212,11 +235,7 @@ impl WebPanelView {
         if !self.focus.is_focused(window) {
             return;
         }
-        if forward {
-            window.focus_next(cx);
-        } else {
-            window.focus_prev(cx);
-        }
+        move_focus(forward, window, cx);
         if self.focus.is_focused(window) {
             window.blur(cx);
         }
