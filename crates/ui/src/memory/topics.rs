@@ -4,7 +4,7 @@ use gpui::{
 };
 use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
-use model::wiki::{Page, readable, section, without_decisions};
+use model::wiki::{Page, readable, section, titled, without_decisions};
 
 use super::{MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
@@ -300,11 +300,13 @@ impl MemoryPage {
                 .map(|topic| (0, topic))
                 .collect(),
         };
-        let pages: Vec<_> = self
-            .loose
-            .iter()
-            .filter(|listing| listing.owner.is_none())
-            .collect();
+        let pages: Vec<_> = match &finding {
+            Some(query) => titled(&self.loose, query),
+            None => self.loose.iter().collect(),
+        }
+        .into_iter()
+        .filter(|listing| listing.owner.is_none())
+        .collect();
         let find = div()
             .mx_1()
             .mb_2()
