@@ -110,9 +110,27 @@ pub fn bytes(count: u64) -> String {
     format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[unit])
 }
 
+/// `text` cut to at most `max` characters by taking out its middle, so both ends still show.
+pub fn middle(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max || max < 3 {
+        return text.to_owned();
+    }
+    let kept = max - 1;
+    let head: String = text.chars().take(kept.div_ceil(2)).collect();
+    let tail: String = text.chars().skip(count - kept / 2).collect();
+    format!("{}…{}", head.trim_end(), tail.trim_start())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::one_line;
+    use super::{middle, one_line};
+
+    #[test]
+    fn long_names_lose_their_middle() {
+        assert_eq!(middle("Shed roof", 20), "Shed roof");
+        assert_eq!(middle("Replacing the garden shed roof", 15), "Replaci…ed roof");
+    }
 
     #[test]
     fn titles_lose_harness_markup_but_keep_comparisons() {

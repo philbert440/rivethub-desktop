@@ -6,7 +6,7 @@ use gpui::{
 };
 use model::plugin::view::{self, Button, Property, Tone};
 
-use super::{container, inline, symbol};
+use super::{inline, symbol};
 use crate::markdown_view;
 use crate::plugin::frame::{Frame, Pressed};
 use crate::text::now_ms;
@@ -42,21 +42,6 @@ impl Frame {
             .text_xs()
             .text_color(Theme::ink())
             .child(text.trim_end().to_owned())
-            .into_any_element()
-    }
-
-    pub(super) fn web_panel(level: u8) -> AnyElement {
-        div()
-            .p_4()
-            .rounded(px(16.))
-            .bg(container(level))
-            .flex()
-            .items_center()
-            .gap_3()
-            .text_sm()
-            .text_color(Theme::ink_dim())
-            .child(symbol(Some("language"), 18., Theme::ink_dim()))
-            .child("This part of the plug-in is a web panel, which RivetHub desktop doesn't show yet.")
             .into_any_element()
     }
 

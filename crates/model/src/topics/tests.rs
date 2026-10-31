@@ -39,6 +39,8 @@ fn topic(slug: &str, parent: Option<&str>) -> Topic {
         updated_ms: 0,
         closed_ms: None,
         directory: None,
+        owner: None,
+        visibility: None,
     }
 }
 

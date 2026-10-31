@@ -157,7 +157,8 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    /// A hit from a listed session names it, and clicking it opens that session's page here.
+    /// A hit from a listed session names it. Clicking any hit with a session opens that session's
+    /// page here, also one no node lists any more, as the topic and entity pages do.
     fn hit(
         index: usize,
         hit: &Found,
@@ -180,6 +181,11 @@ impl MemoryPage {
                 .text_color(Theme::ink_dim())
                 .child(text)
         };
+        let page = hit.session.as_ref().map(|id| {
+            known
+                .cloned()
+                .unwrap_or_else(|| SessionSummary::remembered(id.clone(), None, 0, None))
+        });
         div()
             .id(("memory-hit", index))
             .px_4()
@@ -189,7 +195,7 @@ impl MemoryPage {
             .flex()
             .flex_col()
             .gap_2()
-            .when_some(known.cloned(), |card, session| {
+            .when_some(page, |card, session| {
                 card.cursor_pointer()
                     .hover(|card| card.bg(Theme::raised()))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {

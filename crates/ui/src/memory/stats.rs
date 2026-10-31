@@ -78,7 +78,10 @@ impl MemoryPage {
                     ))
                     .children(self.upkeep.as_ref().map(Self::upkeep_tiles))
                     .child(div().h(px(12.)))
-                    .child(self.tidy_section(cx)),
+                    .child(self.tidy_section(cx))
+                    .when_some(self.flagged_section(cx), |column, flagged| {
+                        column.child(div().h(px(12.))).child(flagged)
+                    }),
             )
             .into_any_element()
     }

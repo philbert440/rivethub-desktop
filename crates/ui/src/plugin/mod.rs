@@ -5,10 +5,12 @@ mod frame;
 mod overlay;
 mod run;
 mod settings;
+mod web_panel;
 
 pub use canvas::{Activate, ClearSelection, DeleteSelection, FitView, ZoomIn, ZoomOut};
 pub use frame::Frame;
 pub use settings::{PluginSettings, SettingsEvent};
+pub use web_panel::move_focus;
 
 use std::collections::HashMap;
 
@@ -253,6 +255,7 @@ impl Plugins {
                     None,
                     context,
                     Placement::Card,
+                    Some(card.title.clone()),
                     cx,
                 );
                 let shown = Self::show(frame, Origin::Card, cx);
@@ -279,13 +282,14 @@ impl Plugins {
 
     /// Opens a sidebar entry's page, at its first view when it isn't open yet or `to_start`.
     pub fn open_page(&mut self, key: &PageKey, to_start: bool, cx: &mut Context<Self>) {
-        let view = self.find(&key.plugin).and_then(|plugin| {
+        let page = self.find(&key.plugin).and_then(|plugin| {
             plugin
                 .pages
                 .iter()
                 .find(|page| Some(&page.id) == key.entry.as_ref())
-                .map(|page| page.view.clone())
+                .map(|page| (page.view.clone(), page.title.clone()))
         });
+        let (view, title) = page.unzip();
         if let Some(stack) = self.pages.get_mut(key).filter(|stack| !stack.is_empty()) {
             if !to_start {
                 return;
@@ -304,6 +308,7 @@ impl Plugins {
                 None,
                 About::default(),
                 Placement::Page,
+                title,
                 cx,
             );
             let shown = Self::show(frame, Origin::Page(key.clone()), cx);
@@ -312,6 +317,9 @@ impl Plugins {
         }
     }
 
+    /// A frame for one of `plugin`'s views; `named` is what its header says until the view
+    /// answers, the plug-in's name when it's `None`.
+    #[expect(clippy::too_many_arguments, reason = "each is part of what a frame shows")]
     fn frame(
         &self,
         plugin: PluginRef,
@@ -319,10 +327,18 @@ impl Plugins {
         params: Option<Params>,
         context: About,
         placement: Placement,
+        named: Option<String>,
         cx: &mut Context<Self>,
     ) -> Entity<Frame> {
         let hub = self.hub.clone();
-        cx.new(|cx| Frame::new(hub, plugin, view, params, context, placement, cx))
+        let named = named
+            .or_else(|| self.find(&plugin).map(|known| known.name.clone()))
+            .unwrap_or_default();
+        cx.new(|cx| {
+            let mut frame = Frame::new(hub, plugin, view, params, context, placement, cx);
+            frame.named = named;
+            frame
+        })
     }
 
     fn show(frame: Entity<Frame>, origin: Origin, cx: &mut Context<Self>) -> Shown {

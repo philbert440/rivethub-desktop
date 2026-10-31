@@ -1,6 +1,7 @@
 mod backoff;
 mod chime;
 mod feed;
+mod forks;
 mod listing;
 mod memory;
 mod notify;
@@ -12,6 +13,7 @@ mod status;
 mod terminal;
 mod topics;
 mod trash;
+mod visibility;
 
 pub use feed::WorkspaceFeed;
 pub use listing::{AllSessions, Missing, SessionListing};
@@ -48,6 +50,8 @@ struct Inner {
     offers: RwLock<HashMap<String, Vec<model::harness::HarnessOffer>>>,
     prefs: RwLock<Preferences>,
     saving: Mutex<()>,
+    forks: Mutex<()>,
+    me: RwLock<Option<model::visibility::Me>>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +72,8 @@ impl Hub {
                 offers: RwLock::new(HashMap::new()),
                 prefs: RwLock::new(prefs::load()),
                 saving: Mutex::new(()),
+                forks: Mutex::new(()),
+                me: RwLock::new(None),
             }),
         }
     }
@@ -182,6 +188,18 @@ impl Hub {
             Ok(forked)
         })
         .await
+    }
+
+    /// The session's transcript as its node reads it now.
+    pub async fn transcript(
+        &self,
+        summary: &SessionSummary,
+    ) -> Result<Vec<model::session::Turn>, GatewayError> {
+        let hub = self.clone();
+        let session = summary.id.clone();
+        let node = summary.node.clone();
+        self.on_runtime(async move { hub.gateway_for(node.as_deref()).await?.transcript(&session).await })
+            .await
     }
 
     /// The session as its node describes it now, such as with the title its harness gave it and

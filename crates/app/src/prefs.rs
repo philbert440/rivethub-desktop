@@ -142,11 +142,16 @@ impl From<Stored> for Preferences {
 }
 
 fn path() -> Option<PathBuf> {
+    config_file("preferences.json")
+}
+
+/// A file in the app's own config directory.
+pub(crate) fn config_file(name: &str) -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("rivethub-desktop").join("preferences.json"))
+    Some(config.join("rivethub-desktop").join(name))
 }
 
 /// The saved preferences, or the defaults when there are none or they can't be read.

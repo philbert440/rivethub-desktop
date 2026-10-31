@@ -150,16 +150,27 @@ impl Gateway {
     }
 
     /// Approves or rejects one proposal; rh applies an approved change through the topic routes.
+    /// rh's refusal (a change the topic rules refuse, one already decided, or one out of date that
+    /// rh set aside) comes back as `Conflict` carrying rh's own message.
     pub async fn decide_proposal(&self, proposal: &str, verdict: Verdict) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "tidy", "proposals", proposal, decision(verdict)])?;
-        let _: TidyProposal = Self::read_json(self.http.post(url).send().await)?.await?;
+        let _: TidyProposal = Self::refusable(self.http.post(url).send().await).await?;
         Ok(())
     }
 
-    /// Approves or rejects every pending proposal of a batch, and answers what failed and why.
-    pub async fn decide_batch(&self, batch: &str, verdict: Verdict) -> Result<Vec<String>, GatewayError> {
+    /// Approves or rejects every pending proposal of a batch, and answers each one it couldn't
+    /// decide with rh's reason.
+    pub async fn decide_batch(
+        &self,
+        batch: &str,
+        verdict: Verdict,
+    ) -> Result<Vec<(String, String)>, GatewayError> {
         let url = self.api_url(&["api", "tidy", "batches", batch, decision(verdict)])?;
         let decided: TidyBatchDecision = Self::read_json(self.http.post(url).send().await)?.await?;
-        Ok(decided.failed.into_iter().map(|failed| failed.error).collect())
+        Ok(decided
+            .failed
+            .into_iter()
+            .map(|failed| (failed.proposal_id, failed.error))
+            .collect())
     }
 }
