@@ -271,7 +271,7 @@ pub enum Weight {
 }
 
 /// A colour by its part in the theme, never a literal, so a canvas follows the app's theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
     Surface,
     SurfaceContainer,
@@ -295,6 +295,33 @@ pub enum Role {
     Category4,
     Category5,
     Category6,
+}
+
+impl Role {
+    pub const ALL: [Self; 22] = [
+        Self::Surface,
+        Self::SurfaceContainer,
+        Self::SurfaceContainerHigh,
+        Self::Primary,
+        Self::PrimaryContainer,
+        Self::OnPrimary,
+        Self::OnPrimaryContainer,
+        Self::SecondaryContainer,
+        Self::OnSurface,
+        Self::OnSurfaceVariant,
+        Self::Outline,
+        Self::OutlineVariant,
+        Self::Info,
+        Self::Success,
+        Self::Warning,
+        Self::Danger,
+        Self::Category1,
+        Self::Category2,
+        Self::Category3,
+        Self::Category4,
+        Self::Category5,
+        Self::Category6,
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

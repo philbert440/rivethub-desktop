@@ -19,6 +19,7 @@ use model::history::{HistoryFilter, Phase};
 use model::search::SessionMatch;
 use model::session::SessionSummary;
 use model::topics::Topic;
+use model::visibility::Visibility;
 use model::{SessionId, TopicId, lineage};
 
 use crate::input::{Submitted, TextInput};
@@ -45,6 +46,7 @@ pub struct PastTopic {
     pub name: String,
     pub sessions: usize,
     pub active_ms: i64,
+    pub visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -242,7 +244,7 @@ impl SidePanel {
                 section
                     .child(self.section(Section::PastTopics, past.len().to_string(), None, cx))
                     .when(self.is_open(Section::PastTopics), |section| {
-                        section.child(Self::past_topics(&past, cx))
+                        section.child(self.past_topics(&past, cx))
                     })
                     .child(div().h(px(1.)).mx_2().bg(Theme::line()))
             })

@@ -3,6 +3,8 @@ pub mod attention;
 pub mod chat;
 pub mod decisions;
 pub mod entities;
+pub mod flagged;
+pub mod fork;
 pub mod harness;
 pub mod health;
 pub mod history;
@@ -29,6 +31,7 @@ pub mod topics;
 pub mod trash;
 pub mod trust;
 pub mod usage;
+pub mod visibility;
 pub mod wiki;
 
 pub use ids::{HarnessId, NativeSessionId, SessionId, TaskId, TopicId};

@@ -102,6 +102,25 @@ pub struct Context<'a> {
     pub forking: bool,
     /// Whether the stream to the session's node is down, so a running turn can't be followed.
     pub lost: bool,
+    /// Whether the exchange is one a fork carries from the chat it was forked from, shown to read.
+    pub carried: Carried<'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carried<'a> {
+    No,
+    Yes,
+    /// The last one, under which goes the line saying where the fork came from.
+    Last(&'a str),
+}
+
+/// Whether the exchange at `index` is among the first `count`, the ones a fork carries.
+pub fn carried(index: usize, count: usize, forked_from: Option<&str>) -> Carried<'_> {
+    match forked_from {
+        Some(from) if index + 1 == count => Carried::Last(from),
+        _ if index < count => Carried::Yes,
+        _ => Carried::No,
+    }
 }
 
 pub fn toggle_on(id: SharedString, fold: Fold, pane: WeakEntity<SessionPane>) -> gpui::Stateful<gpui::Div> {
@@ -389,7 +408,7 @@ fn actions(exchange: &Exchange, cx: &Context<'_>) -> Option<impl IntoElement> {
     let ix = cx.index;
     let reply = exchange.answer.trim().to_owned();
     let meta = meta(exchange);
-    let forks = exchange.prompt.is_some();
+    let forks = exchange.prompt.is_some() && cx.carried == Carried::No;
     if reply.is_empty() && meta.is_none() && !forks {
         return None;
     }
@@ -505,7 +524,28 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
     div()
         .w_full()
         .flex()
-        .justify_center()
-        .child(column)
+        .flex_col()
+        .items_center()
+        .child(column.when(cx.carried != Carried::No, |column| column.opacity(0.7)))
+        .children(match cx.carried {
+            Carried::Last(from) => Some(fork_divider(from, cx.column)),
+            Carried::No | Carried::Yes => None,
+        })
         .into_any_element()
+}
+
+/// The line between the conversation a fork carries and the fork's own.
+fn fork_divider(from: &str, column: Pixels) -> impl IntoElement {
+    let rule = || div().flex_1().h(px(1.)).bg(Theme::line());
+    div()
+        .w(column)
+        .py_3()
+        .flex()
+        .items_center()
+        .gap_3()
+        .text_xs()
+        .text_color(Theme::ink_dim())
+        .child(rule())
+        .child(div().flex_none().child(from.to_owned()))
+        .child(rule())
 }

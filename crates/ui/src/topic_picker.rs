@@ -2,15 +2,23 @@ use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Subscription, Window, actions, div, prelude::*, px,
 };
+use std::collections::{HashMap, HashSet};
+
 use model::TopicId;
-use model::topics::{Topic, suggest};
+use model::topics::{Topic, outline, suggest};
 
 use crate::input::{Submitted, TextInput};
+use crate::text::middle;
 use crate::theme::Theme;
 
 actions!(topic_picker, [Dismiss]);
 
 const SHOWN: usize = 5;
+/// How many matches a tree picker lists while you type, each with its path.
+const MATCHED: usize = 8;
+const INDENT: f32 = 20.;
+/// How long a name above a match may run in its path before its middle goes.
+const PATH_NAME: usize = 24;
 
 #[derive(Debug, Clone)]
 pub enum PickerEvent {
@@ -27,6 +35,8 @@ pub struct TopicPicker {
     creates: bool,
     heading: Option<String>,
     noun: &'static str,
+    /// For a picker shown as the topic tree: the topics opened to show their subtopics.
+    tree: Option<HashSet<TopicId>>,
     _input: [Subscription; 2],
 }
 
@@ -44,6 +54,7 @@ impl TopicPicker {
             creates: true,
             heading: None,
             noun: "topic",
+            tree: None,
             _input: [submitted, typed],
         }
     }
@@ -65,6 +76,14 @@ impl TopicPicker {
         }
         self.input
             .update(cx, |input, cx| input.set_placeholder(field, cx));
+        self
+    }
+
+    /// Shows the topics as their tree, each root closed until opened, rather than the most recent
+    /// few; typing lists the matches with their paths.
+    #[must_use]
+    pub fn outlined(mut self) -> Self {
+        self.tree = Some(HashSet::new());
         self
     }
 
@@ -90,12 +109,96 @@ impl TopicPicker {
         cx.emit(event);
     }
 
+    /// The topic tree's rows: each topic whose parents are all open, with its depth and whether it
+    /// has subtopics to open.
+    fn tree_rows(&self, open: &HashSet<TopicId>, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let parents: HashSet<&TopicId> = self
+            .topics
+            .iter()
+            .filter_map(|topic| topic.parent.as_ref())
+            .collect();
+        let mut shown_depth: Option<usize> = None;
+        let mut rows = Vec::new();
+        for (index, (depth, topic)) in outline(&self.topics).into_iter().enumerate() {
+            if shown_depth.is_some_and(|hidden_below| depth > hidden_below) {
+                continue;
+            }
+            shown_depth = None;
+            let has_children = parents.contains(&topic.id);
+            let opened = open.contains(&topic.id);
+            if has_children && !opened {
+                shown_depth = Some(depth);
+            }
+            let toggled = topic.id.clone();
+            let toggle = div()
+                .id(("open", index))
+                .w(px(INDENT))
+                .flex_none()
+                .text_color(Theme::ink_dim())
+                .text_lg()
+                .when(has_children, |toggle| {
+                    toggle
+                        .cursor_pointer()
+                        .child(if opened { "▾" } else { "▸" })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(open) = this.tree.as_mut()
+                                && !open.remove(&toggled)
+                            {
+                                open.insert(toggled.clone());
+                            }
+                            cx.notify();
+                        }))
+                });
+            let indent = px(INDENT * f32::from(u8::try_from(depth).unwrap_or(u8::MAX)));
+            let chosen = topic.id.clone();
+            rows.push(
+                div()
+                    .id(("pick", index))
+                    .pl(indent + px(6.))
+                    .pr_3()
+                    .py(px(6.))
+                    .rounded(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .hover(|row| row.bg(Theme::raised()))
+                    .text_color(Theme::ink())
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(PickerEvent::Chose(chosen.clone()));
+                    }))
+                    .child(toggle)
+                    .child(topic.name.clone())
+                    .into_any_element(),
+            );
+        }
+        rows
+    }
+
+    /// What a match is filed under, as the names above it.
+    fn path_above(&self, topic: &Topic) -> Option<String> {
+        let known: HashMap<&TopicId, &Topic> = self.topics.iter().map(|topic| (&topic.id, topic)).collect();
+        let mut names = Vec::new();
+        let mut parent = topic.parent.as_ref();
+        while let Some(above) = parent.and_then(|id| known.get(id)) {
+            names.push(middle(&above.name, PATH_NAME));
+            parent = above
+                .parent
+                .as_ref()
+                .filter(|_| names.len() < model::topics::MAX_LEVELS);
+        }
+        names.reverse();
+        (!names.is_empty()).then(|| format!("in {}", names.join(" › ")))
+    }
+
     fn row(
         id: (&'static str, usize),
         label: String,
         cx: &mut Context<Self>,
         event: PickerEvent,
-    ) -> impl IntoElement {
+    ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
             .px_3()
@@ -121,18 +224,43 @@ impl Focusable for TopicPicker {
 impl Render for TopicPicker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let typed = self.input.read(cx).text().to_owned();
-        let shown: Vec<(TopicId, String)> = suggest(&self.topics, &typed, SHOWN)
+        let limit = if self.tree.is_some() { MATCHED } else { SHOWN };
+        let shown: Vec<(TopicId, String, Option<String>)> = suggest(&self.topics, &typed, limit)
             .into_iter()
-            .map(|topic| (topic.id.clone(), topic.name.clone()))
-            .collect();
-        let exact = shown.iter().any(|(_, name)| name.eq_ignore_ascii_case(&typed));
-        let picks: Vec<_> = shown
-            .into_iter()
-            .enumerate()
-            .map(|(index, (id, name))| {
-                Self::row(("pick", index), name, cx, PickerEvent::Chose(id)).into_any_element()
+            .map(|topic| {
+                let above = self.tree.as_ref().and_then(|_| self.path_above(topic));
+                (topic.id.clone(), topic.name.clone(), above)
             })
             .collect();
+        let exact = shown.iter().any(|(_, name, _)| name.eq_ignore_ascii_case(&typed));
+        let picks: Vec<_> = match self.tree.clone() {
+            Some(open) if typed.trim().is_empty() => self.tree_rows(&open, cx),
+            _ => shown
+                .into_iter()
+                .enumerate()
+                .map(|(index, (id, name, above))| {
+                    Self::row(("pick", index), name, cx, PickerEvent::Chose(id))
+                        .when_some(above, |row, above| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(Theme::ink_dim())
+                                    .truncate()
+                                    .child(above),
+                            )
+                        })
+                        .into_any_element()
+                })
+                .collect(),
+        };
+        let picks = div()
+            .id("picks")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .max_h(px(320.))
+            .overflow_y_scroll()
+            .children(picks);
         div()
             .key_context("TopicPicker")
             .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.emit(PickerEvent::Dismissed)))
@@ -161,7 +289,7 @@ impl Render for TopicPicker {
                     .bg(Theme::card())
                     .child(self.input.clone()),
             )
-            .children(picks)
+            .child(picks)
             .when_some(self.no_topic.filter(|_| typed.is_empty()), |list, label| {
                 list.child(Self::row(("none", 0), label.to_owned(), cx, PickerEvent::NoTopic))
             })

@@ -1,5 +1,6 @@
 pub mod board;
 pub mod canvas;
+pub mod panel;
 pub mod view;
 
 use std::collections::BTreeMap;
@@ -128,6 +129,23 @@ pub struct Listing {
 pub struct Settings {
     pub values: BTreeMap<String, view::Value>,
     pub secrets_set: Vec<String>,
+}
+
+/// Which of a plug-in's streams a log line came from; `Host` is rh's own word about it: starts,
+/// exits and answers it refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogStream {
+    Stdout,
+    Stderr,
+    Host,
+}
+
+/// One line of a plug-in's log, as its node kept it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogLine {
+    pub at_ms: i64,
+    pub stream: LogStream,
+    pub text: String,
 }
 
 /// A sidebar entry opening `view` as a page.

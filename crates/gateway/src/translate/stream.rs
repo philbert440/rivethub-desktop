@@ -47,6 +47,12 @@ fn usage(raw: &MessageUsage) -> Usage {
     }
 }
 
+/// A session's transcript turns, in order.
+pub fn transcript(raw: Vec<HarnessTranscriptTurn>) -> Vec<Turn> {
+    let mut tasks = 0;
+    raw.into_iter().map(|raw| turn(raw, &mut tasks)).collect()
+}
+
 /// One transcript turn; `tasks` counts the tasks Claude created in the turns before it, which is how
 /// Claude numbers them.
 fn turn(raw: HarnessTranscriptTurn, tasks: &mut u32) -> Turn {
@@ -209,10 +215,7 @@ pub fn event(raw: HarnessEvent, running: &mut Running) -> Option<SessionEvent> {
         } => {
             let usage = context(&turns, context_window);
             SessionEvent::Snapshot {
-                turns: {
-                    let mut tasks = 0;
-                    turns.into_iter().map(|raw| turn(raw, &mut tasks)).collect()
-                },
+                turns: transcript(turns),
                 context: usage,
             }
         }

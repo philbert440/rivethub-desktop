@@ -24,6 +24,7 @@ mod topic_picker;
 mod topic_rail;
 mod transcript;
 mod turn_rail;
+mod visibility;
 mod window_state;
 mod workspace;
 
@@ -91,6 +92,12 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", session_pane::EscapeComposer, Some("Composer")),
         KeyBinding::new("ctrl-shift-enter", session_pane::SteerDraft, Some("Composer")),
         KeyBinding::new("ctrl-,", shell::OpenSettings, None),
+        KeyBinding::new("tab", shell::FocusNext, None),
+        KeyBinding::new("shift-tab", shell::FocusPrevious, None),
+        KeyBinding::new("tab", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("shift-tab", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("tab", gpui::NoAction, Some("WebPanel")),
+        KeyBinding::new("shift-tab", gpui::NoAction, Some("WebPanel")),
         KeyBinding::new("delete", plugin::DeleteSelection, Some("PluginCanvas")),
         KeyBinding::new("backspace", plugin::DeleteSelection, Some("PluginCanvas")),
         KeyBinding::new("enter", plugin::Activate, Some("PluginCanvas")),

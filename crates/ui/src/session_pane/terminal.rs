@@ -20,6 +20,23 @@ impl SessionPane {
         self.show(Mode::Terminal, window, cx);
     }
 
+    /// Shows the session's terminal when one is running there, since a question or prompt it waits
+    /// on can only be answered in it; otherwise Chat stays.
+    pub fn answer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        let summary = self.summary.clone();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            if hub.has_terminal(&summary).await.unwrap_or(false) {
+                cx.update_window(window_handle, |_, window, cx| {
+                    this.update(cx, |this, cx| this.show_terminal(window, cx)).ok();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// Opens on the session's terminal and starts it without asking first.
     pub fn start_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = Mode::Terminal;

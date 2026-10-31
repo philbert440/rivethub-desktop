@@ -1,6 +1,7 @@
 use gateway::GatewayError;
 use std::collections::HashMap;
 
+use model::flagged::{FlaggedAction, FlaggedGroup};
 use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
 use model::tidy::{Batch, Upkeep};
 use model::topics::Topic;
@@ -8,6 +9,9 @@ use model::wiki::{EntityMention, Listing, Owned, Page, PageEdit};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
+
+/// How many wiki pages are asked about at once.
+const WIKI_CHECKS: usize = 8;
 
 /// The topics, the wiki pages their root topics own, and the entities each root topic's sessions
 /// mention.
@@ -117,14 +121,31 @@ impl Hub {
         self.on_runtime(async move { gateway.upkeep().await }).await
     }
 
+    /// The jobs memory stopped retrying, grouped by cause; `None` when this node keeps none for
+    /// this client.
+    pub async fn flagged(&self) -> Result<Option<Vec<FlaggedGroup>>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.flagged().await }).await
+    }
+
+    pub async fn act_on_flagged(&self, id: i64, action: FlaggedAction) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.act_on_flagged(id, action).await })
+            .await
+    }
+
     pub async fn decide_proposal(&self, proposal: String, verdict: Verdict) -> Result<(), GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.decide_proposal(&proposal, verdict).await })
             .await
     }
 
-    /// Decides a whole batch; answers rh's words for each proposal it couldn't apply.
-    pub async fn decide_batch(&self, batch: String, verdict: Verdict) -> Result<Vec<String>, GatewayError> {
+    /// Decides a whole batch; answers each proposal it couldn't decide with rh's words.
+    pub async fn decide_batch(
+        &self,
+        batch: String,
+        verdict: Verdict,
+    ) -> Result<Vec<(String, String)>, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.decide_batch(&batch, verdict).await })
             .await
@@ -146,6 +167,28 @@ impl Hub {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.wiki_pages(&query).await })
             .await
+    }
+
+    /// Which of these slugs name a wiki page, a few at a time; a slug rh couldn't be asked about
+    /// is left out, to be asked again.
+    pub async fn wiki_pages_exist(&self, slugs: Vec<String>) -> Vec<(String, bool)> {
+        use futures::StreamExt as _;
+        let gateway = self.inner.local.clone();
+        let checked = self.on_runtime(async move {
+            Ok(futures::stream::iter(slugs)
+                .map(|slug| {
+                    let gateway = gateway.clone();
+                    async move {
+                        let found = gateway.wiki_page_exists(&slug).await;
+                        found.ok().map(|found| (slug, found))
+                    }
+                })
+                .buffer_unordered(WIKI_CHECKS)
+                .filter_map(std::future::ready)
+                .collect()
+                .await)
+        });
+        checked.await.unwrap_or_default()
     }
 
     pub async fn wiki_page(&self, slug: String) -> Result<Page, GatewayError> {

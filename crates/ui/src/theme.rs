@@ -1,6 +1,7 @@
 use gpui::{Rgba, rgb, rgba};
 use model::palette::{DARK, Palette};
 use model::plugin::canvas::Role;
+use model::plugin::panel;
 use model::plugin::view::Tone;
 use parking_lot::RwLock;
 
@@ -130,6 +131,36 @@ impl Theme {
             Role::Category2 => pick(|palette| palette.categories[0]),
             Role::Category5 => pick(|palette| palette.categories[1]),
             Role::Category6 => pick(|palette| palette.categories[2]),
+        }
+    }
+
+    /// A colour as `0xRRGGBB`.
+    pub fn rgb(color: Rgba) -> u32 {
+        let channel = |value: f32| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a channel is clamped to 0..=255 first"
+            )]
+            let channel = (value.clamp(0., 1.) * 255.).round() as u32;
+            channel
+        };
+        (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
+    }
+
+    /// The theme as a plug-in's web panel gets it: every colour role, the fonts and the sizes.
+    pub fn web_panel() -> panel::Theme {
+        let surface = Self::surface();
+        panel::Theme {
+            light: 0.2126 * surface.r + 0.7152 * surface.g + 0.0722 * surface.b > 0.5,
+            colors: Role::ALL
+                .into_iter()
+                .map(|role| (role, Self::rgb(Self::role(role))))
+                .collect(),
+            font_family: Self::SANS.into(),
+            font_mono: Self::MONO.into(),
+            font_size: 14.,
+            radius: 16.,
         }
     }
 

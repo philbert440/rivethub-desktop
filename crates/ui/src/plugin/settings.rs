@@ -1,11 +1,11 @@
 use app::Hub;
 use gateway::GatewayError;
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, Styled,
-    Subscription, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, ScrollHandle,
+    Styled, Subscription, Window, div, prelude::*, px,
 };
 use model::plugin::view::Field;
-use model::plugin::{Plugin, PluginRef, PluginState};
+use model::plugin::{LogLine, LogStream, Plugin, PluginRef, PluginState};
 
 use super::form::FormView;
 use super::{Plugins, PluginsEvent};
@@ -27,6 +27,9 @@ pub struct PluginSettings {
     problem: Option<String>,
     busy: bool,
     saved: bool,
+    /// The newest lines of its log, or why they couldn't be read.
+    log: Option<Result<Vec<LogLine>, String>>,
+    log_scroll: ScrollHandle,
     _listed: Subscription,
 }
 
@@ -41,8 +44,10 @@ fn failure(err: GatewayError) -> String {
 
 impl PluginSettings {
     pub fn new(hub: Hub, plugins: Entity<Plugins>, plugin: PluginRef, cx: &mut Context<Self>) -> Self {
-        let listed = cx.subscribe(&plugins, |_, _, event: &PluginsEvent, cx| {
+        // A start, an exit or a reload changes the plug-in's record and adds to its log.
+        let listed = cx.subscribe(&plugins, |this: &mut Self, _, event: &PluginsEvent, cx| {
             if matches!(event, PluginsEvent::Listed) {
+                this.read_log(cx);
                 cx.notify();
             }
         });
@@ -54,10 +59,70 @@ impl PluginSettings {
             problem: None,
             busy: false,
             saved: false,
+            log: None,
+            log_scroll: ScrollHandle::new(),
             _listed: listed,
         };
         page.load(cx);
+        page.read_log(cx);
         page
+    }
+
+    fn read_log(&mut self, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        let plugin = self.plugin.clone();
+        cx.spawn(async move |this, cx| {
+            let read = hub.plugin_logs(plugin).await;
+            this.update(cx, |this, cx| {
+                this.log = Some(read.map_err(|err| match err {
+                    err if err.is_missing_route() => "Its log needs a newer rh on its node.".to_owned(),
+                    GatewayError::Status { status: 403, .. } => {
+                        "Only its node's owner can read its log.".to_owned()
+                    }
+                    other => format!("Couldn't read its log: {}", failure(other)),
+                }));
+                this.log_scroll.scroll_to_bottom();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The log's newest lines, oldest first and following the end, each with its time, and the
+    /// stream it came from when that isn't the plug-in's own output.
+    fn log_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let refresh = row()
+            .child(dim("What it printed, and what its node said about it."))
+            .child(
+                Self::pill("plugin-log-refresh", Some("refresh"), "Refresh".to_owned(), false)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_log(cx))),
+            )
+            .into_any_element();
+        let body = match &self.log {
+            None => dim("Reading its log…").into_any_element(),
+            Some(Err(why)) => div()
+                .text_sm()
+                .text_color(Theme::warn())
+                .child(why.clone())
+                .into_any_element(),
+            Some(Ok(lines)) if lines.is_empty() => dim("Its log is empty.").into_any_element(),
+            Some(Ok(lines)) => div()
+                .id("plugin-log")
+                .max_h(px(320.))
+                .overflow_y_scroll()
+                .track_scroll(&self.log_scroll)
+                .p_3()
+                .rounded(px(12.))
+                .bg(Theme::code())
+                .font_family(Theme::MONO)
+                .text_xs()
+                .flex()
+                .flex_col()
+                .children(lines.iter().map(log_line))
+                .into_any_element(),
+        };
+        vec![refresh, div().px_5().py_4().child(body).into_any_element()]
     }
 
     fn known<'a>(&self, cx: &'a gpui::App) -> Option<&'a Plugin> {
@@ -398,6 +463,7 @@ impl Render for PluginSettings {
             )
             .child(section("What it may do", Self::permissions(&plugin)))
             .children(settings.map(|rows| section("Its settings", rows)))
+            .child(section("Its log", self.log_rows(cx)))
             .child(
                 div()
                     .text_xs()
@@ -406,4 +472,21 @@ impl Render for PluginSettings {
                     .child(plugin.at.id.clone()),
             )
     }
+}
+
+fn log_line(line: &LogLine) -> gpui::Div {
+    let (stream, ink) = match line.stream {
+        LogStream::Stdout => (None, Theme::ink()),
+        LogStream::Stderr => (Some("stderr"), Theme::warn()),
+        LogStream::Host => (Some("rh"), Theme::ink_dim()),
+    };
+    let at = chrono::DateTime::from_timestamp_millis(line.at_ms)
+        .map(|at| at.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+        .unwrap_or_default();
+    div()
+        .flex()
+        .gap_2()
+        .child(div().flex_none().text_color(Theme::ink_dim()).child(at))
+        .children(stream.map(|stream| div().flex_none().text_color(ink).child(stream)))
+        .child(div().min_w_0().text_color(ink).child(line.text.clone()))
 }

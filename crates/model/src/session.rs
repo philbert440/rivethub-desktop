@@ -524,16 +524,18 @@ impl SessionView {
         }
     }
 
-    /// The questions the newest turn asked with an ask-user tool, until a reply follows it.
+    /// The questions the newest turn asked with an ask-user tool, until a reply follows it or the
+    /// tool comes back with the answers, as it does when they were given in the terminal.
     pub fn open_questions(&self) -> Option<(&ToolCall, &[Question])> {
         let newest = self.live.as_ref().or_else(|| self.turns.last())?;
         if newest.role != Role::Assistant {
             return None;
         }
-        newest.tools.iter().rev().find_map(|tool| match &tool.input {
+        let (tool, questions) = newest.tools.iter().rev().find_map(|tool| match &tool.input {
             ToolInput::Ask(questions) if !questions.is_empty() => Some((tool, questions.as_slice())),
             _ => None,
-        })
+        })?;
+        (tool.state != ToolState::Done).then_some((tool, questions))
     }
 
     pub fn approvals(&self) -> &[Approval] {

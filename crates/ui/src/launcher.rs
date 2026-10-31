@@ -40,7 +40,7 @@ impl Launcher {
         preset: Option<(TopicId, String)>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let picker = cx.new(|cx| TopicPicker::new(topics, Some("Start without a topic"), cx));
+        let picker = cx.new(|cx| TopicPicker::new(topics, Some("Start without a topic"), cx).outlined());
         let choose_topic = cx.subscribe(&picker, |this, _, event: &PickerEvent, cx| {
             let target = match event {
                 PickerEvent::Chose(topic) => Target::In(topic.clone()),

@@ -3,6 +3,8 @@ mod conversation;
 mod decisions;
 mod entities;
 mod entity_edit;
+mod flagged;
+mod links;
 mod members;
 mod mentions;
 mod proposals;
@@ -121,8 +123,10 @@ pub struct MemoryPage {
     trash: trash::Sweep,
     stats: Option<Stats>,
     upkeep: Option<Upkeep>,
+    flagged: flagged::Flagged,
     catalog: Option<Catalog>,
     browse: entities::Browse,
+    links: links::Links,
     entity_find: Entity<TextInput>,
     viewing: Option<session::Viewing>,
     remembering: Option<conversation::Remembered>,
@@ -182,8 +186,10 @@ impl MemoryPage {
             trash: trash::Sweep::default(),
             stats: None,
             upkeep: None,
+            flagged: flagged::Flagged::default(),
             catalog: None,
             browse: entities::Browse::default(),
+            links: links::Links::default(),
             entity_find,
             viewing: None,
             remembering: None,
@@ -254,6 +260,7 @@ impl MemoryPage {
                 self.load_tidy(cx);
                 self.load_trash(cx);
                 self.load_stats(cx);
+                self.load_flagged(cx);
                 self.load_catalog(cx);
             }
         }

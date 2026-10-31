@@ -17,7 +17,7 @@ pub(super) struct Sweep {
     review: Option<TrashReview>,
     /// The nodes are being asked; the first answer can take a while on a big memory.
     loading: bool,
-    /// rh keeps no record of a keep, so a kept session stays off the review while the app runs.
+    /// Kept sessions stay off the review at once, before their nodes have heard of the keep.
     kept: HashSet<SessionId>,
     /// Delete all is asking first.
     confirming: bool,
@@ -77,10 +77,29 @@ impl MemoryPage {
         .detach();
     }
 
-    fn keep(&mut self, session: &SessionId, cx: &mut Context<Self>) {
-        self.trash.kept.insert(session.clone());
-        self.trash.drop(|listed| listed == session);
+    /// Keeps the session off the review, on its node too, so the review never lists it again
+    /// unless it is used again.
+    fn keep(&mut self, kept: Trash, cx: &mut Context<Self>) {
+        self.trash.problem = None;
+        self.trash.kept.insert(kept.session.clone());
+        self.trash.drop(|listed| listed == &kept.session);
         cx.notify();
+        let hub = self.hub.clone();
+        cx.spawn(async move |this, cx| {
+            let done = hub.keep_trash(&kept).await;
+            this.update(cx, |this, cx| {
+                if let Err(err) = done {
+                    tracing::warn!(%err, session = %kept.session, "the keep didn't reach its node");
+                    this.trash.problem = Some(format!(
+                        "{} stays off this review, but its node didn't hear of the keep, so it may come back: {err}",
+                        title(&kept)
+                    ));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Deletes the sessions, which leave the review and the workspace's lists at once; any that
@@ -203,7 +222,7 @@ impl MemoryPage {
             ago_phrase(now, trash.updated_at_ms),
             trash.why(),
         ];
-        let (kept, doomed) = (trash.session.clone(), trash.clone());
+        let (kept, doomed) = (trash.clone(), trash.clone());
         div()
             .id(("trash", index))
             .px_4()
@@ -231,7 +250,7 @@ impl MemoryPage {
             )
             .child(
                 verdict_button(("trash-keep", index), "Keep", Verdict::Reject)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.keep(&kept, cx))),
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.keep(kept.clone(), cx))),
             )
             .child(
                 delete_button(("trash-delete", index), "Delete".to_owned()).on_click(
