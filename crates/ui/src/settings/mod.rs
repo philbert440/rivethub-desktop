@@ -7,6 +7,7 @@ mod memory;
 mod pairing;
 pub(crate) mod parts;
 mod plugins;
+mod privacy;
 
 use app::Hub;
 use gpui::{
@@ -17,6 +18,7 @@ use model::agents::Roster;
 use model::health::MemoryHealth;
 use model::mesh::Node;
 use model::trust::Trust;
+use model::visibility::Me;
 
 use crate::GatewayUrl;
 use crate::agent_editor::AgentEditor;
@@ -36,18 +38,20 @@ enum Tab {
     Nodes,
     Devices,
     Memory,
+    Privacy,
     Plugins,
     About,
 }
 
 impl Tab {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::General,
         Self::Agents,
         Self::Appearance,
         Self::Nodes,
         Self::Devices,
         Self::Memory,
+        Self::Privacy,
         Self::Plugins,
         Self::About,
     ];
@@ -60,6 +64,7 @@ impl Tab {
             Self::Nodes => "Nodes",
             Self::Devices => "Devices",
             Self::Memory => "Memory",
+            Self::Privacy => "Privacy",
             Self::Plugins => "Plug-ins",
             Self::About => "About",
         }
@@ -82,6 +87,8 @@ pub struct SettingsPage {
     trust: Load<Trust>,
     memory: Load<MemoryHealth>,
     roster: Load<Roster>,
+    me: Load<Me>,
+    privacy_problem: Option<String>,
     /// The choices for new sessions, while they're being changed.
     choosing: Option<(Entity<LaunchChoices>, Subscription)>,
     editing: Option<(Entity<AgentEditor>, Subscription)>,
@@ -110,6 +117,8 @@ impl SettingsPage {
             trust: Load::Waiting,
             memory: Load::Waiting,
             roster: Load::Waiting,
+            me: Load::Waiting,
+            privacy_problem: None,
             choosing: None,
             editing: None,
             pairing,
@@ -127,6 +136,7 @@ impl SettingsPage {
         self.trust = Load::Waiting;
         self.memory = Load::Waiting;
         self.load_agents(cx);
+        self.load_me(cx);
         self.pairing.update(cx, PhonePairing::check);
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
@@ -211,6 +221,7 @@ impl SettingsPage {
             Tab::Nodes => self.nodes_tab(),
             Tab::Devices => self.devices(),
             Tab::Memory => self.memory_tab(),
+            Tab::Privacy => self.privacy(cx),
             Tab::Plugins => self.plugins_tab(cx),
             Tab::About => self.about(window, cx),
         };

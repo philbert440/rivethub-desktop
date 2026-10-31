@@ -188,6 +188,7 @@ impl Workspace {
                 cx.new(|_| DragGhost(dragged.name.clone()))
             })
             .child(child.name.clone())
+            .children(self.topic_glyph(child))
             .child(
                 div()
                     .text_xs()

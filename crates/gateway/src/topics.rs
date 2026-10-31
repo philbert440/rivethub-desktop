@@ -6,6 +6,7 @@ use model::preview::{StartupPart, StartupPreview};
 use model::topics::{
     Directory, FiledBy, FiledConversation, FiledSession, HistoryMarks, Suggestion, Topic, TopicFiling,
 };
+use model::visibility::{SessionVisibility, Visibility};
 use model::{SessionId, TopicId};
 use wire::gateway::topics::{
     ConversationPlacementReply, DecisionCreateRequest, DecisionSupersedeRequest, DecisionSuperseded,
@@ -30,6 +31,8 @@ fn topic(record: TopicRecord, last_active_ms: Option<i64>) -> Topic {
             TopicDirectory::Local { node, path } => Directory::Local { node, path },
             TopicDirectory::Shared { path } => Directory::Shared { path },
         }),
+        owner: record.owner,
+        visibility: record.visibility.as_deref().map(Visibility::parse),
     }
 }
 
@@ -51,6 +54,10 @@ fn filing(sessions: Vec<TopicSession>, conversations: Vec<TopicConversation>) ->
                 last_active_ms: placed.last_active.map(|at| at.timestamp_millis()),
                 by: filed_by(placed.placement.by),
                 node: placed.node,
+                visibility: placed.visibility.as_deref().map(|effective| SessionVisibility {
+                    effective: Visibility::parse(effective),
+                    marked: placed.visibility_mark.is_some(),
+                }),
             })
             .collect(),
         conversations: conversations

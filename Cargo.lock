@@ -2992,7 +2992,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -6348,7 +6348,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -7012,7 +7012,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "values"
 version = "0.7.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=a906cc21c276f33c378b49d54c098114b95f6fb3#a906cc21c276f33c378b49d54c098114b95f6fb3"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=1c9d256b2ee4813c2c81b1f97b4145b6d93552c7#1c9d256b2ee4813c2c81b1f97b4145b6d93552c7"
 dependencies = [
  "chrono",
  "schemars",
@@ -8141,7 +8141,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.7.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=a906cc21c276f33c378b49d54c098114b95f6fb3#a906cc21c276f33c378b49d54c098114b95f6fb3"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=1c9d256b2ee4813c2c81b1f97b4145b6d93552c7#1c9d256b2ee4813c2c81b1f97b4145b6d93552c7"
 dependencies = [
  "base64 0.22.1",
  "chrono",

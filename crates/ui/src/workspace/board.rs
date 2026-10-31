@@ -133,6 +133,7 @@ impl Workspace {
                 name: card.topic.name.clone(),
                 sessions: card.sessions.len() + card.history,
                 active_ms: card.active_ms,
+                visibility: card.topic.visibility.clone(),
             })
             .collect();
         let topics = self.topics.clone();

@@ -28,7 +28,7 @@ impl Workspace {
         self.listing = Listing::Loading;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let (listing, filing) = tokio::join!(hub.all_sessions(), hub.topics());
+            let (listing, filing, _) = tokio::join!(hub.all_sessions(), hub.topics(), hub.load_me());
             let listing = this
                 .update(cx, |this, cx| {
                     this.filed(filing, cx);
@@ -90,6 +90,7 @@ impl Workspace {
         self.placements = filing.placements;
         self.marks = filing.marks;
         self.filed_by = filing.filed_by;
+        self.visibility = filing.visibility;
         self.remembered = filing.remembered;
         self.conversations = filing.conversations;
     }
