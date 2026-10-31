@@ -137,8 +137,12 @@ impl Hub {
             .await
     }
 
-    /// Decides a whole batch; answers rh's words for each proposal it couldn't apply.
-    pub async fn decide_batch(&self, batch: String, verdict: Verdict) -> Result<Vec<String>, GatewayError> {
+    /// Decides a whole batch; answers each proposal it couldn't decide with rh's words.
+    pub async fn decide_batch(
+        &self,
+        batch: String,
+        verdict: Verdict,
+    ) -> Result<Vec<(String, String)>, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.decide_batch(&batch, verdict).await })
             .await

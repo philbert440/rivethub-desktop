@@ -416,7 +416,7 @@ impl Gateway {
     /// A topic or decision write's reply. rh's refusals (400 and 409: a name already taken, a
     /// subtopic given subtopics, a decision already superseded, empty text) come back as
     /// `Conflict` carrying rh's own message.
-    async fn refusable<T: serde::de::DeserializeOwned>(
+    pub(crate) async fn refusable<T: serde::de::DeserializeOwned>(
         sent: Result<reqwest::Response, reqwest::Error>,
     ) -> Result<T, GatewayError> {
         match Self::read_json(sent)?.await {
