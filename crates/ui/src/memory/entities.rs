@@ -393,8 +393,8 @@ impl MemoryPage {
                     .child("⋯"),
             );
         let body = match (&self.browse.reading, self.browse.unwritten) {
-            (Some(reading), _) => self.page_body(reading, window, cx),
-            (None, true) => self.unwritten_body(cx),
+            (Some(reading), _) => self.page_body(id, reading, window, cx),
+            (None, true) => self.unwritten_body(id, cx),
             (None, false) => Self::quiet("Loading…"),
         };
         let mentioned = self
@@ -420,15 +420,15 @@ impl MemoryPage {
     }
 
     /// An entity the wiki hasn't written a page for yet; writing its text writes the page.
-    fn unwritten_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(field) = self.edit_field(cx) {
+    fn unwritten_body(&self, id: &TopicId, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(field) = self.edit_field(id, cx) {
             return field;
         }
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(Self::edit_buttons(String::new(), String::new(), cx))
+            .child(Self::edit_buttons(id, String::new(), String::new(), cx))
             .child(
                 div()
                     .text_color(Theme::ink_dim())
@@ -437,8 +437,14 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    fn page_body(&self, reading: &EntityReading, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(field) = self.edit_field(cx) {
+    fn page_body(
+        &self,
+        id: &TopicId,
+        reading: &EntityReading,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some(field) = self.edit_field(id, cx) {
             return field;
         }
         let blocks = markdown_view::blocks(
@@ -452,6 +458,7 @@ impl MemoryPage {
             .flex_col()
             .gap_3()
             .child(Self::edit_buttons(
+                id,
                 reading.page.current_state.clone(),
                 reading.page.article.clone().unwrap_or_default(),
                 cx,

@@ -11,7 +11,6 @@ use model::topics::Topic;
 use model::wiki::{Owned, PageEdit};
 
 use super::MemoryPage;
-use super::entities::EntityReading;
 use super::sessions::link_button;
 use crate::input::{Submitted, TextInput};
 use crate::menu::{Lift, Menu, MenuEvent, Noun, OpenMenu};
@@ -26,15 +25,17 @@ pub(super) struct Field {
     _submitted: Subscription,
 }
 
-/// Which part of an entity's page is being edited.
+/// Which part of an entity's or a topic's page is being edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Part {
     Now,
     Article,
 }
 
-/// An entity page's text being edited in place.
+/// A page's text being edited in place: an entity's, or a work topic's.
 pub(super) struct Editing {
+    /// The topic or entity that owns the page.
+    target: TopicId,
     part: Part,
     input: Entity<TextInput>,
     _submitted: Subscription,
@@ -187,17 +188,26 @@ impl MemoryPage {
         );
     }
 
-    fn begin_edit(&mut self, part: Part, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn begin_edit(
+        &mut self,
+        target: TopicId,
+        part: Part,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let input = cx.new(|cx| {
             let mut input = TextInput::new("What the wiki should say", cx).multiline();
             input.set_text(text, cx);
             input
         });
+        let saving = target.clone();
         let submitted = cx.subscribe(&input, move |this, _, Submitted(text), cx| {
-            this.save_text(part, text.clone(), cx);
+            this.save_text(saving.clone(), part, text.clone(), cx);
         });
         window.focus(&input.focus_handle(cx), cx);
         self.browse.editing = Some(Editing {
+            target,
             part,
             input,
             _submitted: submitted,
@@ -205,12 +215,11 @@ impl MemoryPage {
         cx.notify();
     }
 
-    fn save_text(&mut self, part: Part, text: String, cx: &mut Context<Self>) {
+    /// Saves the page's text through the topic or entity that owns it, which writes the page when
+    /// the wiki hasn't yet.
+    fn save_text(&mut self, target: TopicId, part: Part, text: String, cx: &mut Context<Self>) {
         self.browse.editing = None;
         cx.notify();
-        let Some(entity) = self.browse.entity.clone() else {
-            return;
-        };
         let edit = match part {
             Part::Now => PageEdit {
                 current_state: Some(text),
@@ -223,16 +232,10 @@ impl MemoryPage {
         };
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let saved = hub.edit_page(entity.clone(), edit).await;
+            let saved = hub.edit_page(target.clone(), edit).await;
             this.update(cx, |this, cx| {
-                if this.browse.entity.as_ref() != Some(&entity) {
-                    return;
-                }
                 match saved {
-                    Ok(Owned { page: Some(page), .. }) => {
-                        this.browse.reading = Some(EntityReading::new(page));
-                        this.browse.unwritten = false;
-                    }
+                    Ok(Owned { page: Some(page), .. }) => this.page_saved(&target, page),
                     Ok(Owned { page: None, .. }) => this.problem = Some("rh kept no page for it.".into()),
                     Err(err) => this.problem = Some(format!("saving it failed: {err}")),
                 }
@@ -301,9 +304,13 @@ impl MemoryPage {
             .into_any_element()
     }
 
-    /// The page text being edited, with what Enter and Esc do under it.
-    pub(super) fn edit_field(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let editing = self.browse.editing.as_ref()?;
+    /// The text of `target`'s page being edited, with what Enter and Esc do under it.
+    pub(super) fn edit_field(&self, target: &TopicId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let editing = self
+            .browse
+            .editing
+            .as_ref()
+            .filter(|editing| &editing.target == target)?;
         let what = match editing.part {
             Part::Now => "What it is now",
             Part::Article => "Article",
@@ -325,13 +332,22 @@ impl MemoryPage {
         )
     }
 
-    pub(super) fn edit_buttons(now: String, article: String, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Starts editing what `target`'s page says is true now, or its article.
+    pub(super) fn edit_buttons(
+        target: &TopicId,
+        now: String,
+        article: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (for_now, for_article) = (target.clone(), target.clone());
         div()
             .flex()
             .gap_2()
             .child(
                 link_button("entity-edit-now", "Edit what it is now").on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| this.begin_edit(Part::Now, &now, window, cx),
+                    move |this, _: &ClickEvent, window, cx| {
+                        this.begin_edit(for_now.clone(), Part::Now, &now, window, cx);
+                    },
                 )),
             )
             .child(
@@ -344,9 +360,10 @@ impl MemoryPage {
                     },
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.begin_edit(Part::Article, &article, window, cx);
+                    this.begin_edit(for_article.clone(), Part::Article, &article, window, cx);
                 })),
             )
+            .into_any_element()
     }
 
     /// The entity's other names, each removable, and a field to add one.

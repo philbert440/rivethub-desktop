@@ -167,6 +167,36 @@ impl MemoryPage {
         cx.notify();
     }
 
+    /// Shows a page as an edit saved it, wherever it's on screen or kept: an entity's page, a
+    /// topic's page in the library, and the page read here.
+    pub(super) fn page_saved(&mut self, owner: &TopicId, page: Page) {
+        if self.browse.entity.as_ref() == Some(owner) {
+            self.browse.reading = Some(super::entities::EntityReading::new(page.clone()));
+            self.browse.unwritten = false;
+        }
+        if let Some(library) = self.library.as_mut() {
+            match library
+                .pages
+                .iter_mut()
+                .find(|known| known.topic.as_ref() == Some(owner))
+            {
+                Some(known) => *known = page.clone(),
+                None => library.pages.push(page.clone()),
+            }
+        }
+        let shown = match &self.opened {
+            Some(Opened::Topic(_)) => self.opened_root().as_ref() == Some(owner),
+            Some(Opened::Page(slug)) => *slug == page.slug,
+            None => false,
+        };
+        if shown {
+            self.reading = Some(match &self.opened {
+                Some(Opened::Topic(_)) => topic_reading(page),
+                _ => reading(page),
+            });
+        }
+    }
+
     /// Lets go of a deleted topic's page and lists the topics again.
     pub fn topic_deleted(&mut self, topic: &TopicId, cx: &mut Context<Self>) {
         if self.opened.as_ref() == Some(&Opened::Topic(topic.clone())) {
@@ -354,6 +384,31 @@ impl MemoryPage {
             .into_any_element()
     }
 
+    /// A page's tags and when it changed.
+    fn page_tags(page: &Page) -> impl IntoElement + use<> {
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .children(page.tags.iter().map(|tag| {
+                div()
+                    .px_2()
+                    .py(px(2.))
+                    .rounded(px(10.))
+                    .bg(Theme::card())
+                    .font_family(Theme::MONO)
+                    .text_color(Theme::ink_dim())
+                    .child(tag.clone())
+            }))
+            .child(
+                div()
+                    .text_color(Theme::ink_dim())
+                    .child(format!("updated {}", ago_phrase(now_ms(), page.updated_ms))),
+            )
+    }
+
     /// The open page. The head and each markdown block are the scroll container's own children,
     /// so a subtopic's section heading is child `block + 1` for the page's scroll handle.
     fn page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -365,12 +420,26 @@ impl MemoryPage {
         let mut blocks = Vec::new();
         let head = match (&self.opened, &self.reading) {
             (_, Some(read)) => {
-                blocks = markdown_view::blocks(
-                    &read.blocks,
-                    &format!("wiki-{}", read.page.slug),
-                    Theme::ink().into(),
-                    window,
-                );
+                // A page is edited through the topic or entity that owns it; a page without one
+                // has no way to be edited.
+                let owner = read.page.topic.clone().or_else(|| self.opened_root());
+                let editing = owner.as_ref().and_then(|owner| self.edit_field(owner, cx));
+                if editing.is_none() {
+                    blocks = markdown_view::blocks(
+                        &read.blocks,
+                        &format!("wiki-{}", read.page.slug),
+                        Theme::ink().into(),
+                        window,
+                    );
+                }
+                let edit = owner.map(|owner| {
+                    Self::edit_buttons(
+                        &owner,
+                        read.page.current_state.clone(),
+                        read.page.article.clone().unwrap_or_default(),
+                        cx,
+                    )
+                });
                 head.child(
                     self.beside_workspace_button(
                         div()
@@ -380,29 +449,9 @@ impl MemoryPage {
                         cx,
                     ),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .children(read.page.tags.iter().map(|tag| {
-                            div()
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(10.))
-                                .bg(Theme::card())
-                                .font_family(Theme::MONO)
-                                .text_color(Theme::ink_dim())
-                                .child(tag.clone())
-                        }))
-                        .child(
-                            div()
-                                .text_color(Theme::ink_dim())
-                                .child(format!("updated {}", ago_phrase(now_ms(), read.page.updated_ms))),
-                        ),
-                )
+                .child(Self::page_tags(&read.page))
+                .children(editing.is_none().then_some(edit).flatten())
+                .children(editing)
                 .children(self.opened_root().and_then(|root| self.topic_mentions(&root, cx)))
                 .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx))
@@ -424,6 +473,10 @@ impl MemoryPage {
                         cx,
                     ),
                 )
+                .children(self.opened_root().map(|root| {
+                    self.edit_field(&root, cx)
+                        .unwrap_or_else(|| Self::edit_buttons(&root, String::new(), String::new(), cx))
+                }))
                 .children(self.opened_root().and_then(|root| self.topic_mentions(&root, cx)))
                 .children(self.sessions_panel(cx))
                 .children(self.decisions_panel(cx)),
