@@ -38,6 +38,14 @@ pub enum GatewayError {
 }
 
 impl GatewayError {
+    /// What went wrong, in rh's own words when it answered with one, rather than its whole reply.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Status { detail, .. } => crate::topics::rh_message(detail.clone()),
+            other => other.to_string(),
+        }
+    }
+
     pub fn is_turn_in_flight(&self) -> bool {
         matches!(self, Self::Status { status: 409, detail } if detail.contains("turn_in_flight"))
     }
