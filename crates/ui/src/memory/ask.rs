@@ -97,7 +97,8 @@ impl MemoryPage {
             .overflow_y_scroll()
             .py_8()
             .flex()
-            .justify_center()
+            .flex_col()
+            .items_center()
             .child(
                 div()
                     .w_full()
