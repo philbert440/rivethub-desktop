@@ -111,7 +111,7 @@ impl SettingsPage {
     }
 }
 
-/// "0.8.0 · e2399f6", or the version alone for a build made outside git.
+/// "0.7.0 · e2399f6", or the version alone for a build made outside git.
 fn release() -> String {
     match REVISION {
         Some(revision) => format!("{VERSION} · {revision}"),
