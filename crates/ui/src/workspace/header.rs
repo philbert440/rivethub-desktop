@@ -50,21 +50,18 @@ impl Workspace {
                     .topic(&topic)
                     .map_or_else(|| topic.as_str().to_owned(), |known| known.name.clone());
                 let here = session.is_none();
-                match self.retitle_field(&topic, cx) {
-                    Some(field) => div().id("crumb-topic").child(field),
-                    None => Self::crumb("crumb-topic", name.into(), here)
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            Self::on_right_click(Focus::Topic(topic.clone()), cx),
-                        )
-                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            if here && event.click_count() == 2 {
-                                this.begin_retitle(topic.clone(), window, cx);
-                            } else {
-                                this.leave_to(Altitude::Topic(topic.clone()), window, cx);
-                            }
-                        })),
-                }
+                Self::crumb("crumb-topic", name.into(), here)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        Self::on_right_click(Focus::Topic(topic.clone()), cx),
+                    )
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                        if here && event.click_count() == 2 {
+                            this.begin_retitle(topic.clone(), window, cx);
+                        } else {
+                            this.leave_to(Altitude::Topic(topic.clone()), window, cx);
+                        }
+                    }))
             }
             None => Self::crumb("crumb-uncategorized", "Uncategorized".into(), false).on_click(cx.listener(
                 |this, _: &gpui::ClickEvent, window, cx| {

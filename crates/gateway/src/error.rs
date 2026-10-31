@@ -38,6 +38,27 @@ pub enum GatewayError {
 }
 
 impl GatewayError {
+    /// What went wrong, in rh's own words when it answered with one, rather than its whole reply.
+    pub fn reason(&self) -> String {
+        if self.is_sessions_off() {
+            return "chats and terminals are turned off there (gateway.terminal.enabled in its config)"
+                .into();
+        }
+        match self {
+            Self::Status { detail, .. } => crate::topics::rh_message(detail.clone()),
+            other => other.to_string(),
+        }
+    }
+
+    /// The node runs no chats or terminals, so it has no harnesses or sessions to offer.
+    pub fn is_sessions_off(&self) -> bool {
+        matches!(
+            self,
+            Self::Status { status: 503, detail }
+                if matches!(crate::topics::rh_message(detail.clone()).as_str(), "terminals disabled" | "terminal disabled")
+        )
+    }
+
     pub fn is_turn_in_flight(&self) -> bool {
         matches!(self, Self::Status { status: 409, detail } if detail.contains("turn_in_flight"))
     }

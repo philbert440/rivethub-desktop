@@ -314,8 +314,11 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = match self.handle.state() {
-            TerminalState::Connecting => Some("Connecting to the terminal…"),
-            TerminalState::Exited => Some("The terminal process exited."),
+            TerminalState::Connecting => Some(self.handle.problem().map_or_else(
+                || "Connecting to the terminal…".to_owned(),
+                |problem| format!("Couldn't open the terminal: {problem}. Trying again…"),
+            )),
+            TerminalState::Exited => Some("The terminal process exited.".to_owned()),
             TerminalState::Live => None,
         };
         div()

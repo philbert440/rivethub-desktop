@@ -175,7 +175,7 @@ impl LaunchChoices {
     fn read(&mut self, offers: Result<Vec<HarnessOffer>, gateway::GatewayError>) {
         self.offers = match offers {
             Ok(offers) => Offers::Read(offers.into_iter().filter(|offer| offer.chat).collect()),
-            Err(err) => Offers::Failed(err.to_string()),
+            Err(err) => Offers::Failed(err.reason()),
         };
     }
 

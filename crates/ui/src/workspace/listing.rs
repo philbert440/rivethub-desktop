@@ -263,8 +263,12 @@ fn missing_note(missing: &[app::Missing], local: Option<&str>) -> Option<String>
                     refused.push(node);
                 }
             }
-            None => failed.push(format!("{node}: {}", gap.error)),
-            Some(harness) => failed.push(format!("{} on {node}: {}", harness.display_name(), gap.error)),
+            None => failed.push(format!("{node}: {}", gap.error.reason())),
+            Some(harness) => failed.push(format!(
+                "{} on {node}: {}",
+                harness.display_name(),
+                gap.error.reason()
+            )),
         }
     }
     let mut parts = Vec::new();
