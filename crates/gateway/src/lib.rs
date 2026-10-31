@@ -1,6 +1,7 @@
 mod chat;
 mod error;
 mod events;
+mod flagged;
 mod memory;
 mod pairing;
 mod plugins;

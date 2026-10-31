@@ -1,6 +1,7 @@
 use gateway::GatewayError;
 use std::collections::HashMap;
 
+use model::flagged::{FlaggedAction, FlaggedGroup};
 use model::memory::{Found, Period, SessionMemory, Stats, TagProposal, TermProposal, Verdict};
 use model::tidy::{Batch, Upkeep};
 use model::topics::Topic;
@@ -115,6 +116,19 @@ impl Hub {
     pub async fn upkeep(&self) -> Result<Upkeep, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.upkeep().await }).await
+    }
+
+    /// The jobs memory stopped retrying, grouped by cause; `None` when this node keeps none for
+    /// this client.
+    pub async fn flagged(&self) -> Result<Option<Vec<FlaggedGroup>>, GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.flagged().await }).await
+    }
+
+    pub async fn act_on_flagged(&self, id: i64, action: FlaggedAction) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.act_on_flagged(id, action).await })
+            .await
     }
 
     pub async fn decide_proposal(&self, proposal: String, verdict: Verdict) -> Result<(), GatewayError> {
