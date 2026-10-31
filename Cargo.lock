@@ -2992,7 +2992,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -7011,8 +7011,8 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "values"
-version = "0.8.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=81139cb8e880449ffc519036b060a176e55234d1#81139cb8e880449ffc519036b060a176e55234d1"
+version = "0.7.0"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=2432c1f9a06db6768d216b5502bea1030d42b6fa#2432c1f9a06db6768d216b5502bea1030d42b6fa"
 dependencies = [
  "chrono",
  "schemars",
@@ -8140,8 +8140,8 @@ dependencies = [
 
 [[package]]
 name = "wire"
-version = "0.8.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=81139cb8e880449ffc519036b060a176e55234d1#81139cb8e880449ffc519036b060a176e55234d1"
+version = "0.7.0"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=2432c1f9a06db6768d216b5502bea1030d42b6fa#2432c1f9a06db6768d216b5502bea1030d42b6fa"
 dependencies = [
  "base64 0.22.1",
  "chrono",
