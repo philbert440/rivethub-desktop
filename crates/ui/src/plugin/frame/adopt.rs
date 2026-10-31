@@ -2,17 +2,19 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{Context, ImageFormat, prelude::*};
-use model::plugin::view::{Block, Button, CanvasBlock, Field, View};
+use model::plugin::view::{Block, Button, CanvasBlock, Field, View, WebPanelBlock};
 
 use super::{FormState, Frame, FrameEvent, Picture, child_key};
 use crate::plugin::canvas::{CanvasTarget, CanvasView, Replied};
 use crate::plugin::form::{FormSubmitted, FormView};
+use crate::plugin::web_panel::{Asked, WebPanelView};
 
 /// What a view holds that the frame keeps between fetches.
 #[derive(Default)]
 struct Found<'a> {
     forms: Vec<(&'a str, &'a [Field], &'a [Button])>,
     canvases: Vec<&'a CanvasBlock>,
+    panels: Vec<&'a WebPanelBlock>,
     images: Vec<&'a str>,
     logs: Vec<String>,
 }
@@ -35,6 +37,7 @@ fn gather<'a>(blocks: &'a [Block], key: &str, found: &mut Found<'a>) {
             }
             Block::Form(form) => found.forms.push((&form.id, &form.fields, &form.buttons)),
             Block::Canvas(canvas) => found.canvases.push(canvas),
+            Block::WebPanel(panel) => found.panels.push(panel),
             Block::Image { path, .. } => found.images.push(path),
             Block::Code { follow: true, .. } => found.logs.push(key),
             _ => {}
@@ -92,6 +95,24 @@ impl Frame {
                 cx.emit(FrameEvent::Run(actions.clone()));
             });
             self.canvases.insert(block.id.clone(), (canvas, replied));
+        }
+        self.panels.retain(|id, (panel, _)| {
+            found
+                .panels
+                .iter()
+                .any(|block| &block.id == id && panel.read(cx).shows(block))
+        });
+        for block in found.panels {
+            if let Some((panel, _)) = self.panels.get(&block.id) {
+                panel.update(cx, |panel, cx| panel.renew(block.clone(), cx));
+                continue;
+            }
+            let (hub, plugin, context) = (&self.hub, self.plugin.clone(), self.context.clone());
+            let panel = cx.new(|cx| WebPanelView::new(hub, plugin, block.clone(), context, cx));
+            let asked = cx.subscribe(&panel, |_, _, Asked(actions), cx| {
+                cx.emit(FrameEvent::Run(actions.clone()));
+            });
+            self.panels.insert(block.id.clone(), (panel, asked));
         }
         for path in found.images {
             if !self.pictures.contains_key(path) {

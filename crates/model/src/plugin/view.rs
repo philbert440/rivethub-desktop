@@ -76,8 +76,7 @@ pub enum Block {
     Actions(Vec<Button>),
     Form(Form),
     Canvas(CanvasBlock),
-    /// The plug-in's own HTML, which this app doesn't show yet.
-    WebPanel,
+    WebPanel(WebPanelBlock),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +148,16 @@ pub struct CanvasBlock {
     pub read_only: bool,
     /// The menu on empty space.
     pub menu: Vec<MenuItem>,
+}
+
+/// The plug-in's own page, from its `panel/` route, for what blocks and canvases can't draw.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebPanelBlock {
+    pub id: String,
+    /// The page's path on the plug-in's `panel/` route.
+    pub entry: String,
+    pub height: Option<f32>,
+    pub params: Option<Params>,
 }
 
 /// A value inside a line of text, formatted by the app.

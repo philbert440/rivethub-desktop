@@ -16,6 +16,7 @@ use model::plugin::{Context as About, Params, PluginRef};
 
 use super::canvas::CanvasView;
 use super::form::FormView;
+use super::web_panel::WebPanelView;
 
 /// Where a view is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +113,7 @@ pub struct Frame {
     pub(super) sorts: HashMap<String, (usize, bool)>,
     pub(super) forms: HashMap<String, FormState>,
     pub(super) canvases: HashMap<String, (Entity<CanvasView>, Subscription)>,
+    pub(super) panels: HashMap<String, (Entity<WebPanelView>, Subscription)>,
     pub(super) pictures: HashMap<String, Picture>,
     pub(super) logs: HashMap<String, ScrollHandle>,
     pub(super) menu: Option<(Point<Pixels>, Vec<Button>)>,
@@ -148,6 +150,7 @@ impl Frame {
             sorts: HashMap::new(),
             forms: HashMap::new(),
             canvases: HashMap::new(),
+            panels: HashMap::new(),
             pictures: HashMap::new(),
             logs: HashMap::new(),
             menu: None,
@@ -217,6 +220,7 @@ impl Frame {
             self.sorts.clear();
             self.forms.clear();
             self.canvases.clear();
+            self.panels.clear();
             self.logs.clear();
             self.shown = Shown::Waiting;
             self.scroll = ScrollHandle::new();

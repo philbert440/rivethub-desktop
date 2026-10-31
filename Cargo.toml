@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/model", "crates/term", "crates/gateway", "crates/app", "crates/ui"]
+members = ["crates/model", "crates/term", "crates/webview", "crates/webview-gtk", "crates/gateway", "crates/app", "crates/ui"]
 
 [workspace.package]
 version = "0.7.0"
@@ -15,6 +15,7 @@ model = { path = "crates/model" }
 gateway = { path = "crates/gateway" }
 app = { path = "crates/app" }
 term = { path = "crates/term" }
+webview = { path = "crates/webview" }
 alacritty_terminal = "0.26.0"
 parking_lot = "0.12"
 pulldown-cmark = { version = "0.13", default-features = false }

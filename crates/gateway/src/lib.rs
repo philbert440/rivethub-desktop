@@ -18,6 +18,7 @@ mod trash;
 pub use chat::SessionStream;
 pub use error::GatewayError;
 pub use events::{PluginEvent, WorkspaceEvent};
+pub use plugins::panel;
 pub use terminal::{TermInput, TermOutput, TerminalStream};
 pub use tls::certificates;
 

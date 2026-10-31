@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use gateway::{Endpoint, Gateway, GatewayError, PluginEvent};
 use model::plugin::canvas::{Event, Reply};
+use model::plugin::panel::{Request, Response};
 use model::plugin::view::{Answer, Value, View};
 use model::plugin::{Context, LogLine, Notice, Params, Permission, Plugin, PluginRef, Settings};
 use parking_lot::Mutex;
@@ -151,6 +152,16 @@ impl Hub {
         self.on_runtime(async move {
             let gateway = hub.gateway_for(Some(&plugin.node)).await?;
             gateway.plugin_logs(&plugin.id).await
+        })
+        .await
+    }
+
+    /// A request one of a plug-in's web panels made of its own origin.
+    pub async fn plugin_page(&self, plugin: PluginRef, request: Request) -> Result<Response, GatewayError> {
+        let hub = self.clone();
+        self.on_runtime(async move {
+            let gateway = hub.gateway_for(Some(&plugin.node)).await?;
+            gateway.plugin_page(&plugin.id, request).await
         })
         .await
     }
