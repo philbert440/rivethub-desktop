@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ParentElement, Styled, Window,
-    div, prelude::*, px,
+    div, prelude::*, px, uniform_list,
 };
 use model::preview::{Preview, PreviewKind};
 use model::session::SessionSummary;
@@ -14,11 +14,16 @@ use model::{SessionId, TopicId};
 use super::{ViewInMemory, Workspace};
 use crate::memory::Focus;
 use crate::side_panel::{DragGhost, DraggedSession};
-use crate::text::{ago, one_line};
+use crate::text::{ago, now_ms, one_line};
 use crate::theme::Theme;
 
 /// How many History sessions show before Show all.
 const HISTORY_SHOWN: usize = 5;
+/// Past this many, all of History scrolls in a box of its own that draws only the rows in view,
+/// since thousands of rows drawn at once take a second a frame.
+const HISTORY_DRAWN: usize = 60;
+/// How tall that box is.
+const HISTORY_BOX: f32 = 640.;
 
 /// A row of History: a session, or a conversation filed here that is no harness session.
 enum Past<'a> {
@@ -70,17 +75,11 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The step's History, newest first: its first few, or all of it once asked. Conversations
-    /// filed here that are no harness session sit among the sessions by when they were last active.
-    pub(super) fn history_list(
-        &self,
-        step: &TopicId,
-        inside: &Shelf<'_>,
-        now: i64,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    /// The step's History, newest first. Conversations filed here that are no harness session sit
+    /// among the sessions by when they were last active.
+    fn past<'a>(&'a self, step: &TopicId, inside: &Shelf<'a>) -> Vec<Past<'a>> {
         let atlas = Atlas::new(&self.topics, &[], &self.placements);
-        let mut past: Vec<Past<'_>> = inside
+        let mut past: Vec<Past<'a>> = inside
             .history
             .iter()
             .copied()
@@ -92,15 +91,81 @@ impl Workspace {
                     .map(Past::Conversation),
             )
             .collect();
+        past.sort_by_key(|row| Reverse(row.at_ms()));
+        past
+    }
+
+    fn past_row(
+        &self,
+        index: usize,
+        row: &Past<'_>,
+        step: &TopicId,
+        now: i64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match row {
+            Past::Session(session) => {
+                let age = ago(now, session.updated_at_ms);
+                self.session_row(("history", index), session, step, age, false, cx)
+            }
+            Past::Conversation(conversation) => {
+                Self::conversation_row(("history", index), conversation, now, cx)
+            }
+        }
+    }
+
+    /// History's first few rows, or all of them once asked; a long History then scrolls in a box
+    /// of its own that draws only the rows in view.
+    pub(super) fn history_list(
+        &self,
+        step: &TopicId,
+        inside: &Shelf<'_>,
+        now: i64,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let past = self.past(step, inside);
         if past.is_empty() {
             return None;
         }
-        past.sort_by_key(|row| Reverse(row.at_ms()));
         let total = past.len();
-        let shown = if self.screen.all_history {
-            total
+        let all = self.screen.all_history;
+        let rows = if all && total > HISTORY_DRAWN {
+            let step = step.clone();
+            let rows = uniform_list(
+                "history-all",
+                total,
+                cx.processor(move |this: &mut Self, range: std::ops::Range<usize>, _, cx| {
+                    let now = now_ms();
+                    let inside = this.shelf(&step);
+                    let past = this.past(&step, &inside);
+                    range
+                        .filter_map(|index| {
+                            let row = past.get(index)?;
+                            Some(div().pb_1().child(this.past_row(index, row, &step, now, cx)))
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .h(px(HISTORY_BOX));
+            // The wheel over the box scrolls the box alone; GPUI would move the page along with it.
+            div()
+                .id("history-all-box")
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .child(rows)
+                .into_any_element()
         } else {
-            HISTORY_SHOWN
+            let shown = if all { total } else { HISTORY_SHOWN };
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(
+                    past.iter()
+                        .take(shown)
+                        .enumerate()
+                        .map(|(index, row)| self.past_row(index, row, step, now, cx)),
+                )
+                .into_any_element()
         };
         Some(
             div()
@@ -111,29 +176,16 @@ impl Workspace {
                     format!("HISTORY · {total}"),
                     "quiet for a day, or marked as history; newest first",
                 ))
-                .children(
-                    past.into_iter()
-                        .take(shown)
-                        .enumerate()
-                        .map(|(index, row)| match row {
-                            Past::Session(session) => {
-                                let age = ago(now, session.updated_at_ms);
-                                self.session_row(("history", index), session, step, age, false, cx)
-                            }
-                            Past::Conversation(conversation) => {
-                                Self::conversation_row(("history", index), conversation, now, cx)
-                            }
-                        }),
-                )
+                .child(rows)
                 .when(total > HISTORY_SHOWN, |list| {
-                    let label = if self.screen.all_history {
+                    let label = if all {
                         "Show fewer".to_owned()
                     } else {
                         format!("Show all {total}")
                     };
                     list.child(
                         div()
-                            .id("history-all")
+                            .id("history-all-toggle")
                             .mt_1()
                             .px_3()
                             .text_sm()
