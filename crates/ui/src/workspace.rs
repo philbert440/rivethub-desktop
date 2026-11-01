@@ -81,8 +81,9 @@ struct TopicScreen {
     all_history: bool,
     /// Where all of a long History stands in its own box.
     history_scroll: gpui::UniformListScrollHandle,
-    /// A pill clicked once: the step into it waits out a double-click, which renames it instead.
-    stepping: Option<(TopicId, gpui::Task<()>)>,
+    /// The pill last stepped into and when: a second click soon after, which lands on the row of
+    /// its subtopics, is the pill's double-click and renames it.
+    stepped: Option<(TopicId, std::time::Instant)>,
 }
 
 pub struct Workspace {
