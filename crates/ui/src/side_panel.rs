@@ -90,9 +90,11 @@ impl EventEmitter<PanelEvent> for SidePanel {}
 
 impl SidePanel {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| TextInput::new("Filter, or Enter to search transcripts", cx));
+        let query = cx.new(|cx| TextInput::new("Filter, or Enter to search transcripts", cx).keeping());
         let submitted = cx.subscribe(&query, |this, _, Submitted(text), cx| {
-            this.search(text.clone(), cx);
+            if !text.is_empty() {
+                this.search(text.clone(), cx);
+            }
         });
         let typed = cx.observe(&query, |_, _, cx| cx.notify());
         let panel = Self {

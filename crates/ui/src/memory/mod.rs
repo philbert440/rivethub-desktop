@@ -160,16 +160,18 @@ impl Focusable for MemoryPage {
 
 impl MemoryPage {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| TextInput::new("Search what your sessions said", cx));
-        let find = cx.new(|cx| TextInput::new("Find a topic or page", cx));
+        let query = cx.new(|cx| TextInput::new("Search what your sessions said", cx).keeping());
+        let find = cx.new(|cx| TextInput::new("Find a topic or page", cx).keeping());
         let asked = cx.subscribe(&query, |this, _, Submitted(text), cx| {
-            this.search(text.clone(), cx);
+            if !text.is_empty() {
+                this.search(text.clone(), cx);
+            }
         });
         let found = cx.subscribe(&find, |this, _, Submitted(text), cx| {
-            this.finding = Some(text.clone());
+            this.finding = Some(text.clone()).filter(|text| !text.is_empty());
             this.load_pages(cx);
         });
-        let entity_find = cx.new(|cx| TextInput::new("Find an entity by name or alias", cx));
+        let entity_find = cx.new(|cx| TextInput::new("Find an entity by name or alias", cx).keeping());
         let sought = cx.subscribe(&entity_find, |this, _, Submitted(text), cx| {
             this.find_entities(text, cx);
         });
