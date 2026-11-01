@@ -96,7 +96,17 @@ impl SidePanel {
                 this.search(text.clone(), cx);
             }
         });
-        let typed = cx.observe(&query, |_, _, cx| cx.notify());
+        // Editing the box away from what was searched drops that search's results, so the list
+        // filters by what is typed again until Enter searches it.
+        let typed = cx.observe(&query, |this, query, cx| {
+            let typed = query.read(cx).text();
+            if this.asked.as_deref().is_some_and(|asked| asked != typed) {
+                this.asked = None;
+                this.results = None;
+                this.problem = None;
+            }
+            cx.notify();
+        });
         let panel = Self {
             hub,
             query,

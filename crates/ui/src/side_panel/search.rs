@@ -11,10 +11,14 @@ use crate::theme::Theme;
 impl SidePanel {
     pub(super) fn search(&mut self, query: String, cx: &mut Context<Self>) {
         self.asked = Some(query.clone());
+        self.results = None;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let found = hub.search(query).await;
+            let found = hub.search(query.clone()).await;
             this.update(cx, |this, cx| {
+                if this.asked.as_ref() != Some(&query) {
+                    return;
+                }
                 match found {
                     Ok(found) => {
                         this.results = Some(found);
