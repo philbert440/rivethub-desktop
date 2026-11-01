@@ -132,7 +132,7 @@ pub struct Workspace {
     rail: Entity<TopicRail>,
     previews: Previews,
     _rail_events: Subscription,
-    _feed: [gpui::Task<()>; 2],
+    _feed: [gpui::Task<()>; 3],
 }
 
 /// A session worth a desktop notification, with its title when this node's listing has it.
@@ -178,32 +178,7 @@ impl Workspace {
                 },
             );
         let feed = hub.watch_workspace();
-        let mut changes = feed.changes();
-        let refresh = cx.spawn(async move |this, cx| {
-            while changes.changed().await.is_ok() {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(750))
-                    .await;
-                changes.borrow_and_update();
-                if this.update(cx, Workspace::load).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut activity = feed.activity();
-        let repaint = cx.spawn(async move |this, cx| {
-            while activity.changed().await.is_ok() {
-                // Live waits and finishes don't reload the listing, so the History chips
-                // catch up here.
-                let synced = this.update(cx, |this, cx| {
-                    this.take_notices(cx);
-                    this.sync_panel(cx);
-                });
-                if synced.is_err() {
-                    break;
-                }
-            }
-        });
+        let followed = Self::follow(&feed, cx);
         let mut workspace = Self {
             focus: cx.focus_handle(),
             hub,
@@ -245,10 +220,50 @@ impl Workspace {
             rail,
             previews: Previews::new(),
             _rail_events: rail_events,
-            _feed: [refresh, repaint],
+            _feed: followed,
         };
         workspace.load(cx);
         workspace
+    }
+
+    /// Follows the feed: a session change lists again, live state repaints, and a topic change
+    /// reads the topics.
+    fn follow(feed: &app::WorkspaceFeed, cx: &mut Context<Self>) -> [gpui::Task<()>; 3] {
+        let mut changes = feed.changes();
+        let refresh = cx.spawn(async move |this, cx| {
+            while changes.changed().await.is_ok() {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(750))
+                    .await;
+                changes.borrow_and_update();
+                if this.update(cx, Workspace::load).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut activity = feed.activity();
+        let repaint = cx.spawn(async move |this, cx| {
+            while activity.changed().await.is_ok() {
+                // Live waits and finishes don't reload the listing, so the History chips
+                // catch up here.
+                let synced = this.update(cx, |this, cx| {
+                    this.take_notices(cx);
+                    this.sync_panel(cx);
+                });
+                if synced.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut topic_changes = feed.topic_changes();
+        let retopic = cx.spawn(async move |this, cx| {
+            while topic_changes.changed().await.is_ok() {
+                if this.update(cx, Workspace::topics_changed).is_err() {
+                    break;
+                }
+            }
+        });
+        [refresh, repaint, retopic]
     }
 
     fn take_notices(&mut self, cx: &mut Context<Self>) {
@@ -275,6 +290,17 @@ impl Workspace {
             session,
         };
         cx.emit(Attention { notice, title });
+    }
+
+    /// A node said topics changed, such as a decision added from somewhere else: the topics are
+    /// read again, and the rail its decisions when it shows one of them.
+    fn topics_changed(&mut self, cx: &mut Context<Self>) {
+        let changed = self.feed.take_changed_topics();
+        if changed.is_empty() {
+            return;
+        }
+        self.rail.update(cx, |rail, cx| rail.topics_changed(&changed, cx));
+        self.refile(cx);
     }
 
     /// Settings added, changed or removed an agent, so the agent list reads them again.

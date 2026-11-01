@@ -115,6 +115,13 @@ impl TopicRail {
         }
     }
 
+    /// Reads the decisions again when the topic shown is among those a node says changed.
+    pub fn topics_changed(&mut self, changed: &std::collections::HashSet<TopicId>, cx: &mut Context<Self>) {
+        if let Some(topic) = self.topic.clone().filter(|topic| changed.contains(topic)) {
+            self.load_decisions(topic, cx);
+        }
+    }
+
     fn load_cards(&mut self, cx: &mut Context<Self>) {
         let Some(topic) = self.topic.clone() else {
             return;
