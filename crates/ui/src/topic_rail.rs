@@ -55,7 +55,8 @@ pub struct TopicRail {
     problem: Option<String>,
     adding: Option<Adding>,
     watched: Vec<(SessionId, i64)>,
-    caught: Vec<Caught>,
+    /// `None` while the shown topic's first catch-up is being read.
+    caught: Option<Vec<Caught>>,
     /// The catch-up lines opened to their whole text.
     caught_open: Vec<SessionId>,
     startup: Option<StartupPreview>,
@@ -81,7 +82,7 @@ impl TopicRail {
             problem: None,
             adding: None,
             watched: Vec::new(),
-            caught: Vec::new(),
+            caught: Some(Vec::new()),
             caught_open: Vec::new(),
             startup: None,
             startup_open: false,
@@ -96,7 +97,7 @@ impl TopicRail {
             self.decisions = None;
             self.problem = None;
             self.adding = None;
-            self.caught.clear();
+            self.caught = None;
             self.watched.clear();
             self.startup = None;
             self.startup_open = false;
@@ -112,6 +113,8 @@ impl TopicRail {
         if watched != self.watched {
             self.watched = watched;
             self.load_catch_up(newest, cx);
+        } else if newest.is_empty() {
+            self.caught = Some(Vec::new());
         }
     }
 
@@ -176,12 +179,12 @@ impl TopicRail {
         let watched = self.watched.clone();
         cx.spawn(async move |this, cx| {
             let ids = sessions.iter().map(|session| session.id.clone()).collect();
-            let read = hub.session_memories(ids).await.unwrap_or_default();
+            let read = hub.latest_summaries(ids).await;
             let mut caught: Vec<Caught> = sessions
                 .into_iter()
                 .zip(read)
-                .filter_map(|(session, memory)| {
-                    let latest = memory.as_ref()?.latest()?;
+                .filter_map(|(session, latest)| {
+                    let latest = latest?;
                     Some(Caught {
                         at_ms: latest.to_ms.unwrap_or(session.updated_at_ms),
                         text: latest.text.clone(),
@@ -193,7 +196,7 @@ impl TopicRail {
             caught.truncate(CAUGHT_SHOWN);
             this.update(cx, |this, cx| {
                 if this.watched == watched {
-                    this.caught = caught;
+                    this.caught = Some(caught);
                     cx.notify();
                 }
             })
@@ -386,7 +389,21 @@ impl TopicRail {
     }
 
     fn catch_up_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.caught.is_empty() {
+        let Some(caught) = &self.caught else {
+            return Some(
+                Self::card()
+                    .gap_3()
+                    .child(Self::label("CATCH-UP".into()))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(Theme::ink_dim())
+                            .child("Reading what its newest sessions did…"),
+                    )
+                    .into_any_element(),
+            );
+        };
+        if caught.is_empty() {
             return None;
         }
         let now = now_ms();
@@ -394,7 +411,7 @@ impl TopicRail {
             Self::card()
                 .gap_3()
                 .child(Self::label("CATCH-UP".into()))
-                .children(self.caught.iter().enumerate().map(|(index, line)| {
+                .children(caught.iter().enumerate().map(|(index, line)| {
                     let session = line.session.clone();
                     let opened = self.caught_open.contains(&line.session.id);
                     let toggled = line.session.id.clone();

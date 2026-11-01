@@ -57,6 +57,16 @@ impl Gateway {
         Ok(translate::session_memory(dag))
     }
 
+    /// The summary of a session's latest messages, read alone: the one ending last, a leaf ahead
+    /// of a rollup ending at the same time; `None` when nothing is summarized yet.
+    pub async fn latest_summary(&self, session: &SessionId) -> Result<Option<Summary>, GatewayError> {
+        let id = translate::wire_session(session)?.to_string();
+        let mut url = self.api_url(&["api", "memory", "summaries", &id])?;
+        url.query_pairs_mut().append_pair("latest", "1");
+        let dag: MemorySummaryDagResponse = Self::read_json(self.http.get(url).send().await)?.await?;
+        Ok(translate::session_memory(dag).latest().cloned())
+    }
+
     /// A window of a session's top-level summaries, each with its child count, and the whole
     /// memory's counts. An rh without the tree answers the whole outline, with no counts.
     pub async fn session_tree(

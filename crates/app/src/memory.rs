@@ -108,20 +108,18 @@ impl Hub {
             .await
     }
 
-    /// Several sessions' memory, read together and in order; a session whose memory couldn't be
-    /// read comes back as `None`.
-    pub async fn session_memories(
-        &self,
-        sessions: Vec<SessionId>,
-    ) -> Result<Vec<Option<SessionMemory>>, GatewayError> {
+    /// The latest summary of each session, read together and in order: `None` for a session with
+    /// none yet, or whose memory couldn't be read.
+    pub async fn latest_summaries(&self, sessions: Vec<SessionId>) -> Vec<Option<Summary>> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move {
             let read =
-                futures::future::join_all(sessions.iter().map(|session| gateway.session_memory(session)))
+                futures::future::join_all(sessions.iter().map(|session| gateway.latest_summary(session)))
                     .await;
-            Ok(read.into_iter().map(Result::ok).collect())
+            Ok::<_, GatewayError>(read.into_iter().map(|latest| latest.ok().flatten()).collect())
         })
         .await
+        .unwrap_or_default()
     }
 
     /// The topics alone; each root topic's page is read when it's wanted, with `topic_page`.
