@@ -31,6 +31,8 @@ const HISTORY_PAGE: usize = 100;
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
     Open(SessionSummary),
+    /// A search hit: its session, opened at the time of the message it matched.
+    OpenAt(SessionSummary, i64),
     OpenTopic(TopicId),
     Start(Agent),
     NewAgent,

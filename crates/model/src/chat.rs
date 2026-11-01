@@ -258,6 +258,26 @@ pub fn arrived(count: usize, last: Option<ExchangeState>, now: &[Exchange]) -> b
                 .is_some_and(|exchange| exchange.state != ExchangeState::Working))
 }
 
+/// Where a message sent or said at `at_ms` sits in the exchanges held: the one whose time holds it,
+/// else the last one begun by then, as a message captured just after its turn ended. `None` when it
+/// is older than the first exchange held, which an earlier page may hold.
+pub fn holding<'a>(exchanges: impl IntoIterator<Item = &'a Exchange>, at_ms: i64) -> Option<usize> {
+    let mut begun = None;
+    for (index, exchange) in exchanges.into_iter().enumerate() {
+        let Some(started) = exchange.started_at_ms.or(exchange.asked_at_ms) else {
+            continue;
+        };
+        if started > at_ms {
+            break;
+        }
+        if exchange.ended_at_ms.is_none_or(|ended| at_ms <= ended) {
+            return Some(index);
+        }
+        begun = Some(index);
+    }
+    begun
+}
+
 /// A span of time as a reader says it: "42s", "3m 5s", "1h 2m". Anything under a second is "1s".
 pub fn elapsed(ms: i64) -> String {
     let seconds = ((ms + 500) / 1000).max(1);
@@ -353,7 +373,7 @@ fn capitalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExchangeState, Step, arrived, elapsed, exchanges, group_summary, thought_summary};
+    use super::{ExchangeState, Step, arrived, elapsed, exchanges, group_summary, holding, thought_summary};
     use crate::session::{Role, ToolCall, ToolState, Turn};
     use crate::tools::ToolInput;
     use crate::usage::Usage;
@@ -530,5 +550,19 @@ mod tests {
         assert_eq!(thought_summary(thinking, true), "Plan the fix");
         assert_eq!(thought_summary(thinking, false), "Plan the fix");
         assert_eq!(thought_summary("only a partial line", true), "");
+    }
+
+    #[test]
+    fn a_message_sits_in_the_exchange_whose_time_holds_it() {
+        let timed = |started: i64, ended: Option<i64>| super::Exchange {
+            started_at_ms: Some(started),
+            ended_at_ms: ended,
+            ..super::Exchange::new(None, Vec::new(), None)
+        };
+        let held = [timed(10, Some(20)), timed(30, Some(40)), timed(50, None)];
+        assert_eq!(holding(&held, 35), Some(1));
+        assert_eq!(holding(&held, 42), Some(1));
+        assert_eq!(holding(&held, 90), Some(2));
+        assert_eq!(holding(&held, 5), None);
     }
 }
