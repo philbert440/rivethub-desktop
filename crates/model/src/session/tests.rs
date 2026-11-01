@@ -1,6 +1,6 @@
 use super::{
-    Activity, Approval, ContextUsage, Driver, Driving, Role, SessionEvent, SessionView, ToolCall, ToolState,
-    Turn,
+    Activity, Approval, ContextUsage, Driver, Driving, EarlierPage, Role, SessionEvent, SessionView,
+    ToolCall, ToolState, Turn,
 };
 use crate::plan::{StepStatus, Todo, Todos};
 use crate::prompt::Prompt;
@@ -36,6 +36,7 @@ fn a_taken_prompt_shows_until_the_transcript_that_records_it_arrives() {
     view.apply(SessionEvent::Snapshot {
         turns: vec![said(Role::User, "hi"), said(Role::Assistant, "hello")],
         context: None,
+        earlier: None,
     });
     assert_eq!(texts(&view), ["hi", "hello"]);
 }
@@ -89,6 +90,7 @@ fn a_todo_tool_keeps_the_plan_and_a_reopened_transcript_rebuilds_it() {
     reopened.apply(SessionEvent::Snapshot {
         turns: vec![done],
         context: None,
+        earlier: None,
     });
     assert_eq!(reopened.plan().done(), 1);
     assert!(reopened.plan().finished());
@@ -143,6 +145,7 @@ fn a_reconnect_drops_a_turn_and_a_failure_the_old_stream_left_open() {
     view.apply(SessionEvent::Snapshot {
         turns: Vec::new(),
         context: None,
+        earlier: None,
     });
     assert!(!view.busy());
     assert_eq!(view.error(), None);
@@ -161,6 +164,7 @@ fn snapshot_after_turn_complete_never_duplicates_the_turn() {
     view.apply(SessionEvent::Snapshot {
         turns: turns.clone(),
         context: None,
+        earlier: None,
     });
     assert_eq!(view.turns(), turns.as_slice());
     assert!(view.live().is_none());
@@ -206,7 +210,11 @@ fn a_question_stays_open_until_a_reply_follows_it() {
     assert!(view.open_questions().is_some());
     let mut turns = view.turns().to_vec();
     turns.push(said(Role::User, "Which"));
-    view.apply(SessionEvent::Snapshot { turns, context: None });
+    view.apply(SessionEvent::Snapshot {
+        turns,
+        context: None,
+        earlier: None,
+    });
     assert!(view.open_questions().is_none());
 }
 
@@ -262,6 +270,7 @@ fn a_snapshot_keeps_the_live_output_of_a_tool_it_lists_without_one() {
     view.apply(SessionEvent::Snapshot {
         turns: vec![settled],
         context: None,
+        earlier: None,
     });
     let kept = view.turns()[0].tools[0]
         .output
@@ -321,6 +330,7 @@ fn the_harness_count_outranks_the_transcript_and_an_unknown_window_has_no_share(
             used: 16_000,
             window: Some(200_000),
         }),
+        earlier: None,
     });
     view.apply(SessionEvent::Context(ContextUsage {
         used: 16_168,
@@ -332,6 +342,7 @@ fn the_harness_count_outranks_the_transcript_and_an_unknown_window_has_no_share(
             used: 16_000,
             window: Some(200_000),
         }),
+        earlier: None,
     });
     assert_eq!(view.context().and_then(ContextUsage::percent), Some(2));
     let unknown = ContextUsage {
@@ -350,6 +361,7 @@ fn a_turn_run_in_the_terminal_retires_the_chat_harness_count() {
             used,
             window: Some(1_000_000),
         }),
+        earlier: None,
     };
     view.apply(SessionEvent::Context(ContextUsage {
         used: 22_000,
@@ -363,6 +375,42 @@ fn a_turn_run_in_the_terminal_retires_the_chat_harness_count() {
     }));
     view.apply(read(41_000));
     assert_eq!(view.context().map(|usage| usage.used), Some(41_000));
+}
+
+#[test]
+fn pages_read_back_stay_in_front_of_the_window_the_node_follows() {
+    let texts = |view: &SessionView| {
+        view.turns()
+            .iter()
+            .map(|turn| turn.text.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut view = SessionView::default();
+    let window = |text: &str| SessionEvent::Snapshot {
+        turns: vec![said(Role::User, text)],
+        context: None,
+        earlier: Some(800),
+    };
+    view.apply(window("late"));
+    assert_eq!(view.begin_earlier(), Some(800));
+    assert_eq!(view.begin_earlier(), None);
+    view.earlier_read(
+        800,
+        EarlierPage {
+            turns: vec![said(Role::User, "early")],
+            earlier: Some(300),
+        },
+    );
+    view.apply(window("late, longer"));
+    assert_eq!(texts(&view), ["early", "late, longer"]);
+    assert_eq!((view.earlier(), view.held_from()), (Some(300), 300));
+    view.apply(SessionEvent::Snapshot {
+        turns: vec![said(Role::User, "moved")],
+        context: None,
+        earlier: Some(900),
+    });
+    assert_eq!(texts(&view), ["moved"]);
+    assert_eq!(view.earlier(), Some(900));
 }
 
 #[test]

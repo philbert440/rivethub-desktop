@@ -173,8 +173,13 @@ impl Hub {
     }
 
     /// A new chat on the session's node that carries its conversation up to the reply to its
-    /// `prompts`th prompt.
-    pub async fn fork(&self, summary: &SessionSummary, prompts: u32) -> Result<SessionSummary, GatewayError> {
+    /// `prompts`th prompt, counted from `from` in its transcript.
+    pub async fn fork(
+        &self,
+        summary: &SessionSummary,
+        prompts: u32,
+        from: u64,
+    ) -> Result<SessionSummary, GatewayError> {
         let hub = self.clone();
         let session = summary.id.clone();
         let node = summary.node.clone();
@@ -182,7 +187,7 @@ impl Hub {
             let mut forked = hub
                 .gateway_for(node.as_deref())
                 .await?
-                .fork(&session, prompts)
+                .fork(&session, prompts, from)
                 .await?;
             forked.node = node;
             Ok(forked)
@@ -190,16 +195,23 @@ impl Hub {
         .await
     }
 
-    /// The session's transcript as its node reads it now.
+    /// The session's transcript as its node reads it now: from `from` on when given, else its
+    /// latest part.
     pub async fn transcript(
         &self,
         summary: &SessionSummary,
+        from: Option<u64>,
     ) -> Result<Vec<model::session::Turn>, GatewayError> {
         let hub = self.clone();
         let session = summary.id.clone();
         let node = summary.node.clone();
-        self.on_runtime(async move { hub.gateway_for(node.as_deref()).await?.transcript(&session).await })
-            .await
+        self.on_runtime(async move {
+            hub.gateway_for(node.as_deref())
+                .await?
+                .transcript(&session, from)
+                .await
+        })
+        .await
     }
 
     /// The session as its node describes it now, such as with the title its harness gave it and

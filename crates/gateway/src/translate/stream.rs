@@ -211,12 +211,14 @@ pub fn event(raw: HarnessEvent, running: &mut Running) -> Option<SessionEvent> {
         HarnessEvent::Transcript {
             turns,
             context_window,
+            earlier,
             ..
         } => {
             let usage = context(&turns, context_window);
             SessionEvent::Snapshot {
                 turns: transcript(turns),
                 context: usage,
+                earlier,
             }
         }
         HarnessEvent::Status(frame) => SessionEvent::Activity(match frame.status {

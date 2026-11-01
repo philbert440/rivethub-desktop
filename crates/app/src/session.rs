@@ -18,6 +18,7 @@ enum Command {
     Steer(Prompt),
     Unqueue(Prompt),
     Decide { request_id: String, decision: Decision },
+    Earlier,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +79,11 @@ impl SessionHandle {
 
     pub fn decide(&self, request_id: String, decision: Decision) {
         let _ = self.commands.try_send(Command::Decide { request_id, decision });
+    }
+
+    /// Reads back the page of a long transcript before the turns the view holds.
+    pub fn read_earlier(&self) {
+        let _ = self.commands.try_send(Command::Earlier);
     }
 }
 
@@ -170,6 +176,29 @@ impl Actor {
                 Err(err)
             }
         }
+    }
+
+    async fn earlier(&self) -> Result<(), gateway::GatewayError> {
+        let Some(before) = self.view.write().begin_earlier() else {
+            return Ok(());
+        };
+        self.changed();
+        let read = match self.gateway().await {
+            Ok(gateway) => gateway.earlier(&self.id, before).await,
+            Err(err) => Err(err),
+        };
+        let outcome = match read {
+            Ok(page) => {
+                self.view.write().earlier_read(before, page);
+                Ok(())
+            }
+            Err(err) => {
+                self.view.write().earlier_failed();
+                Err(err)
+            }
+        };
+        self.changed();
+        outcome
     }
 
     fn fail(&self, message: &str) {
@@ -266,6 +295,7 @@ impl Actor {
                 Ok(gateway) => gateway.decide(&self.id, &request_id, decision).await,
                 Err(err) => Err(err),
             },
+            Command::Earlier => self.earlier().await,
         };
         if let Err(err) = outcome {
             self.fail(&err.to_string());

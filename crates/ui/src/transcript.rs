@@ -84,6 +84,23 @@ impl Folds {
     pub fn open(&self, fold: Fold) -> bool {
         self.0.contains(&fold)
     }
+
+    /// The same folds after `by` exchanges went in at `at`.
+    pub fn shifted(&self, at: usize, by: usize) -> Self {
+        let moved = |exchange: usize| if exchange < at { exchange } else { exchange + by };
+        Self(
+            self.0
+                .iter()
+                .map(|fold| match *fold {
+                    Fold::Exchange(exchange) => Fold::Exchange(moved(exchange)),
+                    Fold::Group(exchange, step) => Fold::Group(moved(exchange), step),
+                    Fold::Thought(exchange, step) => Fold::Thought(moved(exchange), step),
+                    Fold::Tool(exchange, step, tool) => Fold::Tool(moved(exchange), step, tool),
+                    Fold::Plan => Fold::Plan,
+                })
+                .collect(),
+        )
+    }
 }
 
 pub struct Context<'a> {
@@ -100,12 +117,21 @@ pub struct Context<'a> {
     pub plan: &'a model::plan::Plan,
     /// Whether a fork after this exchange is starting.
     pub forking: bool,
-    /// Whether the stream to the session's node is down, so a running turn can't be followed.
-    pub lost: bool,
-    /// Whether the running turn waits on your answer or approval.
-    pub waiting: bool,
+    /// What the running turn's status line says.
+    pub running: Running,
     /// Whether the exchange is one a fork carries from the chat it was forked from, shown to read.
     pub carried: Carried<'a>,
+}
+
+/// What a running turn's status line says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Running {
+    #[default]
+    Working,
+    /// The stream to the session's node is down, so the turn can't be followed.
+    Lost,
+    /// The turn waits on your answer or approval.
+    Waiting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -535,10 +561,10 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 }
             })
             .unwrap_or("Thinking");
-        column = column.child(match (cx.lost, cx.waiting) {
-            (true, _) => disconnected(),
-            (false, true) => waiting_on_you(),
-            (false, false) => status(label),
+        column = column.child(match cx.running {
+            Running::Lost => disconnected(),
+            Running::Waiting => waiting_on_you(),
+            Running::Working => status(label),
         });
     }
     div()

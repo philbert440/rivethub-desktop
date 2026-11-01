@@ -37,12 +37,13 @@ impl SessionPane {
             return;
         }
         let prompts = u32::try_from(asked).unwrap_or(u32::MAX);
+        let from = self.handle.view().read().held_from();
         let hub = self.hub.clone();
         let summary = self.summary.clone();
         self.forking = Some(index);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let forked = hub.fork(&summary, prompts).await;
+            let forked = hub.fork(&summary, prompts, from).await;
             this.update(cx, |this, cx| {
                 this.forking = None;
                 cx.notify();
@@ -53,6 +54,7 @@ impl SessionPane {
                             node: this.summary.node.clone(),
                             title: this.summary.title.clone(),
                             prompts,
+                            from: Some(from),
                         };
                         this.hub.remember_fork(&forked.id, &origin);
                         cx.emit(PaneEvent::Forked(Box::new(forked)));
@@ -78,7 +80,7 @@ impl SessionPane {
         );
         let hub = hub.clone();
         cx.spawn(async move |this, cx| {
-            let read = hub.transcript(&source).await;
+            let read = hub.transcript(&source, origin.from).await;
             this.update(cx, |this, cx| match read {
                 Ok(turns) => {
                     let named = origin.title.as_deref().map_or_else(
@@ -129,8 +131,8 @@ impl SessionPane {
         let previews = Arc::clone(&self.previews);
         let plan = view.plan().clone();
         let forking = self.forking;
-        let lost = self.lost;
-        let waiting = self.waiting;
+        let running = self.running;
+        let earlier = view.earlier().map(|_| view.loading_earlier());
         let (carried, forked_from) = (self.carried.len(), self.forked_from.clone());
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
@@ -152,35 +154,17 @@ impl SessionPane {
                             previews: &previews,
                             plan: &plan,
                             forking: forking == Some(index),
-                            lost,
-                            waiting,
+                            running,
                             carried: transcript::carried(index, carried, forked_from.as_deref()),
                         };
-                        transcript::exchange(exchange, &context, window)
+                        let shown = transcript::exchange(exchange, &context, window);
+                        super::earlier::opening(shown, earlier.filter(|_| index == carried), &pane)
                     },
                 )
             },
         )
         .size_full();
-        let back = behind.then(|| {
-            div().w(column).flex().justify_end().child(
-                div()
-                    .id("back-to-bottom")
-                    .size(px(34.))
-                    .rounded(px(17.))
-                    .bg(Theme::raised())
-                    .text_color(Theme::ink())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.turns.scroll_to_end();
-                        cx.notify();
-                    }))
-                    .child("↓"),
-            )
-        });
+        let back = behind.then(|| Self::back_to_bottom(column, cx));
         div()
             .flex_1()
             .w_full()
@@ -223,6 +207,27 @@ impl SessionPane {
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
                     ),
             )
+    }
+
+    /// The button that scrolls a transcript read above its newest turn back down to it.
+    fn back_to_bottom(column: Pixels, cx: &mut Context<Self>) -> gpui::Div {
+        div().w(column).flex().justify_end().child(
+            div()
+                .id("back-to-bottom")
+                .size(px(34.))
+                .rounded(px(17.))
+                .bg(Theme::raised())
+                .text_color(Theme::ink())
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.turns.scroll_to_end();
+                    cx.notify();
+                }))
+                .child("↓"),
+        )
     }
 
     fn fade() -> impl IntoElement {
