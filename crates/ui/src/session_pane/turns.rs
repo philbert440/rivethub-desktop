@@ -41,11 +41,14 @@ impl SessionPane {
         let hub = self.hub.clone();
         let summary = self.summary.clone();
         self.forking = Some(index);
+        self.turns.remeasure();
+        self.turns.scroll_to_end();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let forked = hub.fork(&summary, prompts, from).await;
             this.update(cx, |this, cx| {
                 this.forking = None;
+                this.turns.remeasure();
                 cx.notify();
                 match forked {
                     Ok(forked) => {
@@ -65,6 +68,32 @@ impl SessionPane {
             .ok();
         })
         .detach();
+    }
+
+    /// The line under the conversation a fork carries, naming the chat it came from.
+    fn fork_line(&self) -> String {
+        let named = self.summary.title.as_deref().map_or_else(
+            || "this chat".to_owned(),
+            |title| format!("\u{201c}{}\u{201d}", one_line(Some(title))),
+        );
+        format!("Forked from {named} · the conversation above came with it")
+    }
+
+    /// While a fork starts, what stands where the composer goes: the new chat is on its way.
+    fn fork_starting() -> gpui::Div {
+        div()
+            .w_full()
+            .h(px(92.))
+            .rounded(px(28.))
+            .bg(Theme::card())
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_sm()
+            .text_color(Theme::ink_dim())
+            .child(div().size(px(8.)).rounded(px(4.)).bg(Theme::accent()))
+            .child("Starting the fork…")
     }
 
     /// For a fork made here, reads the chat it was forked from and keeps the part the fork carries.
@@ -133,14 +162,20 @@ impl SessionPane {
         let forking = self.forking;
         let running = self.running;
         let earlier = view.earlier().map(|_| view.loading_earlier());
-        let (carried, forked_from) = (self.carried.len(), self.forked_from.clone());
+        let (carried, forked_from) = match forking {
+            Some(at) => (at + 1, Some(self.fork_line())),
+            None => (self.carried.len(), self.forked_from.clone()),
+        };
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
         let transcript = list(
             self.turns.clone(),
             move |index, window: &mut Window, _: &mut App| {
-                exchanges.get(index).map_or_else(
+                let shown = exchanges
+                    .get(index)
+                    .filter(|_| forking.is_none_or(|at| index <= at));
+                shown.map_or_else(
                     || div().into_any_element(),
                     |exchange| {
                         let context = transcript::Context {
@@ -202,10 +237,12 @@ impl SessionPane {
                     .children(self.plan_panel(&view, cx))
                     .children(self.driving_dock(&view, cx))
                     .children(self.queue_dock(cx))
-                    .child(
-                        self.approval_card(&view, &self.composer.focus_handle(cx))
+                    .child(match self.forking {
+                        Some(_) => Self::fork_starting().into_any_element(),
+                        None => self
+                            .approval_card(&view, &self.composer.focus_handle(cx))
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
-                    ),
+                    }),
             )
     }
 

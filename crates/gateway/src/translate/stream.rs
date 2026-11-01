@@ -108,13 +108,17 @@ fn turn(raw: HarnessTranscriptTurn, tasks: &mut u32) -> Turn {
     }
 }
 
-fn context(turns: &[HarnessTranscriptTurn], window: Option<u64>) -> Option<ContextUsage> {
+/// How full the context is after the newest turn: what its last model call held, as the node read
+/// it, else the newest turn's prompt and reply.
+fn context(turns: &[HarnessTranscriptTurn], used: Option<u64>, window: Option<u64>) -> Option<ContextUsage> {
     let window = window?;
-    let used = turns
-        .iter()
-        .rev()
-        .find_map(|turn| turn.usage.as_ref())
-        .map(|usage| usage.prompt_tokens + usage.completion_tokens)?;
+    let used = used.or_else(|| {
+        turns
+            .iter()
+            .rev()
+            .find_map(|turn| turn.usage.as_ref())
+            .map(|usage| usage.prompt_tokens + usage.completion_tokens)
+    })?;
     Some(ContextUsage {
         used,
         window: Some(window),
@@ -211,10 +215,11 @@ pub fn event(raw: HarnessEvent, running: &mut Running) -> Option<SessionEvent> {
         HarnessEvent::Transcript {
             turns,
             context_window,
+            context_used,
             earlier,
             ..
         } => {
-            let usage = context(&turns, context_window);
+            let usage = context(&turns, context_used, context_window);
             SessionEvent::Snapshot {
                 turns: transcript(turns),
                 context: usage,
@@ -248,6 +253,9 @@ mod tests {
             r#"{"role":"assistant","text":"hi","usage":{"promptTokens":15,"completionTokens":3,"cachedTokens":5}}"#,
         )
         .unwrap_or_else(|err| unreachable!("fixture: {err}"));
-        assert_eq!(context(&[turn], Some(100)).map(|usage| usage.used), Some(18));
+        assert_eq!(
+            context(&[turn], None, Some(100)).map(|usage| usage.used),
+            Some(18)
+        );
     }
 }
