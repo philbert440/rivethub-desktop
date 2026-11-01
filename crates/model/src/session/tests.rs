@@ -342,6 +342,30 @@ fn the_harness_count_outranks_the_transcript_and_an_unknown_window_has_no_share(
 }
 
 #[test]
+fn a_turn_run_in_the_terminal_retires_the_chat_harness_count() {
+    let mut view = SessionView::default();
+    let read = |used| SessionEvent::Snapshot {
+        turns: Vec::new(),
+        context: Some(ContextUsage {
+            used,
+            window: Some(1_000_000),
+        }),
+    };
+    view.apply(SessionEvent::Context(ContextUsage {
+        used: 22_000,
+        window: Some(1_000_000),
+    }));
+    view.apply(SessionEvent::Driving(Driving {
+        driver: Some(Driver::Terminal),
+        busy: true,
+        queued: Vec::new(),
+        approval: None,
+    }));
+    view.apply(read(41_000));
+    assert_eq!(view.context().map(|usage| usage.used), Some(41_000));
+}
+
+#[test]
 fn a_message_the_node_held_for_the_terminal_shows_as_sent_once_it_starts() {
     let mut view = SessionView::default();
     let held = |driver, queued: &[&str]| {

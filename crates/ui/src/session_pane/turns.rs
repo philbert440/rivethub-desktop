@@ -130,6 +130,7 @@ impl SessionPane {
         let plan = view.plan().clone();
         let forking = self.forking;
         let lost = self.lost;
+        let waiting = self.waiting;
         let (carried, forked_from) = (self.carried.len(), self.forked_from.clone());
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
@@ -152,6 +153,7 @@ impl SessionPane {
                             plan: &plan,
                             forking: forking == Some(index),
                             lost,
+                            waiting,
                             carried: transcript::carried(index, carried, forked_from.as_deref()),
                         };
                         transcript::exchange(exchange, &context, window)

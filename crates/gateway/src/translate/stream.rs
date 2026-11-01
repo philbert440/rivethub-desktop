@@ -231,9 +231,8 @@ pub fn event(raw: HarnessEvent, running: &mut Running) -> Option<SessionEvent> {
             approval,
             ..
         } => SessionEvent::Driving(driving(driver, busy, queued, approval)),
-        HarnessEvent::SessionCreated { .. }
-        | HarnessEvent::SessionUpdated { .. }
-        | HarnessEvent::Prompt { .. } => return None,
+        HarnessEvent::SessionUpdated { blocked, .. } => SessionEvent::Waiting(blocked?),
+        HarnessEvent::SessionCreated { .. } | HarnessEvent::Prompt { .. } => return None,
     })
 }
 

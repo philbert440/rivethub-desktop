@@ -102,6 +102,8 @@ pub struct Context<'a> {
     pub forking: bool,
     /// Whether the stream to the session's node is down, so a running turn can't be followed.
     pub lost: bool,
+    /// Whether the running turn waits on your answer or approval.
+    pub waiting: bool,
     /// Whether the exchange is one a fork carries from the chat it was forked from, shown to read.
     pub carried: Carried<'a>,
 }
@@ -244,6 +246,20 @@ fn status(label: &str) -> AnyElement {
                 .with_easing(pulsating_between(0.45, 1.)),
             gpui::Styled::opacity,
         )
+        .into_any_element()
+}
+
+/// A running turn held until you answer.
+fn waiting_on_you() -> AnyElement {
+    div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(13.))
+        .text_color(Theme::warn())
+        .child(div().size(px(8.)).rounded(px(4.)).bg(Theme::warn()))
+        .child("Waiting for you")
         .into_any_element()
 }
 
@@ -519,7 +535,11 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 }
             })
             .unwrap_or("Thinking");
-        column = column.child(if cx.lost { disconnected() } else { status(label) });
+        column = column.child(match (cx.lost, cx.waiting) {
+            (true, _) => disconnected(),
+            (false, true) => waiting_on_you(),
+            (false, false) => status(label),
+        });
     }
     div()
         .w_full()

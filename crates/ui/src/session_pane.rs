@@ -84,6 +84,7 @@ pub struct SessionPane {
     fork_source: Option<SessionSummary>,
     /// Whether the session's stream was down when the transcript was last folded.
     lost: bool,
+    waiting: bool,
     awaiting_title: bool,
     /// When Esc was last pressed in the composer during a turn; a second one soon after stops it.
     escaped: Option<std::time::Instant>,
@@ -148,6 +149,7 @@ impl SessionPane {
             forked_from: None,
             fork_source: None,
             lost: false,
+            waiting: false,
             awaiting_title: false,
             escaped: None,
             _revisions: watcher,
@@ -247,12 +249,13 @@ impl SessionPane {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let (own, lost) = {
+        let (own, lost, waiting) = {
             let view = self.handle.view();
             let view = view.read();
             (
                 exchanges(view.turns(), view.live(), view.busy() || view.driving().busy),
                 view.lost(),
+                view.needs_you(),
             )
         };
         let folded: Vec<_> = self.carried.iter().cloned().chain(own).collect();
@@ -286,9 +289,11 @@ impl SessionPane {
             .zip(previous.iter())
             .position(|(new, old)| new != old)
             .unwrap_or(known.min(count));
-        // A running exchange shows whether its stream is down, so the newest one draws again.
-        if lost != self.lost {
+        // A running exchange shows whether its stream is down or it waits on you, so the newest
+        // one draws again.
+        if lost != self.lost || waiting != self.waiting {
             self.lost = lost;
+            self.waiting = waiting;
             first_changed = first_changed.min(count.saturating_sub(1));
         }
         if count < known {

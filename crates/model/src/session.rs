@@ -308,6 +308,9 @@ pub enum SessionEvent {
     },
     Activity(Activity),
     Driving(Driving),
+    /// Whether the session waits for you now: a question or approval it shows, in the terminal
+    /// too, until it is answered.
+    Waiting(bool),
     Error(String),
 }
 
@@ -317,7 +320,8 @@ pub struct SessionView {
     live: Option<Turn>,
     approvals: Vec<Approval>,
     context: Option<ContextUsage>,
-    /// The harness's own count, which outranks the one read from the transcript.
+    /// The harness's own count, which outranks the one read from the transcript until a turn
+    /// the harness didn't count runs in the terminal.
     counted: Option<ContextUsage>,
     activity: Activity,
     error: Option<String>,
@@ -326,6 +330,7 @@ pub struct SessionView {
     paced: Pace,
     plan: Plan,
     driving: Driving,
+    waiting: bool,
 }
 
 impl SessionView {
@@ -419,6 +424,7 @@ impl SessionView {
                     self.turns.push(turn);
                 }
                 self.activity = Activity::Idle;
+                self.waiting = false;
                 if let Some(pace) = usage
                     .zip(model_ms)
                     .and_then(|(usage, ms)| Pace::of(usage.output, ms))
@@ -430,11 +436,15 @@ impl SessionView {
             SessionEvent::Plan(plan) => self.plan = plan,
             SessionEvent::Activity(activity) => self.activity = activity,
             SessionEvent::Driving(driving) => {
+                if driving.by_terminal() && driving.busy {
+                    self.counted = None;
+                }
                 let before = std::mem::replace(&mut self.driving, driving);
                 for text in started(&before.queued, &self.driving.queued) {
                     self.prompted(text.clone(), Vec::new(), None);
                 }
             }
+            SessionEvent::Waiting(waiting) => self.waiting = waiting,
             SessionEvent::Error(message) => self.error = Some(message),
         }
     }
@@ -443,6 +453,7 @@ impl SessionView {
     /// failure it reported no longer stand; a turn still running says so again as it streams.
     pub fn reconnected(&mut self) {
         self.activity = Activity::Idle;
+        self.waiting = false;
         self.error = None;
         self.lost = false;
     }
@@ -577,7 +588,7 @@ impl SessionView {
     }
 
     pub fn needs_you(&self) -> bool {
-        !self.approvals.is_empty() || self.activity == Activity::Blocked
+        self.waiting || !self.approvals.is_empty() || self.activity == Activity::Blocked
     }
 }
 
