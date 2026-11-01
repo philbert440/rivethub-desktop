@@ -68,7 +68,8 @@ impl SettingsPage {
                                             .child(plugin.name.clone())
                                             .child(node_chip(plugin.at.node.clone())),
                                     )
-                                    .child(dim(plugin.description.clone()).text_xs().truncate()),
+                                    .child(dim(plugin.description.clone()).text_xs().truncate())
+                                    .child(dim(crate::plugin::adds(plugin)).text_xs().truncate()),
                             ),
                     )
                     .child(
