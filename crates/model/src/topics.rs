@@ -285,6 +285,30 @@ impl<'a> Atlas<'a> {
             .collect()
     }
 
+    /// The conversations that are no harness session filed anywhere under the topic, its own
+    /// included.
+    pub fn conversations_within<'c>(
+        &self,
+        topic: &TopicId,
+        conversations: &'c [FiledConversation],
+    ) -> Vec<&'c FiledConversation> {
+        conversations
+            .iter()
+            .filter(|conversation| {
+                self.topics
+                    .get(&conversation.topic)
+                    .is_some_and(|known| self.lineage(&known.id).contains(&topic))
+            })
+            .collect()
+    }
+
+    /// Everything filed anywhere under the topic, as its screen lists it: its sessions, subagents
+    /// going with their parent, and its conversations that are no harness session. Every count of
+    /// what a topic holds is this one.
+    pub fn filed_within(&self, topic: &TopicId, conversations: &[FiledConversation]) -> usize {
+        self.sessions_within(topic).len() + self.conversations_within(topic, conversations).len()
+    }
+
     /// Whether `topic` can move under `parent`: never under itself or its own subtopics, and never
     /// so that its deepest subtopic would sit below `MAX_LEVELS`.
     pub fn can_nest(&self, topic: &TopicId, parent: &'a TopicId) -> bool {

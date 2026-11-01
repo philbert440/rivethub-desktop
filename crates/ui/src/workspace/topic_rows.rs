@@ -77,19 +77,13 @@ impl Workspace {
 
     /// The step's History, newest first. Conversations filed here that are no harness session sit
     /// among the sessions by when they were last active.
-    fn past<'a>(&'a self, step: &TopicId, inside: &Shelf<'a>) -> Vec<Past<'a>> {
-        let atlas = Atlas::new(&self.topics, &[], &self.placements);
+    fn past<'a>(inside: &Shelf<'a>) -> Vec<Past<'a>> {
         let mut past: Vec<Past<'a>> = inside
             .history
             .iter()
             .copied()
             .map(Past::Session)
-            .chain(
-                self.conversations
-                    .iter()
-                    .filter(|conversation| atlas.lineage(&conversation.topic).contains(&step))
-                    .map(Past::Conversation),
-            )
+            .chain(inside.conversations.iter().copied().map(Past::Conversation))
             .collect();
         past.sort_by_key(|row| Reverse(row.at_ms()));
         past
@@ -123,7 +117,7 @@ impl Workspace {
         now: i64,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let past = self.past(step, inside);
+        let past = Self::past(inside);
         if past.is_empty() {
             return None;
         }
@@ -137,7 +131,7 @@ impl Workspace {
                 cx.processor(move |this: &mut Self, range: std::ops::Range<usize>, _, cx| {
                     let now = now_ms();
                     let inside = this.shelf(&step);
-                    let past = this.past(&step, &inside);
+                    let past = Self::past(&inside);
                     range
                         .filter_map(|index| {
                             let row = past.get(index)?;

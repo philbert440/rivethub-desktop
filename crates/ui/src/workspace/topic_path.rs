@@ -31,7 +31,7 @@ impl Workspace {
             if index > 0 {
                 steps = steps.child(div().px_1().text_color(Theme::ink_dim()).child("›"));
             }
-            let count = atlas.sessions_within(id).len();
+            let count = atlas.filed_within(id, &self.conversations);
             let label = match self.topic(id) {
                 Some(_) if id == root => format!("All · {count}"),
                 Some(known) => format!("{} · {count}", known.name),
@@ -45,7 +45,7 @@ impl Workspace {
             .enumerate()
             .map(|(index, child)| {
                 let below = atlas.children(&child.id).len();
-                let count = atlas.sessions_within(&child.id).len();
+                let count = atlas.filed_within(&child.id, &self.conversations);
                 self.pill(index, child, count, below, cx)
             })
             .collect();
