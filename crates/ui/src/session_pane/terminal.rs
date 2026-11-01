@@ -5,7 +5,7 @@ use gpui::{
 use model::session::Driver;
 use term::GridSize;
 
-use super::{Mode, PaneEvent, SessionPane, ToggleTerminal};
+use super::{ELSEWHERE, ELSEWHERE_WHY, Mode, PaneEvent, SessionPane, ToggleTerminal};
 use crate::terminal_view::{Bell, TerminalView};
 use crate::theme::Theme;
 
@@ -126,6 +126,23 @@ impl SessionPane {
     }
 
     pub(super) fn spawn_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.elsewhere {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(div().text_color(Theme::ink()).child(ELSEWHERE))
+                .child(
+                    div()
+                        .max_w(px(520.))
+                        .text_color(Theme::ink_dim())
+                        .child(ELSEWHERE_WHY),
+                )
+                .into_any_element();
+        }
         let (said, why) = self.idle_terminal();
         let offered = self.confirm_spawn || self.terminal.is_some();
         div()

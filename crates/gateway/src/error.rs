@@ -63,6 +63,11 @@ impl GatewayError {
         matches!(self, Self::Status { status: 409, detail } if detail.contains("turn_in_flight"))
     }
 
+    /// The node refused to resume a session that runs in a process it doesn't own.
+    pub fn is_running_elsewhere(&self) -> bool {
+        matches!(self, Self::Status { status: 409, detail } if detail.contains("session_running_elsewhere"))
+    }
+
     pub fn is_missing_route(&self) -> bool {
         matches!(self, Self::Status { status: 404, .. })
     }

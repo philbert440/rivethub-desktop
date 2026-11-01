@@ -96,6 +96,27 @@ impl SessionPane {
             .child("Starting the fork…")
     }
 
+    /// Where the composer goes for a session running in another terminal: why it takes no messages.
+    fn running_elsewhere() -> gpui::Div {
+        div()
+            .w_full()
+            .p_5()
+            .rounded(px(28.))
+            .bg(Theme::warn_container())
+            .border_1()
+            .border_color(Theme::warn_line())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().text_color(Theme::warn()).child(super::ELSEWHERE))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(Theme::ink_dim())
+                    .child(super::ELSEWHERE_WHY),
+            )
+    }
+
     /// For a fork made here, reads the chat it was forked from and keeps the part the fork carries.
     pub(super) fn read_fork(hub: &Hub, summary: &SessionSummary, cx: &mut Context<Self>) {
         let Some(origin) = hub.fork_origin(&summary.id) else {
@@ -243,9 +264,10 @@ impl SessionPane {
                     .children(self.plan_panel(&view, cx))
                     .children(self.driving_dock(&view, cx))
                     .children(self.queue_dock(cx))
-                    .child(match self.forking {
-                        Some(_) => Self::fork_starting().into_any_element(),
-                        None => self
+                    .child(match (self.forking, self.elsewhere) {
+                        (Some(_), _) => Self::fork_starting().into_any_element(),
+                        (None, true) => Self::running_elsewhere().into_any_element(),
+                        (None, false) => self
                             .approval_card(&view, &self.composer.focus_handle(cx))
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
                     }),

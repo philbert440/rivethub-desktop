@@ -215,6 +215,9 @@ pub struct Switches {
 pub struct Described {
     pub summary: SessionSummary,
     pub switches: Switches,
+    /// The session runs in a process its node doesn't own, such as a terminal of the person's own,
+    /// so it can be read here but takes no messages.
+    pub running_elsewhere: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
