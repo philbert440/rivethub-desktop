@@ -20,6 +20,8 @@ struct Stored {
     node: Option<String>,
     title: Option<String>,
     prompts: u32,
+    #[serde(default)]
+    from: Option<u64>,
 }
 
 impl From<&ForkOrigin> for Stored {
@@ -30,6 +32,7 @@ impl From<&ForkOrigin> for Stored {
             node: origin.node.clone(),
             title: origin.title.clone(),
             prompts: origin.prompts,
+            from: origin.from,
         }
     }
 }
@@ -44,6 +47,7 @@ impl From<Stored> for ForkOrigin {
             node: stored.node,
             title: stored.title,
             prompts: stored.prompts,
+            from: stored.from,
         }
     }
 }

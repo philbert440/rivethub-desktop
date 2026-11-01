@@ -70,7 +70,14 @@ impl MemoryPage {
                     return;
                 }
                 match loaded {
-                    Ok(groups) => this.decisions = Some(groups),
+                    Ok(groups) => {
+                        this.decisions = Some(groups);
+                        // The decisions sit above the page's sections, so a subtopic's section
+                        // moves down as they arrive; it stays at the top.
+                        if let Some(block) = this.section {
+                            this.page_scroll.scroll_to_top_of_item(block + 1);
+                        }
+                    }
                     Err(err) if err.is_missing_route() => {
                         this.problem = Some("Decisions need a newer rh on this node.".into());
                     }

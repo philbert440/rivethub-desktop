@@ -253,7 +253,7 @@ impl PluginSettings {
     }
 
     fn header(plugin: &Plugin) -> AnyElement {
-        let (ink, fill) = match plugin.state {
+        let (ink, fill) = match plugin.status() {
             PluginState::Running => (Theme::on_selected(), Theme::selected()),
             PluginState::AwaitingApproval | PluginState::Backoff | PluginState::Starting => {
                 (Theme::warn(), Theme::warn_container())
@@ -300,7 +300,7 @@ impl PluginSettings {
                                     .bg(fill)
                                     .text_xs()
                                     .text_color(ink)
-                                    .child(plugin.state.label()),
+                                    .child(plugin.status().label()),
                             ),
                     )
                     .child(dim(format!("{} · on {}", plugin.version, plugin.at.node)).text_xs())
@@ -348,41 +348,52 @@ impl PluginSettings {
         if rows.is_empty() {
             rows.push(row().child(dim("It asks for no permissions.")).into_any_element());
         }
-        let adds: Vec<String> = plugin
-            .pages
-            .iter()
-            .map(|page| format!("the {} page", page.title))
-            .chain(
-                plugin
-                    .topic_cards
-                    .iter()
-                    .map(|card| format!("a {} topic card", card.title)),
-            )
-            .chain(
-                plugin
-                    .session_actions
-                    .iter()
-                    .map(|entry| format!("“{}” in the session menu", entry.title)),
-            )
-            .chain(plugin.tools.iter().map(|tool| format!("the agent tool “{tool}”")))
-            .collect();
-        if !adds.is_empty() {
-            rows.push(
-                row()
-                    .items_start()
-                    .child(dim("Adds").flex_none())
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(Theme::ink())
-                            .child(adds.join(", ")),
-                    )
-                    .into_any_element(),
-            );
-        }
+        rows.push(
+            row()
+                .items_start()
+                .child(dim("In the app").flex_none())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(Theme::ink())
+                        .child(adds(plugin)),
+                )
+                .into_any_element(),
+        );
         rows
+    }
+}
+
+/// What the plug-in adds to the app and its agents, as a sentence. One that adds nothing anyone sees
+/// says so, and how it is used instead, so it doesn't look broken.
+pub fn adds(plugin: &Plugin) -> String {
+    let adds: Vec<String> = plugin
+        .pages
+        .iter()
+        .map(|page| format!("the {} page", page.title))
+        .chain(
+            plugin
+                .topic_cards
+                .iter()
+                .map(|card| format!("a {} topic card", card.title)),
+        )
+        .chain(
+            plugin
+                .session_actions
+                .iter()
+                .map(|entry| format!("“{}” in the session menu", entry.title)),
+        )
+        .chain(plugin.tools.iter().map(|tool| format!("the agent tool “{tool}”")))
+        .chain(plugin.jobs.iter().map(|job| format!("the job “{job}”")))
+        .collect();
+    match (adds.is_empty(), plugin.events) {
+        (false, _) => format!("Adds {}.", adds.join(", ")),
+        (true, 0) => "Adds no pages, cards or agent tools: other apps call it directly.".to_owned(),
+        (true, _) => {
+            "Adds no pages, cards or agent tools: it works in the background as things happen.".to_owned()
+        }
     }
 }
 

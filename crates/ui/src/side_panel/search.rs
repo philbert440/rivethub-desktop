@@ -11,10 +11,14 @@ use crate::theme::Theme;
 impl SidePanel {
     pub(super) fn search(&mut self, query: String, cx: &mut Context<Self>) {
         self.asked = Some(query.clone());
+        self.results = None;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
-            let found = hub.search(query).await;
+            let found = hub.search(query.clone()).await;
             this.update(cx, |this, cx| {
+                if this.asked.as_ref() != Some(&query) {
+                    return;
+                }
                 match found {
                     Ok(found) => {
                         this.results = Some(found);
@@ -33,6 +37,7 @@ impl SidePanel {
     pub(super) fn clear(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.asked = None;
         self.results = None;
+        self.query.update(cx, |query, cx| query.set_text("", cx));
         cx.notify();
     }
 
@@ -43,7 +48,7 @@ impl SidePanel {
             .cloned()
             .unwrap_or_else(|| SessionSummary {
                 id: found.session.clone(),
-                title: None,
+                title: found.title.clone(),
                 status: model::session::SessionStatus::Idle,
                 model: None,
                 effort: None,
@@ -114,7 +119,7 @@ impl SidePanel {
             )
             .children(found.iter().enumerate().map(|(index, hit)| {
                 let summary = self.summary_for(hit);
-                let open = summary.clone();
+                let (open, at) = (summary.clone(), hit.snippet_ms);
                 div()
                     .id(("result", index))
                     .px_2()
@@ -125,9 +130,9 @@ impl SidePanel {
                     .on_drag(DraggedSession(summary.clone()), |dragged, _, _, cx| {
                         cx.new(|_| DragGhost(crate::text::one_line(dragged.0.title.as_deref())))
                     })
-                    .on_click(
-                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Open(open.clone()))),
-                    )
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(PanelEvent::OpenAt(open.clone(), at));
+                    }))
                     .flex()
                     .flex_col()
                     .gap_1()

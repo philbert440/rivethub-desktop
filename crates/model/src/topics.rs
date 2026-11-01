@@ -33,6 +33,41 @@ pub enum Directory {
     Shared { path: String },
 }
 
+impl Directory {
+    /// A directory from what was typed: a path on `node`, or on every node when there is none. A
+    /// session's working directory is a full path, so anything else is refused.
+    pub fn typed(path: &str, node: Option<String>) -> Option<Self> {
+        let path = path.trim();
+        let path = if path.len() > 1 {
+            path.trim_end_matches('/')
+        } else {
+            path
+        };
+        if !path.starts_with('/') {
+            return None;
+        }
+        let path = path.to_owned();
+        Some(match node {
+            Some(node) => Self::Local { node, path },
+            None => Self::Shared { path },
+        })
+    }
+
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Local { path, .. } | Self::Shared { path } => path,
+        }
+    }
+
+    /// The node it is on, or `None` when every node has it.
+    pub fn node(&self) -> Option<&str> {
+        match self {
+            Self::Local { node, .. } => Some(node),
+            Self::Shared { .. } => None,
+        }
+    }
+}
+
 impl Topic {
     /// Closed, and nothing in it has been active since.
     pub fn is_closed(&self, active_ms: i64) -> bool {
@@ -285,12 +320,76 @@ impl<'a> Atlas<'a> {
             .collect()
     }
 
+    /// The conversations that are no harness session filed anywhere under the topic, its own
+    /// included.
+    pub fn conversations_within<'c>(
+        &self,
+        topic: &TopicId,
+        conversations: &'c [FiledConversation],
+    ) -> Vec<&'c FiledConversation> {
+        conversations
+            .iter()
+            .filter(|conversation| {
+                self.topics
+                    .get(&conversation.topic)
+                    .is_some_and(|known| self.lineage(&known.id).contains(&topic))
+            })
+            .collect()
+    }
+
+    /// Everything filed anywhere under the topic, as its screen lists it: its sessions, subagents
+    /// going with their parent, and its conversations that are no harness session. Every count of
+    /// what a topic holds is this one.
+    pub fn filed_within(&self, topic: &TopicId, conversations: &[FiledConversation]) -> usize {
+        self.sessions_within(topic).len() + self.conversations_within(topic, conversations).len()
+    }
+
     /// Whether `topic` can move under `parent`: never under itself or its own subtopics, and never
     /// so that its deepest subtopic would sit below `MAX_LEVELS`.
     pub fn can_nest(&self, topic: &TopicId, parent: &'a TopicId) -> bool {
-        let lineage = self.lineage(parent);
-        !lineage.contains(&topic) && lineage.len() + self.height(topic) <= MAX_LEVELS
+        self.nesting(topic, parent).is_ok()
     }
+
+    /// Why `topic` can't move under `parent`, if it can't.
+    pub fn nesting(&self, topic: &TopicId, parent: &'a TopicId) -> Result<(), Unnestable> {
+        let lineage = self.lineage(parent);
+        if lineage.contains(&topic) {
+            Err(Unnestable::OwnSubtree)
+        } else if lineage.len() + self.height(topic) > MAX_LEVELS {
+            Err(Unnestable::TooDeep)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Why a topic can't move under another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unnestable {
+    /// The other topic is the topic itself or one of its own subtopics.
+    OwnSubtree,
+    /// The topic's deepest subtopic would sit below `MAX_LEVELS`.
+    TooDeep,
+}
+
+/// The slug rh files a name under: its letters and digits, lowercased, with each run of anything
+/// else between them as one hyphen. Two topics of a kind never share one, so a name whose slug is
+/// taken can't be a new topic.
+pub fn slug(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    let mut gap = false;
+    for ch in name.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            if gap && !slug.is_empty() {
+                slug.push('-');
+            }
+            gap = false;
+            slug.push(ch);
+        } else {
+            gap = true;
+        }
+    }
+    slug
 }
 
 pub fn suggest<'a>(topics: &'a [Topic], query: &str, limit: usize) -> Vec<&'a Topic> {

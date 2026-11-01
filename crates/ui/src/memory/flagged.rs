@@ -17,6 +17,8 @@ pub(super) struct Flagged {
     groups: Option<Vec<FlaggedGroup>>,
     /// The jobs a retry or dismiss is on its way for, until the list shows what became of them.
     acting: HashSet<i64>,
+    /// The groups, by the job each shows, opened to the error as rh wrote it.
+    open: HashSet<i64>,
 }
 
 impl MemoryPage {
@@ -65,8 +67,8 @@ impl MemoryPage {
         .detach();
     }
 
-    /// One cause: its error, task and count, then the newest job it failed, with Dismiss and Retry
-    /// for that job.
+    /// One cause in words: what its task did and to what, how often it failed and when, with
+    /// Dismiss and Retry for the newest job it failed; opened, the error and job as rh wrote them.
     fn flagged_group(
         &self,
         index: usize,
@@ -76,6 +78,7 @@ impl MemoryPage {
     ) -> AnyElement {
         let sample = &group.sample;
         let id = sample.id;
+        let open = self.flagged.open.contains(&id);
         let jobs = match group.count {
             1 => "1 job".to_owned(),
             count => format!("{count} jobs"),
@@ -84,6 +87,30 @@ impl MemoryPage {
             1 => "failed once".to_owned(),
             count => format!("failed {count} times"),
         };
+        let detail = div()
+            .mt_1()
+            .px_3()
+            .py_2()
+            .rounded(px(12.))
+            .bg(Theme::code())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .text_xs()
+            .child(div().text_color(Theme::ink_dim()).child(group.task.clone()))
+            .children(sample.subject().map(|subject| {
+                div()
+                    .font_family(Theme::MONO)
+                    .text_color(Theme::ink_dim())
+                    .truncate()
+                    .child(subject.to_owned())
+            }))
+            .child(
+                div()
+                    .font_family(Theme::MONO)
+                    .text_color(Theme::ink())
+                    .child(sample.error.clone()),
+            );
         div()
             .id(("flagged", index))
             .px_4()
@@ -95,47 +122,35 @@ impl MemoryPage {
             .gap_3()
             .child(
                 div()
+                    .id(("flagged-open", index))
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().text_color(Theme::ink()).child(group.cause.clone()))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(Theme::ink_dim())
-                            .child(format!("{} · {jobs}", group.task)),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .px_3()
-                            .py_2()
-                            .rounded(px(12.))
-                            .bg(Theme::code())
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .text_xs()
-                            .children(sample.subject().map(|subject| {
-                                div()
-                                    .font_family(Theme::MONO)
-                                    .text_color(Theme::ink_dim())
-                                    .truncate()
-                                    .child(subject.to_owned())
-                            }))
-                            .child(
-                                div()
-                                    .font_family(Theme::MONO)
-                                    .text_color(Theme::ink())
-                                    .child(sample.error.clone()),
-                            )
-                            .child(div().text_color(Theme::ink_dim()).child(format!(
-                                "{failures} · last {}",
-                                ago_phrase(now, sample.last_failed_ms)
-                            ))),
-                    ),
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if !this.flagged.open.remove(&id) {
+                            this.flagged.open.insert(id);
+                        }
+                        cx.notify();
+                    }))
+                    .child(div().text_color(Theme::ink()).child(group.title()))
+                    .child(div().text_xs().text_color(Theme::ink_dim()).child(format!(
+                        "{jobs} · {failures} · last {} · {}",
+                        ago_phrase(now, sample.last_failed_ms),
+                        if open { "Hide details" } else { "Details" }
+                    )))
+                    .when(!open, |summary| {
+                        summary.child(
+                            div()
+                                .text_xs()
+                                .text_color(Theme::ink_dim())
+                                .truncate()
+                                .child(group.cause.clone()),
+                        )
+                    })
+                    .when(open, |summary| summary.child(detail)),
             )
             .when(!self.flagged.acting.contains(&id), |row| {
                 row.child(

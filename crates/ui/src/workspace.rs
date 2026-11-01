@@ -8,6 +8,7 @@ mod navigate;
 mod new_topic;
 mod placing;
 mod sharing;
+mod topic_directory;
 mod topic_edit;
 mod topic_path;
 mod topic_rows;
@@ -23,7 +24,7 @@ use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, Rgba,
     Styled, Subscription, Window, actions, div, prelude::*, px,
 };
-use model::notice::{Notice, NoticeKind};
+use model::notice::{Notice, NoticeKind, TaskFailure};
 use model::preview::Previews;
 use model::session::SessionSummary;
 use model::topics::{FiledBy, FiledConversation, HistoryMarks, Placements, Suggestion, Topic};
@@ -79,8 +80,11 @@ struct TopicScreen {
     step: Option<TopicId>,
     /// Whether History lists all its sessions rather than its newest few.
     all_history: bool,
-    /// A pill clicked once: the step into it waits out a double-click, which renames it instead.
-    stepping: Option<(TopicId, gpui::Task<()>)>,
+    /// Where all of a long History stands in its own box.
+    history_scroll: gpui::UniformListScrollHandle,
+    /// The pill last stepped into and when: a second click soon after, which lands on the row of
+    /// its subtopics, is the pill's double-click and renames it.
+    stepped: Option<(TopicId, std::time::Instant)>,
 }
 
 pub struct Workspace {
@@ -102,6 +106,7 @@ pub struct Workspace {
     screen: TopicScreen,
     naming: Option<new_topic::Naming>,
     retitling: Option<topic_edit::Retitling>,
+    rooting: Option<topic_directory::Rooting>,
     choosing: Option<topic_edit::Choosing>,
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
@@ -127,7 +132,7 @@ pub struct Workspace {
     rail: Entity<TopicRail>,
     previews: Previews,
     _rail_events: Subscription,
-    _feed: [gpui::Task<()>; 2],
+    _feed: [gpui::Task<()>; 3],
 }
 
 /// A session worth a desktop notification, with its title when this node's listing has it.
@@ -136,8 +141,12 @@ pub struct Attention {
     pub title: Option<String>,
 }
 
+/// A task delegated on some node failed, for the person to hear of.
+pub struct TaskFailed(pub TaskFailure);
+
 impl EventEmitter<ViewInMemory> for Workspace {}
 impl EventEmitter<Attention> for Workspace {}
+impl EventEmitter<TaskFailed> for Workspace {}
 impl EventEmitter<TopicDeleted> for Workspace {}
 impl EventEmitter<Arc<Listed>> for Workspace {}
 
@@ -159,6 +168,12 @@ impl Workspace {
                 window,
                 |this, _, event: &PanelEvent, window, cx| match event {
                     PanelEvent::Open(summary) => this.open(summary.clone(), window, cx),
+                    PanelEvent::OpenAt(summary, at_ms) => {
+                        this.open(summary.clone(), window, cx);
+                        if let Some(pane) = this.pane.clone() {
+                            pane.update(cx, |pane, cx| pane.seek(*at_ms, cx));
+                        }
+                    }
                     PanelEvent::OpenTopic(topic) => this.open_topic(topic.clone(), window, cx),
                     PanelEvent::Start(agent) => this.start_with(agent.clone(), None, window, cx),
                     PanelEvent::NewAgent => this.edit_agent(None, window, cx),
@@ -173,6 +188,57 @@ impl Workspace {
                 },
             );
         let feed = hub.watch_workspace();
+        let followed = Self::follow(&feed, cx);
+        let mut workspace = Self {
+            focus: cx.focus_handle(),
+            hub,
+            altitude: Altitude::Everything,
+            sessions: Vec::new(),
+            arrival: Arrival::Awaited,
+            topics: Vec::new(),
+            placements: Placements::new(),
+            marks: HistoryMarks::new(),
+            filed_by: HashMap::new(),
+            visibility: HashMap::new(),
+            remembered: Vec::new(),
+            filed_sessions: Vec::new(),
+            conversations: Vec::new(),
+            screen: TopicScreen::default(),
+            naming: None,
+            retitling: None,
+            rooting: None,
+            choosing: None,
+            suggestions: HashMap::new(),
+            subagents: HashMap::new(),
+            uncategorized_open: false,
+            uncategorized_folded: false,
+            unlisted: None,
+            topics_problem: None,
+            listing: Listing::Idle,
+            failed: None,
+            pane: None,
+            pane_events: None,
+            panel,
+            panel_open: true,
+            placing: None,
+            launching: None,
+            editing_agent: None,
+            menu: None,
+            plugins,
+            feed,
+            _panel_events: panel_events,
+            rail,
+            previews: Previews::new(),
+            _rail_events: rail_events,
+            _feed: followed,
+        };
+        workspace.load(cx);
+        workspace
+    }
+
+    /// Follows the feed: a session change lists again, live state repaints, and a topic change
+    /// reads the topics.
+    fn follow(feed: &app::WorkspaceFeed, cx: &mut Context<Self>) -> [gpui::Task<()>; 3] {
         let mut changes = feed.changes();
         let refresh = cx.spawn(async move |this, cx| {
             while changes.changed().await.is_ok() {
@@ -199,50 +265,15 @@ impl Workspace {
                 }
             }
         });
-        let mut workspace = Self {
-            focus: cx.focus_handle(),
-            hub,
-            altitude: Altitude::Everything,
-            sessions: Vec::new(),
-            arrival: Arrival::Awaited,
-            topics: Vec::new(),
-            placements: Placements::new(),
-            marks: HistoryMarks::new(),
-            filed_by: HashMap::new(),
-            visibility: HashMap::new(),
-            remembered: Vec::new(),
-            filed_sessions: Vec::new(),
-            conversations: Vec::new(),
-            screen: TopicScreen::default(),
-            naming: None,
-            retitling: None,
-            choosing: None,
-            suggestions: HashMap::new(),
-            subagents: HashMap::new(),
-            uncategorized_open: false,
-            uncategorized_folded: false,
-            unlisted: None,
-            topics_problem: None,
-            listing: Listing::Idle,
-            failed: None,
-            pane: None,
-            pane_events: None,
-            panel,
-            panel_open: true,
-            placing: None,
-            launching: None,
-            editing_agent: None,
-            menu: None,
-            plugins,
-            feed,
-            _panel_events: panel_events,
-            rail,
-            previews: Previews::new(),
-            _rail_events: rail_events,
-            _feed: [refresh, repaint],
-        };
-        workspace.load(cx);
-        workspace
+        let mut topic_changes = feed.topic_changes();
+        let retopic = cx.spawn(async move |this, cx| {
+            while topic_changes.changed().await.is_ok() {
+                if this.update(cx, Workspace::topics_changed).is_err() {
+                    break;
+                }
+            }
+        });
+        [refresh, repaint, retopic]
     }
 
     fn take_notices(&mut self, cx: &mut Context<Self>) {
@@ -253,6 +284,10 @@ impl Workspace {
                 .find(|session| session.id == notice.session)
                 .map(SessionSummary::name);
             cx.emit(Attention { notice, title });
+        }
+        for failure in self.feed.take_failures() {
+            self.failed = Some(failure.said());
+            cx.emit(TaskFailed(failure));
         }
         cx.notify();
     }
@@ -269,6 +304,17 @@ impl Workspace {
             session,
         };
         cx.emit(Attention { notice, title });
+    }
+
+    /// A node said topics changed, such as a decision added from somewhere else: the topics are
+    /// read again, and the rail its decisions when it shows one of them.
+    fn topics_changed(&mut self, cx: &mut Context<Self>) {
+        let changed = self.feed.take_changed_topics();
+        if changed.is_empty() {
+            return;
+        }
+        self.rail.update(cx, |rail, cx| rail.topics_changed(&changed, cx));
+        self.refile(cx);
     }
 
     /// Settings added, changed or removed an agent, so the agent list reads them again.

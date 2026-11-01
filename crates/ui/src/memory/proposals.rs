@@ -4,40 +4,38 @@ use gateway::GatewayError;
 use gpui::{AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
 use model::TopicId;
 use model::memory::Verdict;
-use model::tidy::{Batch, Branch, Change, Proposal, Proposer, Row};
+use model::tidy::{Batch, Change, Kind, Proposal};
 use model::topics::Topic;
 
 use super::{MemoryEvent, MemoryPage};
 use crate::brand;
-use crate::text::{ago_phrase, now_ms};
 use crate::theme::Theme;
 
-/// A batch shows this many of its page changes until asked for all of them.
-const SHOWN: usize = 12;
-const INDENT: f32 = 22.;
 const SAMPLES: usize = 3;
 
-/// How the person has laid out the batches they're reviewing.
+/// How the person has laid out the batches they're reviewing. Each batch starts as its kinds of
+/// change with their counts, each kind closed.
 #[derive(Debug, Default)]
 pub(super) struct Review {
-    /// The folded branches, by batch and the topic each heads.
-    folded: HashSet<(String, TopicId)>,
+    /// The kinds of change opened, by batch.
+    pub(super) opened: HashSet<(String, Kind)>,
     /// The proposals whose sessions are listed, and whether all of them are.
     pub(super) members: HashMap<String, bool>,
-    /// The batches whose page changes are all listed.
-    all_pages: HashSet<String>,
+    /// The kinds of change listed in full, by batch.
+    pub(super) all: HashSet<(String, Kind)>,
+    /// A verdict on a whole batch, waiting for the person to confirm it.
+    pub(super) confirming: Option<(String, Verdict)>,
 }
 
-/// What a verdict button decides: one proposal, or every pending proposal of a batch.
 #[derive(Debug, Clone)]
-enum Decided {
+pub(super) enum Decided {
     One(String),
     Batch(String),
 }
 
 pub(super) fn verdict_button(
     id: (&'static str, usize),
-    label: &'static str,
+    label: impl Into<gpui::SharedString>,
     verdict: Verdict,
 ) -> gpui::Stateful<gpui::Div> {
     div()
@@ -61,7 +59,7 @@ pub(super) fn verdict_button(
                 .text_color(Theme::ink_dim())
                 .hover(|button| button.text_color(Theme::ink())),
         })
-        .child(label)
+        .child(label.into())
 }
 
 pub(super) fn counted(count: usize, one: &str, many: &str) -> String {
@@ -195,8 +193,9 @@ impl MemoryPage {
         }
     }
 
-    fn decide_proposals(&mut self, decided: Decided, verdict: Verdict, cx: &mut Context<Self>) {
+    pub(super) fn decide_proposals(&mut self, decided: Decided, verdict: Verdict, cx: &mut Context<Self>) {
         self.problem = None;
+        self.review.confirming = None;
         if let Some(tidy) = self.tidy.as_mut() {
             match &decided {
                 Decided::One(id) => {
@@ -262,198 +261,6 @@ impl MemoryPage {
             .collect()
     }
 
-    fn batch(&self, index: usize, batch: &Batch, existing: &[Topic], cx: &mut Context<Self>) -> AnyElement {
-        let rows = batch.tree(existing);
-        let pages: Vec<&Proposal> = batch.pages().collect();
-        let changes = batch.proposals.len();
-        let from = match batch.by {
-            Proposer::Backfill => "From the backfill",
-            Proposer::Categorizer => "From the categorizer",
-        };
-        let mut summary = vec![counted(changes, "change", "changes")];
-        let sessions = batch.sessions();
-        if sessions > 0 {
-            summary.push(format!("{sessions} sessions to file"));
-        }
-        if !pages.is_empty() {
-            summary.push(counted(pages.len(), "page change", "page changes"));
-        }
-        summary.push(ago_phrase(now_ms(), batch.at_ms));
-        let (approve, reject) = (batch.id.clone(), batch.id.clone());
-        div()
-            .id(("batch", index))
-            .p_4()
-            .rounded(px(18.))
-            .bg(Theme::panel())
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().text_color(Theme::ink()).child(from))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(Theme::ink_dim())
-                                    .child(summary.join(" · ")),
-                            ),
-                    )
-                    .child(
-                        verdict_button(("batch-reject", index), "Reject all", Verdict::Reject).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.decide_proposals(Decided::Batch(reject.clone()), Verdict::Reject, cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        verdict_button(("batch-approve", index), "Approve all", Verdict::Accept).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.decide_proposals(Decided::Batch(approve.clone()), Verdict::Accept, cx);
-                            }),
-                        ),
-                    ),
-            )
-            .children(self.tree(batch, &rows, cx))
-            .children(self.pages(batch, &pages, cx))
-            .into_any_element()
-    }
-
-    /// Folds a branch of a batch's tree, or opens it again.
-    fn folding(
-        key: (String, TopicId),
-        cx: &mut Context<Self>,
-    ) -> impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static {
-        cx.listener(move |this, _: &ClickEvent, _, cx| {
-            if !this.review.folded.remove(&key) {
-                this.review.folded.insert(key.clone());
-            }
-            cx.notify();
-        })
-    }
-
-    /// The proposed tree's rows, leaving out those inside a folded branch.
-    fn tree(&self, batch: &Batch, rows: &[Row<'_>], cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut out = Vec::with_capacity(rows.len());
-        let mut folded_at: Option<usize> = None;
-        for (at, row) in rows.iter().enumerate() {
-            if folded_at.is_some_and(|depth| row.depth > depth) {
-                continue;
-            }
-            folded_at = None;
-            let opens = rows.get(at + 1).is_some_and(|next| next.depth > row.depth);
-            let folded = row
-                .heads
-                .is_some_and(|topic| self.review.folded.contains(&(batch.id.clone(), topic.clone())));
-            if opens && folded {
-                folded_at = Some(row.depth);
-            }
-            let key = row.heads.map(|topic| (batch.id.clone(), topic.clone()));
-            let fold = key.clone().filter(|_| opens).map(|key| {
-                div()
-                    .id(("fold", at))
-                    .flex_none()
-                    .cursor_pointer()
-                    .on_click(Self::folding(key, cx))
-                    .child(brand::icon(
-                        brand::symbol(Some(if folded { "chevron_right" } else { "expand_more" })),
-                        18.,
-                        Theme::ink_dim(),
-                    ))
-            });
-            let indent = px(INDENT * f32::from(u8::try_from(row.depth.min(6)).unwrap_or(6)));
-            let line = match row.branch {
-                // A topic that exists has nothing to decide, so the whole row folds its branch.
-                Branch::Topic(topic) => div()
-                    .id(("existing", at))
-                    .min_h(px(32.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .text_color(Theme::ink())
-                    .when_some(key.filter(|_| opens), |line, key| {
-                        line.cursor_pointer().on_click(Self::folding(key, cx))
-                    })
-                    .children(fold)
-                    .child(self.named(batch, topic))
-                    .into_any_element(),
-                Branch::Proposal(proposal) => self.proposed(batch, row.depth > 0, proposal, fold, cx),
-            };
-            out.push(div().ml(indent).child(line).into_any_element());
-            if let Branch::Proposal(proposal) = row.branch
-                && self.review.members.contains_key(&proposal.id)
-            {
-                out.push(
-                    div()
-                        .ml(indent + px(INDENT))
-                        .child(self.members(proposal, cx))
-                        .into_any_element(),
-                );
-            }
-        }
-        out
-    }
-
-    /// The wiki page changes under the tree, the first few until all are asked for.
-    fn pages(&self, batch: &Batch, pages: &[&Proposal], cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if pages.is_empty() {
-            return Vec::new();
-        }
-        let all = self.review.all_pages.contains(&batch.id);
-        let shown = if all { pages.len() } else { pages.len().min(SHOWN) };
-        let mut out = vec![
-            div()
-                .pt_2()
-                .px_2()
-                .text_color(Theme::ink())
-                .child(format!(
-                    "Wiki pages · {}",
-                    counted(pages.len(), "change", "changes")
-                ))
-                .into_any_element(),
-        ];
-        out.extend(
-            pages
-                .iter()
-                .take(shown)
-                .map(|proposal| self.proposed(batch, false, proposal, None, cx)),
-        );
-        if pages.len() > SHOWN {
-            let id = batch.id.clone();
-            out.push(
-                div()
-                    .id(("pages-all", batch.proposals.len()))
-                    .pt_1()
-                    .px_2()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(Theme::accent())
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if !this.review.all_pages.remove(&id) {
-                            this.review.all_pages.insert(id.clone());
-                        }
-                        cx.notify();
-                    }))
-                    .child(if all {
-                        "Show fewer".to_owned()
-                    } else {
-                        format!("Show all {}", pages.len())
-                    })
-                    .into_any_element(),
-            );
-        }
-        out
-    }
-
     /// How many sessions a proposal would file, opening the list of them.
     fn members_chip(
         &self,
@@ -496,7 +303,7 @@ impl MemoryPage {
         )
     }
 
-    fn proposed(
+    pub(super) fn proposed(
         &self,
         batch: &Batch,
         nested: bool,

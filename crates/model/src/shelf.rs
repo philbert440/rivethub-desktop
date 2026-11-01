@@ -8,7 +8,7 @@ use std::hash::BuildHasher;
 use crate::HarnessId;
 use crate::TopicId;
 use crate::session::SessionSummary;
-use crate::topics::{Activity, Atlas};
+use crate::topics::{Activity, Atlas, FiledConversation};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Shelf<'a> {
@@ -16,20 +16,37 @@ pub struct Shelf<'a> {
     pub active: Vec<&'a SessionSummary>,
     /// Newest first.
     pub history: Vec<&'a SessionSummary>,
+    /// The conversations filed here that are no harness session; they are History too.
+    pub conversations: Vec<&'a FiledConversation>,
 }
 
 impl<'a> Shelf<'a> {
-    pub fn of<S: BuildHasher>(atlas: &Atlas<'a>, step: &TopicId, activity: &Activity<'_, S>) -> Self {
+    pub fn of<S: BuildHasher>(
+        atlas: &Atlas<'a>,
+        step: &TopicId,
+        activity: &Activity<'_, S>,
+        conversations: &'a [FiledConversation],
+    ) -> Self {
         let mut sessions = atlas.sessions_within(step);
         sessions.sort_by_key(|session| (Reverse(session.updated_at_ms), session.id.clone()));
         let (active, history) = sessions
             .into_iter()
             .partition(|session| activity.is_active(session));
-        Self { active, history }
+        Self {
+            active,
+            history,
+            conversations: atlas.conversations_within(step, conversations),
+        }
     }
 
+    /// Everything here: Active, then History with its conversations.
     pub fn len(&self) -> usize {
-        self.active.len() + self.history.len()
+        self.active.len() + self.history_len()
+    }
+
+    /// What History lists: its sessions and conversations.
+    pub fn history_len(&self) -> usize {
+        self.history.len() + self.conversations.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -136,10 +153,10 @@ mod tests {
                 .map(|session| session.id.native().as_str().to_owned())
                 .collect::<Vec<_>>()
         };
-        let desk = Shelf::of(&atlas, &TopicId::new("desk"), &activity);
+        let desk = Shelf::of(&atlas, &TopicId::new("desk"), &activity, &[]);
         assert_eq!(natives(&desk.active), ["lead", "search", "live"]);
         assert_eq!(natives(&desk.history), ["old"]);
-        let memory = Shelf::of(&atlas, &TopicId::new("memory"), &activity);
+        let memory = Shelf::of(&atlas, &TopicId::new("memory"), &activity, &[]);
         assert_eq!(memory.len(), 3);
         let usual: Vec<&str> = desk
             .usual(3)

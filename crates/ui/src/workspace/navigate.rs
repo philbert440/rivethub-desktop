@@ -125,6 +125,7 @@ impl Workspace {
         self.placing = None;
         self.screen = TopicScreen::default();
         self.retitling = None;
+        self.rooting = None;
         self.altitude = Altitude::Topic(topic);
         self.sync_step(cx);
         window.focus(&self.focus, cx);
@@ -178,6 +179,7 @@ impl Workspace {
         }
         self.altitude = altitude;
         self.retitling = None;
+        self.rooting = None;
         if !matches!(self.altitude, Altitude::Session { .. }) {
             self.pane = None;
             self.placing = None;

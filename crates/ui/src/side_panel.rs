@@ -31,6 +31,8 @@ const HISTORY_PAGE: usize = 100;
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
     Open(SessionSummary),
+    /// A search hit: its session, opened at the time of the message it matched.
+    OpenAt(SessionSummary, i64),
     OpenTopic(TopicId),
     Start(Agent),
     NewAgent,
@@ -90,11 +92,23 @@ impl EventEmitter<PanelEvent> for SidePanel {}
 
 impl SidePanel {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| TextInput::new("Filter, or Enter to search transcripts", cx));
+        let query = cx.new(|cx| TextInput::new("Filter, or Enter to search transcripts", cx).keeping());
         let submitted = cx.subscribe(&query, |this, _, Submitted(text), cx| {
-            this.search(text.clone(), cx);
+            if !text.is_empty() {
+                this.search(text.clone(), cx);
+            }
         });
-        let typed = cx.observe(&query, |_, _, cx| cx.notify());
+        // Editing the box away from what was searched drops that search's results, so the list
+        // filters by what is typed again until Enter searches it.
+        let typed = cx.observe(&query, |this, query, cx| {
+            let typed = query.read(cx).text();
+            if this.asked.as_deref().is_some_and(|asked| asked != typed) {
+                this.asked = None;
+                this.results = None;
+                this.problem = None;
+            }
+            cx.notify();
+        });
         let panel = Self {
             hub,
             query,
