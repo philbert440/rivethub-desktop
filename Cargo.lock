@@ -7012,7 +7012,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "values"
 version = "0.7.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=e9456afe557cbce497195b8fbe5f2294b667637d#e9456afe557cbce497195b8fbe5f2294b667637d"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=9b38eafd81bb1917f021ba1323844e595c68b844#9b38eafd81bb1917f021ba1323844e595c68b844"
 dependencies = [
  "chrono",
  "schemars",
@@ -8141,7 +8141,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.7.0"
-source = "git+https://github.com/philbert440/rivethub-runtime?rev=e9456afe557cbce497195b8fbe5f2294b667637d#e9456afe557cbce497195b8fbe5f2294b667637d"
+source = "git+https://github.com/philbert440/rivethub-runtime?rev=9b38eafd81bb1917f021ba1323844e595c68b844#9b38eafd81bb1917f021ba1323844e595c68b844"
 dependencies = [
  "base64 0.22.1",
  "chrono",
