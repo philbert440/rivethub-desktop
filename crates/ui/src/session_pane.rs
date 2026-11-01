@@ -35,6 +35,11 @@ use switch::Picker;
 
 gpui::actions!(session, [ToggleTerminal, EscapeComposer, SteerDraft]);
 
+/// What the pane says of a session that runs in a process its node doesn't own.
+const ELSEWHERE: &str = "This session is running in another terminal.";
+const ELSEWHERE_WHY: &str = "You can read it here. It takes messages here again once that copy ends, so two copies \
+     never write to one transcript.";
+
 #[derive(Debug, Clone)]
 pub enum PaneEvent {
     Renamed(Box<SessionSummary>),
@@ -87,6 +92,8 @@ pub struct SessionPane {
     /// Whether the session's stream was down when the transcript was last folded.
     running: Running,
     awaiting_title: bool,
+    /// The session runs in a process its node doesn't own, so the pane only reads it.
+    elsewhere: bool,
     /// When Esc was last pressed in the composer during a turn; a second one soon after stops it.
     escaped: Option<std::time::Instant>,
     /// The time of a search hit's message the transcript is being opened at, until it shows.
@@ -155,6 +162,7 @@ impl SessionPane {
             fork_source: None,
             running: Running::Working,
             awaiting_title: false,
+            elsewhere: false,
             escaped: None,
             seeking: None,
             found: None,
@@ -182,6 +190,7 @@ impl SessionPane {
                 }
                 if let Ok(described) = described {
                     this.switches = described.switches;
+                    this.elsewhere = described.running_elsewhere;
                     this.take_listing(&described.summary, cx);
                 }
                 cx.notify();

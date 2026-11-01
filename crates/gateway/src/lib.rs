@@ -334,6 +334,7 @@ impl Gateway {
         Ok(model::session::Described {
             summary: translate::summary(described.summary),
             switches: translate::switches(described.switches),
+            running_elsewhere: described.running_elsewhere.unwrap_or(false),
         })
     }
 
