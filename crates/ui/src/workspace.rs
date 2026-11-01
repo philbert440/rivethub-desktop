@@ -24,7 +24,7 @@ use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, Rgba,
     Styled, Subscription, Window, actions, div, prelude::*, px,
 };
-use model::notice::{Notice, NoticeKind};
+use model::notice::{Notice, NoticeKind, TaskFailure};
 use model::preview::Previews;
 use model::session::SessionSummary;
 use model::topics::{FiledBy, FiledConversation, HistoryMarks, Placements, Suggestion, Topic};
@@ -141,8 +141,12 @@ pub struct Attention {
     pub title: Option<String>,
 }
 
+/// A task delegated on some node failed, for the person to hear of.
+pub struct TaskFailed(pub TaskFailure);
+
 impl EventEmitter<ViewInMemory> for Workspace {}
 impl EventEmitter<Attention> for Workspace {}
+impl EventEmitter<TaskFailed> for Workspace {}
 impl EventEmitter<TopicDeleted> for Workspace {}
 impl EventEmitter<Arc<Listed>> for Workspace {}
 
@@ -274,6 +278,10 @@ impl Workspace {
                 .find(|session| session.id == notice.session)
                 .map(SessionSummary::name);
             cx.emit(Attention { notice, title });
+        }
+        for failure in self.feed.take_failures() {
+            self.failed = Some(failure.said());
+            cx.emit(TaskFailed(failure));
         }
         cx.notify();
     }

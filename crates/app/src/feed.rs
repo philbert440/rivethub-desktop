@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gateway::{GatewayError, WorkspaceEvent};
-use model::notice::{Notice, NoticeKind};
+use model::notice::{Notice, NoticeKind, TaskFailure};
 use model::session::{SessionStatus, SessionSummary};
 use model::{SessionId, TopicId};
 use parking_lot::{Mutex, RwLock};
@@ -20,7 +20,10 @@ type Source = (Option<String>, Feed);
 enum Feed {
     Sessions,
     Registry,
+    Tasks,
 }
+
+const FEEDS: [Feed; 3] = [Feed::Sessions, Feed::Registry, Feed::Tasks];
 
 /// What one node's streams have said since they last connected.
 #[derive(Debug, Default)]
@@ -34,6 +37,7 @@ struct Live {
 struct Shared {
     sources: HashMap<Source, Live>,
     notices: Vec<Notice>,
+    failures: Vec<TaskFailure>,
     /// The topics changed since they were last taken.
     topics: HashSet<TopicId>,
 }
@@ -77,6 +81,11 @@ impl WorkspaceFeed {
     /// The notices raised since the last call; each is handed out once.
     pub fn take_notices(&self) -> Vec<Notice> {
         std::mem::take(&mut self.live.write().notices)
+    }
+
+    /// The delegated tasks that failed since the last call; each is handed out once.
+    pub fn take_failures(&self) -> Vec<TaskFailure> {
+        std::mem::take(&mut self.live.write().failures)
     }
 
     pub fn changes(&self) -> watch::Receiver<u64> {
@@ -167,6 +176,10 @@ impl Signals {
                 }
                 was != Some(status) || was_blocked != now_blocked
             }
+            WorkspaceEvent::TaskFailed(failure) => {
+                self.live.write().failures.push(failure);
+                true
+            }
             WorkspaceEvent::TopicChanged(topic) => {
                 self.live.write().topics.insert(topic);
                 self.topics.send_modify(|count| *count += 1);
@@ -186,7 +199,7 @@ impl Signals {
 struct Remote {
     hub: Hub,
     signals: Arc<Signals>,
-    tasks: Mutex<HashMap<String, [AbortHandle; 2]>>,
+    tasks: Mutex<HashMap<String, [AbortHandle; 3]>>,
 }
 
 impl Remote {
@@ -195,7 +208,7 @@ impl Remote {
         tasks.retain(|node, streams| {
             let keep = nodes.contains(node);
             if !keep {
-                for (task, feed) in streams.iter().zip([Feed::Sessions, Feed::Registry]) {
+                for (task, feed) in streams.iter().zip(FEEDS) {
                     task.abort();
                     self.signals.forget(&(Some(node.clone()), feed));
                 }
@@ -204,10 +217,7 @@ impl Remote {
         });
         for node in nodes {
             if !tasks.contains_key(node) {
-                tasks.insert(
-                    node.clone(),
-                    [Feed::Sessions, Feed::Registry].map(|feed| self.spawn(node, feed)),
-                );
+                tasks.insert(node.clone(), FEEDS.map(|feed| self.spawn(node, feed)));
             }
         }
     }
@@ -227,6 +237,7 @@ impl Remote {
                     match feed {
                         Feed::Sessions => gateway.watch().await,
                         Feed::Registry => gateway.watch_registry().await,
+                        Feed::Tasks => gateway.watch_tasks().await,
                     }
                 }
             },
@@ -272,6 +283,16 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
         move || {
             let gateway = registry.clone();
             async move { gateway.watch_registry().await }
+        },
+    ));
+    let tasks = hub.inner.local.clone();
+    hub.inner.runtime.spawn(follow(
+        Arc::clone(&signals),
+        (None, Feed::Tasks),
+        hub.backoff(None),
+        move || {
+            let gateway = tasks.clone();
+            async move { gateway.watch_tasks().await }
         },
     ));
     WorkspaceFeed {

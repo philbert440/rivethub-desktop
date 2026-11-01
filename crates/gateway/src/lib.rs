@@ -516,6 +516,10 @@ impl Gateway {
         events::watch_registry(&self.base_url, Arc::clone(&self.tls)).await
     }
 
+    pub async fn watch_tasks(&self) -> Result<tokio::sync::mpsc::Receiver<WorkspaceEvent>, GatewayError> {
+        events::watch_tasks(&self.base_url, Arc::clone(&self.tls)).await
+    }
+
     pub async fn attach_terminal(&self, pty: &str) -> Result<TerminalStream, GatewayError> {
         terminal::attach(&self.base_url, Arc::clone(&self.tls), pty).await
     }

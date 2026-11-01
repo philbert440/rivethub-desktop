@@ -30,6 +30,21 @@ impl NoticeKind {
     }
 }
 
+/// A delegated task that ended without doing its work, as its node told it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskFailure {
+    pub agent: String,
+    pub reason: String,
+    /// The session that delegated it, which a click on the notification opens.
+    pub parent: Option<SessionId>,
+}
+
+impl TaskFailure {
+    pub fn said(&self) -> String {
+        format!("{} couldn't do a delegated task: {}", self.agent, self.reason)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
     pub kind: NoticeKind,
