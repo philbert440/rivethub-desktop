@@ -33,6 +33,7 @@ impl SidePanel {
     pub(super) fn clear(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.asked = None;
         self.results = None;
+        self.query.update(cx, |query, cx| query.set_text("", cx));
         cx.notify();
     }
 

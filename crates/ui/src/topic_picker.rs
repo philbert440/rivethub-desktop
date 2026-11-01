@@ -5,7 +5,7 @@ use gpui::{
 use std::collections::{HashMap, HashSet};
 
 use model::TopicId;
-use model::topics::{Topic, outline, suggest};
+use model::topics::{Topic, outline, slug, suggest};
 
 use crate::input::{Submitted, TextInput};
 use crate::text::middle;
@@ -31,6 +31,9 @@ pub enum PickerEvent {
 pub struct TopicPicker {
     input: Entity<TextInput>,
     topics: Vec<Topic>,
+    /// Topics that exist but aren't offered, each with why: their names are taken, so typing one
+    /// says why it isn't there rather than offering to create it.
+    withheld: Vec<(Topic, String)>,
     no_topic: Option<&'static str>,
     creates: bool,
     heading: Option<String>,
@@ -50,6 +53,7 @@ impl TopicPicker {
         Self {
             input,
             topics,
+            withheld: Vec::new(),
             no_topic,
             creates: true,
             heading: None,
@@ -87,6 +91,13 @@ impl TopicPicker {
         self
     }
 
+    /// Topics left out of the offer, each with the sentence saying why.
+    #[must_use]
+    pub fn withholding(mut self, withheld: Vec<(Topic, String)>) -> Self {
+        self.withheld = withheld;
+        self
+    }
+
     /// Offers only the topics given, with no Create row: for picking an existing topic.
     #[must_use]
     pub fn without_create(mut self) -> Self {
@@ -103,10 +114,33 @@ impl TopicPicker {
                 Some(_) => PickerEvent::NoTopic,
                 None => return,
             },
-            None if self.creates => PickerEvent::Create(text.to_owned()),
+            None if self.can_create(text) => PickerEvent::Create(text.to_owned()),
             None => return,
         };
         cx.emit(event);
+    }
+
+    /// Whether a topic named `typed` could be made: rh refuses a name with no letters or digits,
+    /// and one whose slug a topic already has.
+    fn can_create(&self, typed: &str) -> bool {
+        let wanted = slug(typed);
+        self.creates
+            && !wanted.is_empty()
+            && !self.topics.iter().any(|topic| Self::named(topic, &wanted))
+            && self.withheld_for(typed).is_none()
+    }
+
+    /// Why the topic named `typed` isn't offered, when it's one of the withheld.
+    fn withheld_for(&self, typed: &str) -> Option<&str> {
+        let wanted = slug(typed);
+        self.withheld
+            .iter()
+            .find(|(topic, _)| !wanted.is_empty() && Self::named(topic, &wanted))
+            .map(|(_, why)| why.as_str())
+    }
+
+    fn named(topic: &Topic, wanted: &str) -> bool {
+        topic.slug == wanted || slug(&topic.name) == wanted
     }
 
     /// The topic tree's rows: each topic whose parents are all open, with its depth and whether it
@@ -232,7 +266,8 @@ impl Render for TopicPicker {
                 (topic.id.clone(), topic.name.clone(), above)
             })
             .collect();
-        let exact = shown.iter().any(|(_, name, _)| name.eq_ignore_ascii_case(&typed));
+        let creatable = self.can_create(&typed);
+        let refusal = self.withheld_for(&typed).map(str::to_owned);
         let picks: Vec<_> = match self.tree.clone() {
             Some(open) if typed.trim().is_empty() => self.tree_rows(&open, cx),
             _ => shown
@@ -293,7 +328,17 @@ impl Render for TopicPicker {
             .when_some(self.no_topic.filter(|_| typed.is_empty()), |list, label| {
                 list.child(Self::row(("none", 0), label.to_owned(), cx, PickerEvent::NoTopic))
             })
-            .when(self.creates && !typed.trim().is_empty() && !exact, |list| {
+            .when_some(refusal, |list, why| {
+                list.child(
+                    div()
+                        .px_3()
+                        .py(px(6.))
+                        .text_sm()
+                        .text_color(Theme::ink_dim())
+                        .child(why),
+                )
+            })
+            .when(creatable, |list| {
                 list.child(Self::row(
                     ("create", 0),
                     format!("Create {} “{typed}”", self.noun),

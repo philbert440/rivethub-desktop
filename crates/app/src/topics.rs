@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use model::decisions::{Decision, Group, on_page};
 use model::entities::Catalog;
 use model::preview::StartupPreview;
-use model::topics::{Filing, Suggestion, Topic, TopicFiling};
+use model::topics::{Directory, Filing, Suggestion, Topic, TopicFiling};
 use model::{SessionId, TopicId};
 
 use crate::Hub;
@@ -193,7 +193,6 @@ impl Hub {
         .await
     }
 
-    /// Creates a topic, under `parent` when given.
     /// What a session started in the topic right now would be told.
     pub async fn topic_startup(&self, topic: TopicId) -> Result<StartupPreview, GatewayError> {
         let gateway = self.inner.local.clone();
@@ -201,6 +200,7 @@ impl Hub {
             .await
     }
 
+    /// Creates a topic, under `parent` when given.
     pub async fn create_topic(&self, name: String, parent: Option<TopicId>) -> Result<Topic, GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.create_topic(&name, parent.as_ref()).await })
@@ -236,6 +236,17 @@ impl Hub {
     pub async fn rename_topic(&self, topic: TopicId, name: String) -> Result<(), GatewayError> {
         let gateway = self.inner.local.clone();
         self.on_runtime(async move { gateway.rename_topic(&topic, &name).await })
+            .await
+    }
+
+    /// Sets where the topic's sessions start, or clears it when there is none.
+    pub async fn set_topic_directory(
+        &self,
+        topic: TopicId,
+        directory: Option<Directory>,
+    ) -> Result<(), GatewayError> {
+        let gateway = self.inner.local.clone();
+        self.on_runtime(async move { gateway.set_topic_directory(&topic, directory.as_ref()).await })
             .await
     }
 

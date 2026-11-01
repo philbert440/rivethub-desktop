@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gateway::{GatewayError, WorkspaceEvent};
-use model::SessionId;
 use model::notice::{Notice, NoticeKind};
 use model::session::{SessionStatus, SessionSummary};
+use model::{SessionId, TopicId};
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, watch};
 use tokio::task::AbortHandle;
@@ -34,6 +34,8 @@ struct Live {
 struct Shared {
     sources: HashMap<Source, Live>,
     notices: Vec<Notice>,
+    /// The topics changed since they were last taken.
+    topics: HashSet<TopicId>,
 }
 
 impl Shared {
@@ -47,6 +49,7 @@ pub struct WorkspaceFeed {
     live: Arc<RwLock<Shared>>,
     changes: watch::Receiver<u64>,
     activity: watch::Receiver<u64>,
+    topics: watch::Receiver<u64>,
     remote: Arc<Remote>,
 }
 
@@ -85,6 +88,16 @@ impl WorkspaceFeed {
         self.activity.clone()
     }
 
+    /// Ticks when a node says a topic or its decisions changed.
+    pub fn topic_changes(&self) -> watch::Receiver<u64> {
+        self.topics.clone()
+    }
+
+    /// The topics changed since the last call.
+    pub fn take_changed_topics(&self) -> HashSet<TopicId> {
+        std::mem::take(&mut self.live.write().topics)
+    }
+
     /// Follows the live feeds of exactly these other nodes: new names get their streams, and
     /// nodes no longer listed have theirs stopped and their live state dropped.
     pub fn follow_nodes(&self, nodes: &[String]) {
@@ -97,11 +110,12 @@ struct Signals {
     live: Arc<RwLock<Shared>>,
     changes: watch::Sender<u64>,
     activity: watch::Sender<u64>,
+    topics: watch::Sender<u64>,
 }
 
 impl Signals {
     fn closed(&self) -> bool {
-        self.changes.is_closed() && self.activity.is_closed()
+        self.changes.is_closed() && self.activity.is_closed() && self.topics.is_closed()
     }
 
     fn reset(&self, source: &Source) {
@@ -152,6 +166,11 @@ impl Signals {
                     shared.notices.push(Notice { kind, session: id });
                 }
                 was != Some(status) || was_blocked != now_blocked
+            }
+            WorkspaceEvent::TopicChanged(topic) => {
+                self.live.write().topics.insert(topic);
+                self.topics.send_modify(|count| *count += 1);
+                return;
             }
             WorkspaceEvent::Closed => return,
         };
@@ -228,10 +247,12 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
     let live = Arc::new(RwLock::new(Shared::default()));
     let (changes_tx, changes) = watch::channel(0_u64);
     let (activity_tx, activity) = watch::channel(0_u64);
+    let (topics_tx, topics) = watch::channel(0_u64);
     let signals = Arc::new(Signals {
         live: Arc::clone(&live),
         changes: changes_tx,
         activity: activity_tx,
+        topics: topics_tx,
     });
     let broadcast = hub.inner.local.clone();
     hub.inner.runtime.spawn(follow(
@@ -257,6 +278,7 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
         live,
         changes,
         activity,
+        topics,
         remote: Arc::new(Remote {
             hub: hub.clone(),
             signals,

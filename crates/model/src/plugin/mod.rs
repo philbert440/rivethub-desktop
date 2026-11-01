@@ -114,6 +114,10 @@ pub struct Plugin {
     pub pages: Vec<PageEntry>,
     pub topic_cards: Vec<TopicCard>,
     pub session_actions: Vec<SessionAction>,
+    /// The jobs rh runs for it, by title.
+    pub jobs: Vec<String>,
+    /// How many kinds of event it follows.
+    pub events: usize,
 }
 
 /// What one node says it has installed.

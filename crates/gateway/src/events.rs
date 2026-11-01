@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
-use model::SessionId;
 use model::plugin::Notice;
 use model::session::SessionStatus;
+use model::{SessionId, TopicId};
 use rustls::ClientConfig;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -28,6 +28,8 @@ pub enum WorkspaceEvent {
         status: SessionStatus,
         blocked: Option<bool>,
     },
+    /// A topic, or its decisions, changed on the node.
+    TopicChanged(TopicId),
     Closed,
 }
 
@@ -49,6 +51,7 @@ fn plugin_notice(text: &str) -> Option<PluginEvent> {
         SessionBroadcast::Snapshot(_)
         | SessionBroadcast::Removed(_)
         | SessionBroadcast::HubState(_)
+        | SessionBroadcast::TopicChanged(_)
         | SessionBroadcast::Event(_) => return None,
     };
     Some(PluginEvent::Notice(notice))
@@ -67,6 +70,9 @@ fn broadcast(text: &str) -> Option<WorkspaceEvent> {
             | AgentEventKind::TurnEnd { .. } => Some(WorkspaceEvent::Changed),
             _ => None,
         },
+        SessionBroadcast::TopicChanged(changed) => {
+            Some(WorkspaceEvent::TopicChanged(TopicId::new(changed.topic)))
+        }
         SessionBroadcast::HubState(_)
         | SessionBroadcast::PluginChanged(_)
         | SessionBroadcast::PluginViews(_) => None,

@@ -54,6 +54,7 @@ impl Workspace {
             &Atlas::new(&self.topics, &self.filed_sessions, &self.placements),
             step,
             &activity,
+            &self.conversations,
         )
     }
 
@@ -131,7 +132,7 @@ impl Workspace {
             .map(|card| PastTopic {
                 id: card.topic.id.clone(),
                 name: card.topic.name.clone(),
-                sessions: card.sessions.len() + card.history,
+                sessions: card.sessions.len() + card.history + self.conversations_within(&card.topic.id),
                 active_ms: card.active_ms,
                 visibility: card.topic.visibility.clone(),
             })
@@ -164,10 +165,8 @@ impl Workspace {
 
     /// How many conversations that are no harness session are filed under the topic or below it.
     pub(super) fn conversations_within(&self, topic: &TopicId) -> usize {
-        let atlas = Atlas::new(&self.topics, &[], &self.placements);
-        self.conversations
-            .iter()
-            .filter(|conversation| atlas.lineage(&conversation.topic).contains(&topic))
-            .count()
+        Atlas::new(&self.topics, &[], &self.placements)
+            .conversations_within(topic, &self.conversations)
+            .len()
     }
 }

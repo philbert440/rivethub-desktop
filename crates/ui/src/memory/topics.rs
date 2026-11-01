@@ -237,6 +237,7 @@ impl MemoryPage {
 
     fn clear_find(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.finding = None;
+        self.find.update(cx, |find, cx| find.set_text("", cx));
         self.load_pages(cx);
         cx.notify();
     }
