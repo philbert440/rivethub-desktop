@@ -253,7 +253,7 @@ impl PluginSettings {
     }
 
     fn header(plugin: &Plugin) -> AnyElement {
-        let (ink, fill) = match plugin.state {
+        let (ink, fill) = match plugin.status() {
             PluginState::Running => (Theme::on_selected(), Theme::selected()),
             PluginState::AwaitingApproval | PluginState::Backoff | PluginState::Starting => {
                 (Theme::warn(), Theme::warn_container())
@@ -300,7 +300,7 @@ impl PluginSettings {
                                     .bg(fill)
                                     .text_xs()
                                     .text_color(ink)
-                                    .child(plugin.state.label()),
+                                    .child(plugin.status().label()),
                             ),
                     )
                     .child(dim(format!("{} · on {}", plugin.version, plugin.at.node)).text_xs())
