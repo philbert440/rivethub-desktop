@@ -168,6 +168,12 @@ impl Workspace {
                 window,
                 |this, _, event: &PanelEvent, window, cx| match event {
                     PanelEvent::Open(summary) => this.open(summary.clone(), window, cx),
+                    PanelEvent::OpenAt(summary, at_ms) => {
+                        this.open(summary.clone(), window, cx);
+                        if let Some(pane) = this.pane.clone() {
+                            pane.update(cx, |pane, cx| pane.seek(*at_ms, cx));
+                        }
+                    }
                     PanelEvent::OpenTopic(topic) => this.open_topic(topic.clone(), window, cx),
                     PanelEvent::Start(agent) => this.start_with(agent.clone(), None, window, cx),
                     PanelEvent::NewAgent => this.edit_agent(None, window, cx),

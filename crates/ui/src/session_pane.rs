@@ -25,6 +25,7 @@ mod header;
 mod keys;
 pub(crate) mod plan;
 mod rename;
+mod seek;
 mod switch;
 mod terminal;
 mod turns;
@@ -88,6 +89,10 @@ pub struct SessionPane {
     awaiting_title: bool,
     /// When Esc was last pressed in the composer during a turn; a second one soon after stops it.
     escaped: Option<std::time::Instant>,
+    /// The time of a search hit's message the transcript is being opened at, until it shows.
+    seeking: Option<i64>,
+    /// The exchange a search hit opened the transcript at.
+    found: Option<usize>,
     _revisions: Task<()>,
     _submitted: Subscription,
     _pasted: Subscription,
@@ -151,6 +156,8 @@ impl SessionPane {
             running: Running::Working,
             awaiting_title: false,
             escaped: None,
+            seeking: None,
+            found: None,
             _revisions: watcher,
             _submitted: submitted,
             _pasted: pasted,
@@ -276,6 +283,9 @@ impl SessionPane {
             self.forking = self
                 .forking
                 .map(|index| if index < at { index } else { index + inserted });
+            self.found = self
+                .found
+                .map(|index| if index < at { index } else { index + inserted });
             self.hovered_turn = None;
         }
         let before = |index: usize| match index {
@@ -330,6 +340,7 @@ impl SessionPane {
         }
         self.exchanges = Arc::new(views);
         self.fetch_previews(cx);
+        self.seek_step(cx);
         cx.notify();
     }
 

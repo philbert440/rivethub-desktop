@@ -160,6 +160,7 @@ impl SessionPane {
         let previews = Arc::clone(&self.previews);
         let plan = view.plan().clone();
         let forking = self.forking;
+        let found = self.found;
         let running = self.running;
         let earlier = view.earlier().map(|_| view.loading_earlier());
         let (carried, forked_from) = match forking {
@@ -193,6 +194,11 @@ impl SessionPane {
                             carried: transcript::carried(index, carried, forked_from.as_deref()),
                         };
                         let shown = transcript::exchange(exchange, &context, window);
+                        let shown = if found == Some(index) {
+                            super::seek::marked(shown)
+                        } else {
+                            shown
+                        };
                         super::earlier::opening(shown, earlier.filter(|_| index == carried), &pane)
                     },
                 )

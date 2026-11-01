@@ -183,7 +183,7 @@ impl Batch {
 mod tests {
     use super::{Branch, Row};
     use crate::TopicId;
-    use crate::tidy::{Batch, Change, Proposal, Proposer};
+    use crate::tidy::{Batch, Change, Kind, Proposal, Proposer};
     use crate::topics::Topic;
 
     fn id(text: &str) -> TopicId {
@@ -307,6 +307,21 @@ mod tests {
         assert_eq!(
             batch.pages().map(|page| page.id.as_str()).collect::<Vec<_>>(),
             ["page"]
+        );
+        let kinds: Vec<(Kind, Vec<&str>)> = batch
+            .by_kind(&existing)
+            .into_iter()
+            .map(|(kind, list)| (kind, list.iter().map(|proposal| proposal.id.as_str()).collect()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (Kind::NewTopic, vec!["renewal", "desktop", "rail", "dots"]),
+                (Kind::FileInto, vec!["file"]),
+                (Kind::Move, vec!["move"]),
+                (Kind::Rename, vec!["rename"]),
+                (Kind::RemovePage, vec!["page"]),
+            ]
         );
     }
 

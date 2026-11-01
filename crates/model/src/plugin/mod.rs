@@ -75,7 +75,7 @@ impl Permission {
             Self::TopicsWrite => "Change topics and file sessions",
             Self::TasksRead => "See tasks",
             Self::TasksDelegate => "Delegate tasks",
-            Self::AgentsRead => "See agent presets",
+            Self::AgentsRead => "See the agents work can be handed to",
             Self::NotificationsSend => "Send you notifications",
             Self::HostFilesRead => "Read files on the node",
             Self::HostFilesWrite => "Change files on the node",
@@ -118,6 +118,17 @@ pub struct Plugin {
     pub jobs: Vec<String>,
     /// How many kinds of event it follows.
     pub events: usize,
+}
+
+impl Plugin {
+    /// Where it stands for the person: one that is off with permissions waiting for them, as a
+    /// new install is, needs their approval before it can turn on.
+    pub fn status(&self) -> PluginState {
+        match self.state {
+            PluginState::Disabled if !self.pending.is_empty() => PluginState::AwaitingApproval,
+            state => state,
+        }
+    }
 }
 
 /// What one node says it has installed.

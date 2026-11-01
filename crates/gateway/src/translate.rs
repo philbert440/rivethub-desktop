@@ -76,6 +76,7 @@ pub fn hits(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::sear
             let parsed: wire::session_id::SessionId = id.parse().ok()?;
             Some(model::search::Hit {
                 session: session(&parsed),
+                title: hit.title,
                 text: hit.content,
                 at_ms: hit.created_at.timestamp_millis(),
             })

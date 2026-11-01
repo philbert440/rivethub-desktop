@@ -1,4 +1,5 @@
 mod ask;
+mod batch;
 mod conversation;
 mod decisions;
 mod entities;
