@@ -8,7 +8,7 @@ use model::SessionId;
 use model::TopicId;
 use model::session::SessionSummary;
 use model::shelf::Shelf;
-use model::topics::{Directory, Topic};
+use model::topics::Topic;
 
 use super::launch::Launch;
 use super::{ViewInMemory, Workspace};
@@ -165,7 +165,7 @@ impl Workspace {
                     .gap_y_1()
                     .text_sm()
                     .text_color(Theme::ink_dim())
-                    .children(step.directory.as_ref().map(Self::directory))
+                    .child(self.directory_line(step, cx))
                     .child(format!(
                         "{} {} · {} active",
                         inside.len(),
@@ -174,24 +174,6 @@ impl Workspace {
                     ))
                     .children(last.map(|at| format!("last active {}", ago_phrase(now, at)))),
             )
-    }
-
-    fn directory(directory: &Directory) -> impl IntoElement {
-        let (path, place) = match directory {
-            Directory::Local { node, path } => (path.clone(), format!("on {node}")),
-            Directory::Shared { path } => (path.clone(), "shared".to_owned()),
-        };
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                div()
-                    .font_family(Theme::MONO)
-                    .text_color(Theme::ink())
-                    .child(path),
-            )
-            .child(place)
     }
 
     pub(super) fn outlined(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {

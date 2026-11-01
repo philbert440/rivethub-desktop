@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gateway::{GatewayError, WorkspaceEvent};
-use model::SessionId;
-use model::notice::{Notice, NoticeKind};
+use model::notice::{Notice, NoticeKind, TaskFailure};
 use model::session::{SessionStatus, SessionSummary};
+use model::{SessionId, TopicId};
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, watch};
 use tokio::task::AbortHandle;
@@ -20,7 +20,10 @@ type Source = (Option<String>, Feed);
 enum Feed {
     Sessions,
     Registry,
+    Tasks,
 }
+
+const FEEDS: [Feed; 3] = [Feed::Sessions, Feed::Registry, Feed::Tasks];
 
 /// What one node's streams have said since they last connected.
 #[derive(Debug, Default)]
@@ -34,6 +37,9 @@ struct Live {
 struct Shared {
     sources: HashMap<Source, Live>,
     notices: Vec<Notice>,
+    failures: Vec<TaskFailure>,
+    /// The topics changed since they were last taken.
+    topics: HashSet<TopicId>,
 }
 
 impl Shared {
@@ -47,6 +53,7 @@ pub struct WorkspaceFeed {
     live: Arc<RwLock<Shared>>,
     changes: watch::Receiver<u64>,
     activity: watch::Receiver<u64>,
+    topics: watch::Receiver<u64>,
     remote: Arc<Remote>,
 }
 
@@ -76,6 +83,11 @@ impl WorkspaceFeed {
         std::mem::take(&mut self.live.write().notices)
     }
 
+    /// The delegated tasks that failed since the last call; each is handed out once.
+    pub fn take_failures(&self) -> Vec<TaskFailure> {
+        std::mem::take(&mut self.live.write().failures)
+    }
+
     pub fn changes(&self) -> watch::Receiver<u64> {
         self.changes.clone()
     }
@@ -83,6 +95,16 @@ impl WorkspaceFeed {
     /// Ticks when a session's live state changes or a notice is raised.
     pub fn activity(&self) -> watch::Receiver<u64> {
         self.activity.clone()
+    }
+
+    /// Ticks when a node says a topic or its decisions changed.
+    pub fn topic_changes(&self) -> watch::Receiver<u64> {
+        self.topics.clone()
+    }
+
+    /// The topics changed since the last call.
+    pub fn take_changed_topics(&self) -> HashSet<TopicId> {
+        std::mem::take(&mut self.live.write().topics)
     }
 
     /// Follows the live feeds of exactly these other nodes: new names get their streams, and
@@ -97,11 +119,12 @@ struct Signals {
     live: Arc<RwLock<Shared>>,
     changes: watch::Sender<u64>,
     activity: watch::Sender<u64>,
+    topics: watch::Sender<u64>,
 }
 
 impl Signals {
     fn closed(&self) -> bool {
-        self.changes.is_closed() && self.activity.is_closed()
+        self.changes.is_closed() && self.activity.is_closed() && self.topics.is_closed()
     }
 
     fn reset(&self, source: &Source) {
@@ -153,6 +176,15 @@ impl Signals {
                 }
                 was != Some(status) || was_blocked != now_blocked
             }
+            WorkspaceEvent::TaskFailed(failure) => {
+                self.live.write().failures.push(failure);
+                true
+            }
+            WorkspaceEvent::TopicChanged(topic) => {
+                self.live.write().topics.insert(topic);
+                self.topics.send_modify(|count| *count += 1);
+                return;
+            }
             WorkspaceEvent::Closed => return,
         };
         if flipped {
@@ -167,7 +199,7 @@ impl Signals {
 struct Remote {
     hub: Hub,
     signals: Arc<Signals>,
-    tasks: Mutex<HashMap<String, [AbortHandle; 2]>>,
+    tasks: Mutex<HashMap<String, [AbortHandle; 3]>>,
 }
 
 impl Remote {
@@ -176,7 +208,7 @@ impl Remote {
         tasks.retain(|node, streams| {
             let keep = nodes.contains(node);
             if !keep {
-                for (task, feed) in streams.iter().zip([Feed::Sessions, Feed::Registry]) {
+                for (task, feed) in streams.iter().zip(FEEDS) {
                     task.abort();
                     self.signals.forget(&(Some(node.clone()), feed));
                 }
@@ -185,10 +217,7 @@ impl Remote {
         });
         for node in nodes {
             if !tasks.contains_key(node) {
-                tasks.insert(
-                    node.clone(),
-                    [Feed::Sessions, Feed::Registry].map(|feed| self.spawn(node, feed)),
-                );
+                tasks.insert(node.clone(), FEEDS.map(|feed| self.spawn(node, feed)));
             }
         }
     }
@@ -208,6 +237,7 @@ impl Remote {
                     match feed {
                         Feed::Sessions => gateway.watch().await,
                         Feed::Registry => gateway.watch_registry().await,
+                        Feed::Tasks => gateway.watch_tasks().await,
                     }
                 }
             },
@@ -228,10 +258,12 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
     let live = Arc::new(RwLock::new(Shared::default()));
     let (changes_tx, changes) = watch::channel(0_u64);
     let (activity_tx, activity) = watch::channel(0_u64);
+    let (topics_tx, topics) = watch::channel(0_u64);
     let signals = Arc::new(Signals {
         live: Arc::clone(&live),
         changes: changes_tx,
         activity: activity_tx,
+        topics: topics_tx,
     });
     let broadcast = hub.inner.local.clone();
     hub.inner.runtime.spawn(follow(
@@ -253,10 +285,21 @@ pub fn spawn(hub: &Hub) -> WorkspaceFeed {
             async move { gateway.watch_registry().await }
         },
     ));
+    let tasks = hub.inner.local.clone();
+    hub.inner.runtime.spawn(follow(
+        Arc::clone(&signals),
+        (None, Feed::Tasks),
+        hub.backoff(None),
+        move || {
+            let gateway = tasks.clone();
+            async move { gateway.watch_tasks().await }
+        },
+    ));
     WorkspaceFeed {
         live,
         changes,
         activity,
+        topics,
         remote: Arc::new(Remote {
             hub: hub.clone(),
             signals,

@@ -76,6 +76,7 @@ pub fn hits(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::sear
             let parsed: wire::session_id::SessionId = id.parse().ok()?;
             Some(model::search::Hit {
                 session: session(&parsed),
+                title: hit.title,
                 text: hit.content,
                 at_ms: hit.created_at.timestamp_millis(),
             })
@@ -157,35 +158,37 @@ pub fn found(raw: wire::gateway::memory::MemorySearchResponse) -> Vec<model::mem
         .collect()
 }
 
-pub fn session_memory(raw: wire::gateway::memory::MemorySummaryDagResponse) -> model::memory::SessionMemory {
-    use model::memory::{MessageTally, SessionMemory, Summary, SummaryKind, Vector};
+pub fn memory_summary(node: wire::gateway::memory::MemorySummaryNode) -> model::memory::Summary {
+    use model::memory::{Summary, SummaryKind, Vector};
     use wire::gateway::memory::{SummaryKind as Kind, VectorState};
-    let vector = |state| match state {
-        VectorState::Embedded => Vector::Embedded,
-        VectorState::Pending => Vector::Pending,
-        VectorState::Failed => Vector::Failed,
-        VectorState::Skipped => Vector::Skipped,
-    };
+    Summary {
+        id: node.id,
+        parent: node.parent_id,
+        kind: match node.kind {
+            Kind::Leaf => SummaryKind::Leaf,
+            Kind::Branch => SummaryKind::Branch,
+            Kind::Root => SummaryKind::Root,
+        },
+        text: node.content,
+        messages: node.message_count,
+        from_ms: node.earliest_at.map(|at| at.timestamp_millis()),
+        to_ms: node.latest_at.map(|at| at.timestamp_millis()),
+        vector: match node.vector {
+            VectorState::Embedded => Vector::Embedded,
+            VectorState::Pending => Vector::Pending,
+            VectorState::Failed => Vector::Failed,
+            VectorState::Skipped => Vector::Skipped,
+        },
+        truncated: node.truncated,
+        children: node.children,
+    }
+}
+
+pub fn session_memory(raw: wire::gateway::memory::MemorySummaryDagResponse) -> model::memory::SessionMemory {
+    use model::memory::{MessageTally, SessionMemory};
     let tally = raw.messages;
     SessionMemory {
-        summaries: raw
-            .summaries
-            .into_iter()
-            .map(|node| Summary {
-                id: node.id,
-                parent: node.parent_id,
-                kind: match node.kind {
-                    Kind::Leaf => SummaryKind::Leaf,
-                    Kind::Branch => SummaryKind::Branch,
-                    Kind::Root => SummaryKind::Root,
-                },
-                text: node.content,
-                messages: node.message_count,
-                from_ms: node.earliest_at.map(|at| at.timestamp_millis()),
-                to_ms: node.latest_at.map(|at| at.timestamp_millis()),
-                vector: vector(node.vector),
-            })
-            .collect(),
+        summaries: raw.summaries.into_iter().map(memory_summary).collect(),
         messages: MessageTally {
             total: tally.total,
             user: tally.user,
@@ -197,6 +200,13 @@ pub fn session_memory(raw: wire::gateway::memory::MemorySummaryDagResponse) -> m
             failed: tally.failed,
             skipped: tally.skipped,
         },
+        counts: raw.counts.map(|counts| model::memory::SummaryCounts {
+            leaves: counts.leaves,
+            branches: counts.branches,
+            roots: counts.roots,
+            embedded: counts.embedded,
+            top: counts.top,
+        }),
     }
 }
 

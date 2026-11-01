@@ -3,7 +3,10 @@ use crate::SessionId;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub session: SessionId,
+    /// The session's title, as rh names it beside the hit.
+    pub title: Option<String>,
     pub text: String,
+    /// When the matched message was sent or said.
     pub at_ms: i64,
 }
 
@@ -17,8 +20,11 @@ pub struct Snippet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionMatch {
     pub session: SessionId,
+    pub title: Option<String>,
     pub count: usize,
     pub snippet: Snippet,
+    /// When the message the snippet shows was sent or said, which opening the session goes to.
+    pub snippet_ms: i64,
     pub latest_ms: i64,
 }
 
@@ -94,12 +100,17 @@ pub fn group(hits: Vec<Hit>, query: &str) -> Vec<SessionMatch> {
         if let Some(existing) = matches.iter_mut().find(|found| found.session == hit.session) {
             existing.count += 1;
             existing.latest_ms = existing.latest_ms.max(hit.at_ms);
+            if existing.title.is_none() {
+                existing.title = hit.title;
+            }
             continue;
         }
         matches.push(SessionMatch {
             snippet: snippet(&hit.text, query),
             session: hit.session,
+            title: hit.title,
             count: 1,
+            snippet_ms: hit.at_ms,
             latest_ms: hit.at_ms,
         });
     }
@@ -131,6 +142,7 @@ mod tests {
     fn hits_group_by_session_with_the_busiest_first() {
         let hit = |native: &str, at_ms| Hit {
             session: session(native),
+            title: None,
             text: "the deadline".into(),
             at_ms,
         };

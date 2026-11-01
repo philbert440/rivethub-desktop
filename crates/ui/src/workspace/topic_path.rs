@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, ClickEvent, Context, ElementId, IntoElement, MouseButton, ParentElement, Styled, div,
@@ -31,7 +31,7 @@ impl Workspace {
             if index > 0 {
                 steps = steps.child(div().px_1().text_color(Theme::ink_dim()).child("›"));
             }
-            let count = atlas.sessions_within(id).len();
+            let count = atlas.filed_within(id, &self.conversations);
             let label = match self.topic(id) {
                 Some(_) if id == root => format!("All · {count}"),
                 Some(known) => format!("{} · {count}", known.name),
@@ -40,12 +40,13 @@ impl Workspace {
             steps = steps.child(self.path_step(index, id, root, label, index == last, cx));
         }
         let children = atlas.children(step);
+        let renaming = step.clone();
         let pills: Vec<AnyElement> = children
             .iter()
             .enumerate()
             .map(|(index, child)| {
                 let below = atlas.children(&child.id).len();
-                let count = atlas.sessions_within(&child.id).len();
+                let count = atlas.filed_within(&child.id, &self.conversations);
                 self.pill(index, child, count, below, cx)
             })
             .collect();
@@ -58,10 +59,17 @@ impl Workspace {
             .when(deeper || !pills.is_empty(), |path| {
                 path.child(
                     div()
+                        .id("subtopic-row")
                         .flex()
                         .flex_wrap()
                         .items_center()
                         .gap_2()
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            if event.click_count() > 1 && this.just_stepped(&renaming) {
+                                this.screen.stepped = None;
+                                this.begin_retitle(renaming.clone(), window, cx);
+                            }
+                        }))
                         .children(pills)
                         .when(deeper, |row| {
                             row.child(
@@ -80,6 +88,9 @@ impl Workspace {
                                     .text_color(Theme::ink_dim())
                                     .hover(|pill| pill.bg(Theme::card()))
                                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                        if event.click_count() > 1 && this.just_stepped(&parent) {
+                                            return;
+                                        }
                                         this.choose(
                                             Pick::Child(parent.clone()),
                                             event.position(),
@@ -149,12 +160,7 @@ impl Workspace {
         if let Some(field) = self.retitle_field(&child.id, cx) {
             return Self::pill_sized(field);
         }
-        let clicked = child.id.clone();
-        let pressed = self
-            .screen
-            .stepping
-            .as_ref()
-            .is_some_and(|(pending, _)| *pending == child.id);
+        let (clicked, step) = (child.id.clone(), child.parent.clone());
         let dragged = DraggedTopic {
             topic: child.id.clone(),
             name: child.name.clone().into(),
@@ -173,15 +179,11 @@ impl Workspace {
             .text_sm()
             .text_color(Theme::ink())
             .hover(|pill| pill.bg(Theme::card()))
-            .when(pressed, |pill| {
-                pill.bg(Theme::selected()).text_color(Theme::on_selected())
-            })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if event.click_count() > 1 {
-                    this.screen.stepping = None;
+                if event.click_count() == 1 {
+                    this.step_into(clicked.clone(), cx);
+                } else if !step.as_ref().is_some_and(|step| this.just_stepped(step)) {
                     this.begin_retitle(clicked.clone(), window, cx);
-                } else {
-                    this.step_after_double_click(clicked.clone(), cx);
                 }
             }))
             .on_drag(dragged, |dragged, _, _, cx| {
@@ -214,22 +216,22 @@ impl Workspace {
         div().w(px(260.)).child(field).into_any_element()
     }
 
-    /// Steps into `topic` once a second click can no longer make the first a double-click.
-    fn step_after_double_click(&mut self, topic: TopicId, cx: &mut Context<Self>) {
-        let pending = topic.clone();
-        let step = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(DOUBLE_CLICK).await;
-            this.update(cx, |this, cx| {
-                this.screen.stepping = None;
-                this.screen.step = Some(topic);
-                this.screen.all_history = false;
-                this.sync_step(cx);
-                cx.notify();
-            })
-            .ok();
-        });
-        self.screen.stepping = Some((pending, step));
+    /// Steps into `topic` at once. A second click that makes this one a double-click lands on
+    /// the row of its subtopics, which takes it as the pill's double-click.
+    fn step_into(&mut self, topic: TopicId, cx: &mut Context<Self>) {
+        self.screen.stepped = Some((topic.clone(), Instant::now()));
+        self.screen.step = Some(topic);
+        self.screen.all_history = false;
+        self.sync_step(cx);
         cx.notify();
+    }
+
+    /// Whether `topic` was stepped into from its pill within a double-click's time.
+    fn just_stepped(&self, topic: &TopicId) -> bool {
+        self.screen
+            .stepped
+            .as_ref()
+            .is_some_and(|(stepped, at)| stepped == topic && at.elapsed() < DOUBLE_CLICK)
     }
 
     /// A step or pill's right-click menu, and the sessions and topics it takes when dropped on it.

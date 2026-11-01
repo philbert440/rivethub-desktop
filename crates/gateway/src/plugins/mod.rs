@@ -225,6 +225,13 @@ impl Gateway {
     async fn managed(sent: Result<reqwest::Response, reqwest::Error>) -> Result<(), GatewayError> {
         let reply = sent.map_err(GatewayError::Http)?;
         match Self::check(reply).await {
+            Err(GatewayError::Status { status: 403, detail }) if detail.contains("device_certificate_required") => {
+                Err(GatewayError::Conflict(
+                    "Only a device paired with this plug-in's node can approve what it asks for, and this one \
+                     isn't paired with it."
+                        .into(),
+                ))
+            }
             Err(GatewayError::Status {
                 status: 400 | 403 | 409,
                 detail,

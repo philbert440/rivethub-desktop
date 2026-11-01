@@ -6,7 +6,7 @@ use crate::theme::Theme;
 
 impl SessionPane {
     /// Above the composer while the other view holds the session: who has it, the messages the
-    /// node holds for it, and a permission prompt only the terminal can answer.
+    /// node holds for it, and a question or permission prompt only the terminal can answer.
     pub(super) fn driving_dock(&self, view: &SessionView, cx: &mut Context<Self>) -> Option<AnyElement> {
         let driving = view.driving();
         if !driving.by_terminal() && driving.queued.is_empty() {
@@ -18,7 +18,7 @@ impl SessionPane {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .children(self.terminal_approval(driving, cx))
+                .children(self.terminal_ask(view, cx))
                 .child(Self::held(driving))
                 .into_any_element(),
         )
@@ -66,14 +66,27 @@ impl SessionPane {
             }))
     }
 
-    fn terminal_approval(&self, driving: &Driving, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let approval = driving.approval.as_ref().filter(|_| driving.by_terminal())?;
-        let asked = model::tools::label(
-            &approval.tool,
-            &approval.input,
-            self.summary.cwd.as_deref(),
-            std::env::var("HOME").ok().as_deref(),
-        );
+    fn terminal_ask(&self, view: &SessionView, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let driving = view.driving();
+        if !driving.by_terminal() {
+            return None;
+        }
+        let (heading, asked) = match &driving.approval {
+            Some(approval) => (
+                "Waiting for approval in the terminal",
+                model::tools::label(
+                    &approval.tool,
+                    &approval.input,
+                    self.summary.cwd.as_deref(),
+                    std::env::var("HOME").ok().as_deref(),
+                ),
+            ),
+            None if view.needs_you() => (
+                "Waiting for your answer in the terminal",
+                "A question there waits for you.".to_owned(),
+            ),
+            None => return None,
+        };
         Some(
             div()
                 .w_full()
@@ -91,12 +104,7 @@ impl SessionPane {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(Theme::warn())
-                                .child("Waiting for approval in the terminal"),
-                        )
+                        .child(div().text_xs().text_color(Theme::warn()).child(heading))
                         .child(div().text_size(px(15.)).text_color(Theme::ink()).child(asked)),
                 )
                 .child(

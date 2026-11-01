@@ -4,6 +4,7 @@ mod tree;
 
 pub use tree::{Branch, Row};
 
+use crate::topics::Topic;
 use crate::{SessionId, TopicId};
 
 /// One change to a tree, naming topics, entities and types by id, or to a wiki page by slug.
@@ -58,7 +59,37 @@ pub enum Change {
     },
 }
 
+/// What sort of change a proposal is, for reading a batch a sort at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    NewTopic,
+    NewType,
+    FileInto,
+    Move,
+    Rename,
+    Merge,
+    Close,
+    Delete,
+    MergePage,
+    RemovePage,
+}
+
 impl Change {
+    pub fn kind(&self) -> Kind {
+        match self {
+            Self::CreateTopic { .. } => Kind::NewTopic,
+            Self::AddType { .. } => Kind::NewType,
+            Self::FileInto { .. } => Kind::FileInto,
+            Self::Move { .. } => Kind::Move,
+            Self::Rename { .. } => Kind::Rename,
+            Self::Merge { .. } => Kind::Merge,
+            Self::Close { .. } => Kind::Close,
+            Self::Delete { .. } => Kind::Delete,
+            Self::MergePage { .. } => Kind::MergePage,
+            Self::RemovePage { .. } => Kind::RemovePage,
+        }
+    }
+
     /// The topic or type this change creates, which later changes in its batch may sit under.
     pub fn creates(&self) -> Option<&TopicId> {
         match self {
@@ -163,6 +194,27 @@ impl Batch {
     /// The wiki page changes, which sit outside the tree.
     pub fn pages(&self) -> impl Iterator<Item = &Proposal> {
         self.proposals.iter().filter(|proposal| proposal.change.is_page())
+    }
+
+    /// Its proposals a kind at a time, each kind once in `Kind` order: the tree's changes in the
+    /// order the tree shows them, so a new topic comes before those that go under it, then the
+    /// page changes.
+    pub fn by_kind<'a>(&'a self, existing: &'a [Topic]) -> Vec<(Kind, Vec<&'a Proposal>)> {
+        let mut kinds: Vec<(Kind, Vec<&Proposal>)> = Vec::new();
+        let tree = self.tree(existing);
+        let in_tree = tree.iter().filter_map(|row| match row.branch {
+            Branch::Proposal(proposal) => Some(proposal),
+            Branch::Topic(_) => None,
+        });
+        for proposal in in_tree.chain(self.pages()) {
+            let kind = proposal.change.kind();
+            match kinds.iter_mut().find(|(known, _)| *known == kind) {
+                Some((_, list)) => list.push(proposal),
+                None => kinds.push((kind, vec![proposal])),
+            }
+        }
+        kinds.sort_by_key(|(kind, _)| *kind);
+        kinds
     }
 }
 

@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
-use model::SessionId;
+use model::notice::TaskFailure;
 use model::plugin::Notice;
 use model::session::SessionStatus;
+use model::{SessionId, TopicId};
 use rustls::ClientConfig;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use wire::events::{Activity, AgentEventKind, SessionBroadcast};
+use wire::gateway::notifications::TaskDoneNotification;
 use wire::harness::HarnessEvent;
+use wire::task::TaskStatus;
 
 use crate::socket::{self, Liveness};
 use crate::{GatewayError, translate};
@@ -28,6 +31,10 @@ pub enum WorkspaceEvent {
         status: SessionStatus,
         blocked: Option<bool>,
     },
+    /// A topic, or its decisions, changed on the node.
+    TopicChanged(TopicId),
+    /// A task the node ran failed or ran out of time.
+    TaskFailed(TaskFailure),
     Closed,
 }
 
@@ -49,6 +56,7 @@ fn plugin_notice(text: &str) -> Option<PluginEvent> {
         SessionBroadcast::Snapshot(_)
         | SessionBroadcast::Removed(_)
         | SessionBroadcast::HubState(_)
+        | SessionBroadcast::TopicChanged(_)
         | SessionBroadcast::Event(_) => return None,
     };
     Some(PluginEvent::Notice(notice))
@@ -67,6 +75,9 @@ fn broadcast(text: &str) -> Option<WorkspaceEvent> {
             | AgentEventKind::TurnEnd { .. } => Some(WorkspaceEvent::Changed),
             _ => None,
         },
+        SessionBroadcast::TopicChanged(changed) => {
+            Some(WorkspaceEvent::TopicChanged(TopicId::new(changed.topic)))
+        }
         SessionBroadcast::HubState(_)
         | SessionBroadcast::PluginChanged(_)
         | SessionBroadcast::PluginViews(_) => None,
@@ -109,6 +120,42 @@ pub async fn watch_registry(
         WorkspaceEvent::Closed,
     )
     .await
+}
+
+pub async fn watch_tasks(
+    base_url: &str,
+    tls: Arc<ClientConfig>,
+) -> Result<mpsc::Receiver<WorkspaceEvent>, GatewayError> {
+    follow(
+        base_url,
+        "/api/notifications/ws",
+        tls,
+        task_done,
+        WorkspaceEvent::Closed,
+    )
+    .await
+}
+
+/// A task's end, worth telling only when it failed or ran out of time.
+fn task_done(text: &str) -> Option<WorkspaceEvent> {
+    let done = serde_json::from_str::<TaskDoneNotification>(text).ok()?;
+    let reason = match done.status {
+        TaskStatus::Failed => done.error.unwrap_or_else(|| "it failed".to_owned()),
+        TaskStatus::Timeout => done.error.unwrap_or_else(|| "it ran out of time".to_owned()),
+        TaskStatus::Queued
+        | TaskStatus::Running
+        | TaskStatus::AwaitingInput
+        | TaskStatus::Completed
+        | TaskStatus::Killed => return None,
+    };
+    Some(WorkspaceEvent::TaskFailed(TaskFailure {
+        agent: done.agent.unwrap_or_else(|| "An agent".to_owned()),
+        reason,
+        parent: done
+            .parent_session_id
+            .and_then(|parent| parent.parse::<wire::session_id::SessionId>().ok())
+            .map(|parent| translate::session(&parent)),
+    }))
 }
 
 pub async fn watch_plugins(

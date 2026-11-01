@@ -32,6 +32,7 @@ fn optional_units(value: Option<f64>) -> Option<f32> {
 pub fn plugin(record: PluginRecord) -> Plugin {
     let manifest = record.manifest;
     let contributes = manifest.contributes;
+    let events = manifest.events.len();
     Plugin {
         at: PluginRef {
             node: record.node,
@@ -87,6 +88,8 @@ pub fn plugin(record: PluginRecord) -> Plugin {
                 action: action(entry.action),
             })
             .collect(),
+        jobs: manifest.jobs.into_iter().map(|job| job.title).collect(),
+        events,
     }
 }
 

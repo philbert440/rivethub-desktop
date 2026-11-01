@@ -4,6 +4,9 @@ use crate::tools::{Question, ToolInput, ToolOutput};
 use crate::usage::{Pace, Usage};
 use crate::{SessionId, TaskId};
 
+use transcript::Earlier;
+pub use transcript::EarlierPage;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,
@@ -212,6 +215,9 @@ pub struct Switches {
 pub struct Described {
     pub summary: SessionSummary,
     pub switches: Switches,
+    /// The session runs in a process its node doesn't own, such as a terminal of the person's own,
+    /// so it can be read here but takes no messages.
+    pub running_elsewhere: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,9 +277,12 @@ pub enum Decision {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
+    /// The transcript as the node reads it now. A long one starts partway, where `earlier` says
+    /// the turns before it can be read back from.
     Snapshot {
         turns: Vec<Turn>,
         context: Option<ContextUsage>,
+        earlier: Option<u64>,
     },
     AssistantText(String),
     Reasoning(String),
@@ -308,6 +317,9 @@ pub enum SessionEvent {
     },
     Activity(Activity),
     Driving(Driving),
+    /// Whether the session waits for you now: a question or approval it shows, in the terminal
+    /// too, until it is answered.
+    Waiting(bool),
     Error(String),
 }
 
@@ -317,7 +329,8 @@ pub struct SessionView {
     live: Option<Turn>,
     approvals: Vec<Approval>,
     context: Option<ContextUsage>,
-    /// The harness's own count, which outranks the one read from the transcript.
+    /// The harness's own count, which outranks the one read from the transcript until a turn
+    /// the harness didn't count runs in the terminal.
     counted: Option<ContextUsage>,
     activity: Activity,
     error: Option<String>,
@@ -326,6 +339,8 @@ pub struct SessionView {
     paced: Pace,
     plan: Plan,
     driving: Driving,
+    waiting: bool,
+    earlier: Earlier,
 }
 
 impl SessionView {
@@ -341,17 +356,11 @@ impl SessionView {
 
     pub fn apply(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::Snapshot { mut turns, context } => {
-                self.keep_outputs(&mut turns);
-                if let Some(plan) = written_plan(&turns) {
-                    self.plan = plan;
-                }
-                self.turns = turns;
-                self.live = None;
-                if context.is_some() {
-                    self.context = context;
-                }
-            }
+            SessionEvent::Snapshot {
+                turns,
+                context,
+                earlier,
+            } => self.snapshot(turns, context, earlier),
             SessionEvent::AssistantText(text) => {
                 let turn = self.live_turn();
                 if !turn.ends_with_text && !turn.tools.is_empty() && !turn.text.is_empty() {
@@ -419,6 +428,7 @@ impl SessionView {
                     self.turns.push(turn);
                 }
                 self.activity = Activity::Idle;
+                self.waiting = false;
                 if let Some(pace) = usage
                     .zip(model_ms)
                     .and_then(|(usage, ms)| Pace::of(usage.output, ms))
@@ -430,11 +440,15 @@ impl SessionView {
             SessionEvent::Plan(plan) => self.plan = plan,
             SessionEvent::Activity(activity) => self.activity = activity,
             SessionEvent::Driving(driving) => {
+                if driving.by_terminal() && driving.busy {
+                    self.counted = None;
+                }
                 let before = std::mem::replace(&mut self.driving, driving);
                 for text in started(&before.queued, &self.driving.queued) {
                     self.prompted(text.clone(), Vec::new(), None);
                 }
             }
+            SessionEvent::Waiting(waiting) => self.waiting = waiting,
             SessionEvent::Error(message) => self.error = Some(message),
         }
     }
@@ -443,6 +457,7 @@ impl SessionView {
     /// failure it reported no longer stand; a turn still running says so again as it streams.
     pub fn reconnected(&mut self) {
         self.activity = Activity::Idle;
+        self.waiting = false;
         self.error = None;
         self.lost = false;
     }
@@ -507,23 +522,6 @@ impl SessionView {
         self.live.as_ref()
     }
 
-    fn keep_outputs(&self, incoming: &mut [Turn]) {
-        let mut known: std::collections::HashMap<&str, &ToolOutput> = self
-            .turns
-            .iter()
-            .chain(self.live.as_ref())
-            .flat_map(|turn| &turn.tools)
-            .filter_map(|tool| Some((tool.id.as_deref()?, tool.output.as_ref()?)))
-            .collect();
-        for tool in incoming.iter_mut().flat_map(|turn| &mut turn.tools) {
-            if tool.output.is_none()
-                && let Some(output) = tool.id.as_deref().and_then(|id| known.remove(id))
-            {
-                tool.output = Some(output.clone());
-            }
-        }
-    }
-
     /// The questions the newest turn asked with an ask-user tool, until a reply follows it or the
     /// tool comes back with the answers, as it does when they were given in the terminal.
     pub fn open_questions(&self) -> Option<(&ToolCall, &[Question])> {
@@ -577,7 +575,7 @@ impl SessionView {
     }
 
     pub fn needs_you(&self) -> bool {
-        !self.approvals.is_empty() || self.activity == Activity::Blocked
+        self.waiting || !self.approvals.is_empty() || self.activity == Activity::Blocked
     }
 }
 
@@ -595,6 +593,8 @@ fn written_plan(turns: &[Turn]) -> Option<Plan> {
             _ => plan,
         })
 }
+
+mod transcript;
 
 #[cfg(test)]
 mod tests;

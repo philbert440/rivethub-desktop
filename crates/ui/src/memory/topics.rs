@@ -4,7 +4,7 @@ use gpui::{
 };
 use model::TopicId;
 use model::topics::{Atlas, Placements, Topic, outline, suggest};
-use model::wiki::{Page, readable, section, without_decisions};
+use model::wiki::{Page, readable, section, titled, without_decisions};
 
 use super::{MemoryEvent, MemoryPage, Opened, Reading};
 use crate::markdown_view;
@@ -27,29 +27,6 @@ fn topic_reading(page: Page) -> Reading {
 }
 
 impl MemoryPage {
-    pub(super) fn load_library(&self, cx: &mut Context<Self>) {
-        let hub = self.hub.clone();
-        cx.spawn(async move |this, cx| {
-            let loaded = hub.library().await;
-            this.update(cx, |this, cx| match loaded {
-                Ok(library) => {
-                    this.library = Some(library);
-                    if let Some(Opened::Topic(topic)) = this.opened.clone() {
-                        this.open_topic(topic, cx);
-                    }
-                    cx.notify();
-                }
-                Err(err) if err.is_missing_route() => {
-                    this.problem = Some("Topic pages need a newer rh on this node.".into());
-                    cx.notify();
-                }
-                Err(err) => this.failed(&err, cx),
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     pub(super) fn load_pages(&self, cx: &mut Context<Self>) {
         let hub = self.hub.clone();
         let query = self.finding.clone().unwrap_or_default();
@@ -75,7 +52,6 @@ impl MemoryPage {
     /// Shows the page that holds this topic: its own, or for a subtopic the root topic's page,
     /// scrolled to the subtopic's section.
     pub(super) fn open_topic(&mut self, topic: TopicId, cx: &mut Context<Self>) {
-        let mut at = None;
         let root = self.library.as_ref().map(|library| {
             let placements = Placements::new();
             Atlas::new(&library.topics, &[], &placements).root(&topic).clone()
@@ -92,9 +68,29 @@ impl MemoryPage {
             self.deciding = None;
             self.all_sessions = false;
         }
-        if let Some(root) = root.clone() {
-            self.load_decisions(root, cx);
+        if let Some(root) = root {
+            self.load_decisions(root.clone(), cx);
+            if !self
+                .library
+                .as_ref()
+                .is_some_and(|library| library.read.contains(&root))
+            {
+                self.read_pages(vec![root], cx);
+            }
         }
+        self.opened = Some(Opened::Topic(topic));
+        self.show_topic(cx);
+    }
+
+    /// Shows the open topic's page as far as it has been read, scrolled to the topic's section
+    /// on its root topic's page.
+    pub(super) fn show_topic(&mut self, cx: &mut Context<Self>) {
+        let Some(Opened::Topic(topic)) = self.opened.clone() else {
+            return;
+        };
+        let topic = &topic;
+        let mut at = None;
+        let root = self.opened_root();
         self.reading = self
             .library
             .as_ref()
@@ -106,11 +102,11 @@ impl MemoryPage {
                     .find(|page| page.topic.as_ref() == Some(root))
                     .cloned()
                     .map(topic_reading)?;
-                if *root != topic {
+                if root != topic {
                     at = library
                         .topics
                         .iter()
-                        .find(|known| known.id == topic)
+                        .find(|known| known.id == *topic)
                         .and_then(|sub| section(&read.blocks, &sub.name));
                 }
                 Some(read)
@@ -119,7 +115,7 @@ impl MemoryPage {
             Some(block) => self.page_scroll.scroll_to_top_of_item(block + 1),
             None => self.page_scroll.set_offset(Point::default()),
         }
-        self.opened = Some(Opened::Topic(topic));
+        self.section = at;
         self.check_links(cx);
         cx.notify();
     }
@@ -216,6 +212,7 @@ impl MemoryPage {
         self.decisions = None;
         self.deciding = None;
         self.page_scroll.set_offset(Point::default());
+        self.section = None;
         let hub = self.hub.clone();
         cx.spawn(async move |this, cx| {
             let fetched = hub.wiki_page(slug.clone()).await;
@@ -240,6 +237,7 @@ impl MemoryPage {
 
     fn clear_find(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.finding = None;
+        self.find.update(cx, |find, cx| find.set_text("", cx));
         self.load_pages(cx);
         cx.notify();
     }
@@ -300,11 +298,13 @@ impl MemoryPage {
                 .map(|topic| (0, topic))
                 .collect(),
         };
-        let pages: Vec<_> = self
-            .loose
-            .iter()
-            .filter(|listing| listing.owner.is_none())
-            .collect();
+        let pages: Vec<_> = match &finding {
+            Some(query) => titled(&self.loose, query),
+            None => self.loose.iter().collect(),
+        }
+        .into_iter()
+        .filter(|listing| listing.owner.is_none())
+        .collect();
         let find = div()
             .mx_1()
             .mb_2()
@@ -336,8 +336,10 @@ impl MemoryPage {
                 .text_color(Theme::ink_dim())
                 .child(text)
         };
+        self.read_in_view(&topics, cx);
         div()
             .id("memory-index")
+            .track_scroll(&self.index_scroll)
             .w(px(LIST_WIDTH))
             .flex_none()
             .h_full()
@@ -467,7 +469,7 @@ impl MemoryPage {
                     )
                 })
             }
-            (Some(Opened::Topic(_)), None) if self.library.is_some() => head
+            (Some(Opened::Topic(_)), None) if self.root_read() => head
                 .child(
                     self.beside_workspace_button(
                         div()

@@ -5,7 +5,7 @@ use gpui::{
     Context, Div, Entity, Focusable, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Window, div, prelude::*, px,
 };
-use model::notice::NoticeKind;
+use model::notice::{NoticeKind, TaskFailure};
 use model::{Page, SessionId};
 
 use crate::memory::{MemoryEvent, MemoryPage};
@@ -13,7 +13,7 @@ use crate::plugin::{Entry, Plugins, PluginsEvent, move_focus};
 use crate::settings::{SettingsEvent, SettingsPage};
 use crate::text::one_line;
 use crate::tip::Tip;
-use crate::workspace::{Attention, Listed, TopicDeleted, ViewInMemory, Workspace};
+use crate::workspace::{Attention, Listed, TaskFailed, TopicDeleted, ViewInMemory, Workspace};
 use crate::{appearance, brand, theme::Theme};
 
 gpui::actions!(shell, [OpenSettings, FocusNext, FocusPrevious]);
@@ -31,7 +31,7 @@ pub struct Shell {
     memory: Entity<MemoryPage>,
     settings: Entity<SettingsPage>,
     plugins: Entity<Plugins>,
-    _routes: [Subscription; 8],
+    _routes: [Subscription; 9],
     /// Restyles the window when the followed Omarchy theme changes.
     _omarchy: gpui::Task<()>,
 }
@@ -75,6 +75,9 @@ impl Shell {
                 this.notify(attention, window, cx);
             },
         );
+        let failures = cx.subscribe_in(&workspace, window, |this, _, failed: &TaskFailed, window, cx| {
+            this.notify_failure(&failed.0, window, cx);
+        });
         let from_plugins =
             cx.subscribe_in(
                 &plugins,
@@ -107,6 +110,7 @@ impl Shell {
                 listed,
                 from_memory,
                 notices,
+                failures,
                 from_settings,
                 desktop,
                 from_plugins,
@@ -219,6 +223,33 @@ impl Shell {
                 this.update_in(cx, |this, window, cx| {
                     window.activate_window();
                     this.open_listed(&session, window, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Raises a desktop notification for a failed task when the person wants to hear what needs
+    /// them; clicking it opens the session that delegated the task.
+    fn notify_failure(&mut self, failure: &TaskFailure, window: &mut Window, cx: &mut Context<Self>) {
+        let prefs = self.hub.preferences();
+        if !prefs.wants(NoticeKind::NeedsYou) {
+            return;
+        }
+        if prefs.notify_sound {
+            self.hub.chime();
+        }
+        let hub = self.hub.clone();
+        let parent = failure.parent.clone();
+        let body = failure.said();
+        cx.spawn_in(window, async move |this, cx| {
+            if hub.notify("A delegated task failed".to_owned(), body).await
+                && let Some(parent) = parent
+            {
+                this.update_in(cx, |this, window, cx| {
+                    window.activate_window();
+                    this.open_listed(&parent, window, cx);
                 })
                 .ok();
             }

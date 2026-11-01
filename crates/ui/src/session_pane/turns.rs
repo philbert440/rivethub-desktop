@@ -37,14 +37,18 @@ impl SessionPane {
             return;
         }
         let prompts = u32::try_from(asked).unwrap_or(u32::MAX);
+        let from = self.handle.view().read().held_from();
         let hub = self.hub.clone();
         let summary = self.summary.clone();
         self.forking = Some(index);
+        self.turns.remeasure();
+        self.turns.scroll_to_end();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let forked = hub.fork(&summary, prompts).await;
+            let forked = hub.fork(&summary, prompts, from).await;
             this.update(cx, |this, cx| {
                 this.forking = None;
+                this.turns.remeasure();
                 cx.notify();
                 match forked {
                     Ok(forked) => {
@@ -53,6 +57,7 @@ impl SessionPane {
                             node: this.summary.node.clone(),
                             title: this.summary.title.clone(),
                             prompts,
+                            from: Some(from),
                         };
                         this.hub.remember_fork(&forked.id, &origin);
                         cx.emit(PaneEvent::Forked(Box::new(forked)));
@@ -63,6 +68,53 @@ impl SessionPane {
             .ok();
         })
         .detach();
+    }
+
+    /// The line under the conversation a fork carries, naming the chat it came from.
+    fn fork_line(&self) -> String {
+        let named = self.summary.title.as_deref().map_or_else(
+            || "this chat".to_owned(),
+            |title| format!("\u{201c}{}\u{201d}", one_line(Some(title))),
+        );
+        format!("Forked from {named} · the conversation above came with it")
+    }
+
+    /// While a fork starts, what stands where the composer goes: the new chat is on its way.
+    fn fork_starting() -> gpui::Div {
+        div()
+            .w_full()
+            .h(px(92.))
+            .rounded(px(28.))
+            .bg(Theme::card())
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_sm()
+            .text_color(Theme::ink_dim())
+            .child(div().size(px(8.)).rounded(px(4.)).bg(Theme::accent()))
+            .child("Starting the fork…")
+    }
+
+    /// Where the composer goes for a session running in another terminal: why it takes no messages.
+    fn running_elsewhere() -> gpui::Div {
+        div()
+            .w_full()
+            .p_5()
+            .rounded(px(28.))
+            .bg(Theme::warn_container())
+            .border_1()
+            .border_color(Theme::warn_line())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().text_color(Theme::warn()).child(super::ELSEWHERE))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(Theme::ink_dim())
+                    .child(super::ELSEWHERE_WHY),
+            )
     }
 
     /// For a fork made here, reads the chat it was forked from and keeps the part the fork carries.
@@ -78,7 +130,7 @@ impl SessionPane {
         );
         let hub = hub.clone();
         cx.spawn(async move |this, cx| {
-            let read = hub.transcript(&source).await;
+            let read = hub.transcript(&source, origin.from).await;
             this.update(cx, |this, cx| match read {
                 Ok(turns) => {
                     let named = origin.title.as_deref().map_or_else(
@@ -129,15 +181,23 @@ impl SessionPane {
         let previews = Arc::clone(&self.previews);
         let plan = view.plan().clone();
         let forking = self.forking;
-        let lost = self.lost;
-        let (carried, forked_from) = (self.carried.len(), self.forked_from.clone());
+        let found = self.found;
+        let running = self.running;
+        let earlier = view.earlier().map(|_| view.loading_earlier());
+        let (carried, forked_from) = match forking {
+            Some(at) => (at + 1, Some(self.fork_line())),
+            None => (self.carried.len(), self.forked_from.clone()),
+        };
         let pane = cx.entity().downgrade();
         let cwd = self.summary.cwd.clone();
         let home = std::env::var("HOME").ok();
         let transcript = list(
             self.turns.clone(),
             move |index, window: &mut Window, _: &mut App| {
-                exchanges.get(index).map_or_else(
+                let shown = exchanges
+                    .get(index)
+                    .filter(|_| forking.is_none_or(|at| index <= at));
+                shown.map_or_else(
                     || div().into_any_element(),
                     |exchange| {
                         let context = transcript::Context {
@@ -151,34 +211,22 @@ impl SessionPane {
                             previews: &previews,
                             plan: &plan,
                             forking: forking == Some(index),
-                            lost,
+                            running,
                             carried: transcript::carried(index, carried, forked_from.as_deref()),
                         };
-                        transcript::exchange(exchange, &context, window)
+                        let shown = transcript::exchange(exchange, &context, window);
+                        let shown = if found == Some(index) {
+                            super::seek::marked(shown)
+                        } else {
+                            shown
+                        };
+                        super::earlier::opening(shown, earlier.filter(|_| index == carried), &pane)
                     },
                 )
             },
         )
         .size_full();
-        let back = behind.then(|| {
-            div().w(column).flex().justify_end().child(
-                div()
-                    .id("back-to-bottom")
-                    .size(px(34.))
-                    .rounded(px(17.))
-                    .bg(Theme::raised())
-                    .text_color(Theme::ink())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.turns.scroll_to_end();
-                        cx.notify();
-                    }))
-                    .child("↓"),
-            )
-        });
+        let back = behind.then(|| Self::back_to_bottom(column, cx));
         div()
             .flex_1()
             .w_full()
@@ -216,11 +264,35 @@ impl SessionPane {
                     .children(self.plan_panel(&view, cx))
                     .children(self.driving_dock(&view, cx))
                     .children(self.queue_dock(cx))
-                    .child(
-                        self.approval_card(&view, &self.composer.focus_handle(cx))
+                    .child(match (self.forking, self.elsewhere) {
+                        (Some(_), _) => Self::fork_starting().into_any_element(),
+                        (None, true) => Self::running_elsewhere().into_any_element(),
+                        (None, false) => self
+                            .approval_card(&view, &self.composer.focus_handle(cx))
                             .unwrap_or_else(|| self.composer_card(&view, cx)),
-                    ),
+                    }),
             )
+    }
+
+    /// The button that scrolls a transcript read above its newest turn back down to it.
+    fn back_to_bottom(column: Pixels, cx: &mut Context<Self>) -> gpui::Div {
+        div().w(column).flex().justify_end().child(
+            div()
+                .id("back-to-bottom")
+                .size(px(34.))
+                .rounded(px(17.))
+                .bg(Theme::raised())
+                .text_color(Theme::ink())
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.turns.scroll_to_end();
+                    cx.notify();
+                }))
+                .child("↓"),
+        )
     }
 
     fn fade() -> impl IntoElement {

@@ -1,8 +1,8 @@
 use gpui::{AnyElement, ClickEvent, Context, Div, IntoElement, ParentElement, Styled, div, prelude::*, px};
-use model::plugin::PluginRef;
+use model::plugin::{PluginRef, PluginState};
 
 use super::SettingsPage;
-use super::parts::{dim, row, section};
+use super::parts::{dim, mono, row, section};
 use crate::brand;
 use crate::plugin::PluginSettings;
 use crate::theme::Theme;
@@ -12,7 +12,10 @@ impl SettingsPage {
     pub(super) fn plugins_tab(&self, cx: &mut Context<Self>) -> Vec<Div> {
         match &self.plugin {
             Some((entry, _)) => vec![div().child(entry.clone())],
-            None => vec![section("Plug-ins", self.plugin_rows(cx))],
+            None => vec![
+                section("Plug-ins", self.plugin_rows(cx)),
+                section("Build one with an agent", vec![creator_note()]),
+            ],
         }
     }
 
@@ -68,7 +71,8 @@ impl SettingsPage {
                                             .child(plugin.name.clone())
                                             .child(node_chip(plugin.at.node.clone())),
                                     )
-                                    .child(dim(plugin.description.clone()).text_xs().truncate()),
+                                    .child(dim(plugin.description.clone()).text_xs().truncate())
+                                    .child(dim(crate::plugin::adds(plugin)).text_xs().truncate()),
                             ),
                     )
                     .child(
@@ -77,7 +81,13 @@ impl SettingsPage {
                             .items_center()
                             .gap_2()
                             .flex_none()
-                            .child(dim(plugin.state.label()))
+                            .child(match plugin.status() {
+                                PluginState::AwaitingApproval => div()
+                                    .text_sm()
+                                    .text_color(Theme::warn())
+                                    .child("Needs approval · Review"),
+                                status => dim(status.label()),
+                            })
                             .child(brand::icon(
                                 brand::symbol(Some("chevron_right")),
                                 18.,
@@ -107,6 +117,37 @@ impl SettingsPage {
         }
         rows
     }
+}
+
+/// What an agent needs to build a plug-in: rh's four plug-in tools, which only reach a harness that
+/// runs `rh mcp` as one of its MCP servers. Without them the agent can only say it lacks them.
+fn creator_note() -> AnyElement {
+    div()
+        .px_5()
+        .py_3()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            "Ask an agent for the plug-in you want. It builds, installs and checks it on its node with \
+             rh's plug-in tools: plugins-templates, plugins-scaffold, plugins-install and plugins-status.",
+        )
+        .child(
+            dim(
+                "Those tools come from rh mcp, so the agent's harness needs rh mcp as an MCP server on that \
+             node; without it the agent has no plug-in tools. For Claude Code, run this there once:",
+            )
+            .text_xs(),
+        )
+        .child(mono("claude mcp add -s user rivethub -- rh mcp"))
+        .child(
+            dim(
+                "The new plug-in then shows here waiting for your approval, and it does nothing until you \
+             approve and turn it on.",
+            )
+            .text_xs(),
+        )
+        .into_any_element()
 }
 
 /// A node's name beside what runs on it.

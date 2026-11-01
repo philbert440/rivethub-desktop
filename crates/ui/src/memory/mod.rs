@@ -1,20 +1,25 @@
 mod ask;
+mod batch;
 mod conversation;
 mod decisions;
 mod entities;
 mod entity_edit;
 mod flagged;
+mod library;
 mod links;
 mod members;
 mod mentions;
 mod proposals;
+mod recalled;
 mod session;
+mod session_reads;
 mod sessions;
 mod stats;
 mod tidy;
 mod topics;
 mod trash;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use app::{Hub, Library, Tidy};
@@ -110,6 +115,9 @@ pub struct MemoryPage {
     asked: Option<String>,
     found: Option<Vec<Found>>,
     library: Option<Library>,
+    /// The root topics whose page is on its way.
+    reading_roots: HashSet<TopicId>,
+    index_scroll: ScrollHandle,
     find: Entity<TextInput>,
     finding: Option<String>,
     loose: Vec<Listing>,
@@ -118,6 +126,8 @@ pub struct MemoryPage {
     decisions: Option<Vec<Group>>,
     deciding: Option<decisions::Deciding>,
     page_scroll: ScrollHandle,
+    /// The open subtopic's section among the page's blocks, which the page keeps at its top.
+    section: Option<usize>,
     tidy: Option<Tidy>,
     review: proposals::Review,
     trash: trash::Sweep,
@@ -151,16 +161,18 @@ impl Focusable for MemoryPage {
 
 impl MemoryPage {
     pub fn new(hub: Hub, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| TextInput::new("Search what your sessions said", cx));
-        let find = cx.new(|cx| TextInput::new("Find a topic or page", cx));
+        let query = cx.new(|cx| TextInput::new("Search what your sessions said", cx).keeping());
+        let find = cx.new(|cx| TextInput::new("Find a topic or page", cx).keeping());
         let asked = cx.subscribe(&query, |this, _, Submitted(text), cx| {
-            this.search(text.clone(), cx);
+            if !text.is_empty() {
+                this.search(text.clone(), cx);
+            }
         });
         let found = cx.subscribe(&find, |this, _, Submitted(text), cx| {
-            this.finding = Some(text.clone());
+            this.finding = Some(text.clone()).filter(|text| !text.is_empty());
             this.load_pages(cx);
         });
-        let entity_find = cx.new(|cx| TextInput::new("Find an entity by name or alias", cx));
+        let entity_find = cx.new(|cx| TextInput::new("Find an entity by name or alias", cx).keeping());
         let sought = cx.subscribe(&entity_find, |this, _, Submitted(text), cx| {
             this.find_entities(text, cx);
         });
@@ -173,6 +185,8 @@ impl MemoryPage {
             asked: None,
             found: None,
             library: None,
+            reading_roots: HashSet::new(),
+            index_scroll: ScrollHandle::new(),
             find,
             finding: None,
             loose: Vec::new(),
@@ -181,6 +195,7 @@ impl MemoryPage {
             decisions: None,
             deciding: None,
             page_scroll: ScrollHandle::new(),
+            section: None,
             tidy: None,
             review: proposals::Review::default(),
             trash: trash::Sweep::default(),
@@ -328,8 +343,8 @@ impl MemoryPage {
 impl Render for MemoryPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.tab {
-            _ if self.viewing.is_some() => self.session_page(window, cx),
-            _ if self.remembering.is_some() => self.conversation_page(window, cx),
+            _ if self.viewing.is_some() => self.session_page(cx),
+            _ if self.remembering.is_some() => self.conversation_page(cx),
             Tab::Ask => self.ask(cx),
             Tab::Topics => self.topics(window, cx),
             Tab::Entities => self.entities(window, cx),
