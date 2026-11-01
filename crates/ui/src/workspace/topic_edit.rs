@@ -5,7 +5,7 @@ use gpui::{
     AnyElement, Context, Entity, Focusable, IntoElement, MouseDownEvent, ParentElement, Pixels, Point,
     SharedString, Styled, Subscription, Window, actions, anchored, deferred, div, prelude::*, px,
 };
-use model::topics::{Atlas, Topic};
+use model::topics::{Atlas, MAX_LEVELS, Topic, Unnestable};
 use model::{Altitude, SessionId, TopicId};
 
 use super::Workspace;
@@ -31,6 +31,9 @@ pub(super) enum Pick {
     /// A new subtopic of this topic, or an existing topic moved under it.
     Child(TopicId),
 }
+
+/// The topics a picker offers, and the ones it leaves out with why.
+type Offered = (Vec<Topic>, Vec<(Topic, String)>);
 
 /// The floating topic picker, opened where the menu was.
 pub(super) struct Choosing {
@@ -103,7 +106,7 @@ impl Workspace {
         let hub = self.hub.clone();
         self.edit_topics(
             async move { hub.rename_topic(topic, name).await },
-            "renaming it failed",
+            "Renaming it failed",
             |_| {},
             cx,
         );
@@ -145,48 +148,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let name = |topic: &TopicId| {
-            self.topic(topic)
-                .map_or_else(String::new, |known| known.name.clone())
-        };
-        let (heading, topics): (String, Vec<Topic>) = match &pick {
-            Pick::MoveInto(topic) => (format!("Move “{}” into", name(topic)), {
-                let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
-                self.topics
-                    .iter()
-                    .filter(|under| {
-                        self.topic(topic).and_then(|known| known.parent.as_ref()) != Some(&under.id)
-                            && atlas.can_nest(topic, &under.id)
-                    })
-                    .cloned()
-                    .collect()
-            }),
-            Pick::MergeInto(topic) => (
-                format!("Merge “{}” into", name(topic)),
-                self.topics
-                    .iter()
-                    .filter(|known| &known.id != topic)
-                    .cloned()
-                    .collect(),
-            ),
-            Pick::File(_) => ("Move to topic".to_owned(), self.topics.clone()),
-            Pick::Child(parent) => (
-                format!("New subtopic of “{}”, or move one here", name(parent)),
-                {
-                    let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
-                    self.topics
-                        .iter()
-                        .filter(|child| {
-                            child.parent.as_ref() != Some(parent) && atlas.can_nest(&child.id, parent)
-                        })
-                        .cloned()
-                        .collect()
-                },
-            ),
-        };
+        let (heading, (topics, withheld)) = self.offer_for(&pick);
         let merging = matches!(pick, Pick::MergeInto(_));
         let picker = cx.new(|cx| {
-            let picker = TopicPicker::new(topics, None, cx).headed(heading);
+            let picker = TopicPicker::new(topics, None, cx)
+                .headed(heading)
+                .withholding(withheld);
             if merging { picker.without_create() } else { picker }
         });
         let events = cx.subscribe(&picker, move |this, _, event: &PickerEvent, cx| {
@@ -227,6 +194,46 @@ impl Workspace {
         cx.notify();
     }
 
+    /// What the picker for `pick` says it is for, the topics it offers, and the rest with why each
+    /// is left out.
+    fn offer_for(&self, pick: &Pick) -> (String, Offered) {
+        let name = |topic: &TopicId| {
+            self.topic(topic)
+                .map_or_else(String::new, |known| known.name.clone())
+        };
+        let atlas = Atlas::new(&self.topics, &self.sessions, &self.placements);
+        match pick {
+            Pick::MoveInto(topic) => (
+                format!("Move “{}” into", name(topic)),
+                self.offer(|under| self.topic(topic).and_then(|moved| refusal(&atlas, moved, under))),
+            ),
+            Pick::MergeInto(topic) => (
+                format!("Merge “{}” into", name(topic)),
+                self.offer(|known| {
+                    (&known.id == topic).then(|| "A topic can't merge into itself.".to_owned())
+                }),
+            ),
+            Pick::File(_) => ("Move to topic".to_owned(), self.offer(|_| None)),
+            Pick::Child(parent) => (
+                format!("New subtopic of “{}”, or move one here", name(parent)),
+                self.offer(|child| self.topic(parent).and_then(|under| refusal(&atlas, child, under))),
+            ),
+        }
+    }
+
+    /// The topics a pick offers, and the rest with why `refused` leaves each out.
+    fn offer(&self, refused: impl Fn(&Topic) -> Option<String>) -> Offered {
+        let mut offered = Vec::new();
+        let mut withheld = Vec::new();
+        for topic in &self.topics {
+            match refused(topic) {
+                Some(why) => withheld.push((topic.clone(), why)),
+                None => offered.push(topic.clone()),
+            }
+        }
+        (offered, withheld)
+    }
+
     pub(super) fn choosing_overlay(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let choosing = self.choosing.as_ref()?;
         Some(deferred(
@@ -251,7 +258,7 @@ impl Workspace {
         let hub = self.hub.clone();
         self.edit_topics(
             async move { hub.move_topic(topic, parent).await },
-            "moving it failed",
+            "Moving it failed",
             |_| {},
             cx,
         );
@@ -264,7 +271,7 @@ impl Workspace {
         let hub = self.hub.clone();
         self.edit_topics(
             async move { hub.create_topic(name, Some(parent)).await.map(drop) },
-            "adding it failed",
+            "Adding it failed",
             |_| {},
             cx,
         );
@@ -277,7 +284,7 @@ impl Workspace {
                 let parent = hub.create_topic(name, None).await?;
                 hub.move_topic(topic, Some(parent.id)).await
             },
-            "moving it failed",
+            "Moving it failed",
             |_| {},
             cx,
         );
@@ -289,7 +296,7 @@ impl Workspace {
         let (merged, target) = (topic.clone(), into.clone());
         self.edit_topics(
             async move { hub.merge_topic(topic, into).await },
-            "merging it failed",
+            "Merging it failed",
             move |this| {
                 if this.altitude == Altitude::Topic(merged) {
                     this.altitude = Altitude::Topic(target);
@@ -315,12 +322,33 @@ impl Workspace {
                 match done {
                     Ok(()) => then(this),
                     Err(GatewayError::Conflict(message)) => this.failed = Some(message),
-                    Err(err) => this.failed = Some(format!("{failure}: {err}")),
+                    Err(err) => this.failed = Some(format!("{failure}: {}", err.reason())),
                 }
                 this.refile(cx);
             })
             .ok();
         })
         .detach();
+    }
+}
+
+/// Why `moved` can't go under `under`, as a sentence, or `None` when it can.
+fn refusal(atlas: &Atlas<'_>, moved: &Topic, under: &Topic) -> Option<String> {
+    if moved.parent.as_ref() == Some(&under.id) {
+        return Some(format!("“{}” is already in “{}”.", moved.name, under.name));
+    }
+    match atlas.nesting(&moved.id, &under.id) {
+        Ok(()) => None,
+        Err(Unnestable::OwnSubtree) if moved.id == under.id => {
+            Some(format!("“{}” can't move into itself.", moved.name))
+        }
+        Err(Unnestable::OwnSubtree) => Some(format!(
+            "“{}” is inside “{}”, so “{}” can't move into it.",
+            under.name, moved.name, moved.name
+        )),
+        Err(Unnestable::TooDeep) => Some(format!(
+            "“{}” can't move into “{}”: topics nest at most {MAX_LEVELS} levels deep.",
+            moved.name, under.name
+        )),
     }
 }

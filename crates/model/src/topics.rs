@@ -312,9 +312,49 @@ impl<'a> Atlas<'a> {
     /// Whether `topic` can move under `parent`: never under itself or its own subtopics, and never
     /// so that its deepest subtopic would sit below `MAX_LEVELS`.
     pub fn can_nest(&self, topic: &TopicId, parent: &'a TopicId) -> bool {
-        let lineage = self.lineage(parent);
-        !lineage.contains(&topic) && lineage.len() + self.height(topic) <= MAX_LEVELS
+        self.nesting(topic, parent).is_ok()
     }
+
+    /// Why `topic` can't move under `parent`, if it can't.
+    pub fn nesting(&self, topic: &TopicId, parent: &'a TopicId) -> Result<(), Unnestable> {
+        let lineage = self.lineage(parent);
+        if lineage.contains(&topic) {
+            Err(Unnestable::OwnSubtree)
+        } else if lineage.len() + self.height(topic) > MAX_LEVELS {
+            Err(Unnestable::TooDeep)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Why a topic can't move under another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unnestable {
+    /// The other topic is the topic itself or one of its own subtopics.
+    OwnSubtree,
+    /// The topic's deepest subtopic would sit below `MAX_LEVELS`.
+    TooDeep,
+}
+
+/// The slug rh files a name under: its letters and digits, lowercased, with each run of anything
+/// else between them as one hyphen. Two topics of a kind never share one, so a name whose slug is
+/// taken can't be a new topic.
+pub fn slug(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    let mut gap = false;
+    for ch in name.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            if gap && !slug.is_empty() {
+                slug.push('-');
+            }
+            gap = false;
+            slug.push(ch);
+        } else {
+            gap = true;
+        }
+    }
+    slug
 }
 
 pub fn suggest<'a>(topics: &'a [Topic], query: &str, limit: usize) -> Vec<&'a Topic> {

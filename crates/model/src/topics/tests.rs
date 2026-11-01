@@ -124,6 +124,19 @@ fn a_topic_nests_anywhere_but_its_own_subtree_and_never_past_four_levels() {
     assert!(!atlas.can_nest(&id("x"), &topics[2].id));
     assert!(!atlas.can_nest(&id("a"), &topics[2].id));
     assert!(!atlas.can_nest(&id("b"), &topics[1].id));
+    assert_eq!(
+        atlas.nesting(&id("b"), &topics[2].id),
+        Err(Unnestable::OwnSubtree)
+    );
+    assert_eq!(atlas.nesting(&id("x"), &topics[2].id), Err(Unnestable::TooDeep));
+}
+
+#[test]
+fn names_fold_to_the_slugs_rh_files_them_under() {
+    assert_eq!(slug("Alpha Sub"), "alpha-sub");
+    assert_eq!(slug("  alpha--SUB! "), "alpha-sub");
+    assert_eq!(slug("Café 2.0"), "café-2-0");
+    assert_eq!(slug("?!"), "");
 }
 
 #[test]
