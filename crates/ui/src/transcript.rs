@@ -84,6 +84,23 @@ impl Folds {
     pub fn open(&self, fold: Fold) -> bool {
         self.0.contains(&fold)
     }
+
+    /// The same folds after `by` exchanges went in at `at`.
+    pub fn shifted(&self, at: usize, by: usize) -> Self {
+        let moved = |exchange: usize| if exchange < at { exchange } else { exchange + by };
+        Self(
+            self.0
+                .iter()
+                .map(|fold| match *fold {
+                    Fold::Exchange(exchange) => Fold::Exchange(moved(exchange)),
+                    Fold::Group(exchange, step) => Fold::Group(moved(exchange), step),
+                    Fold::Thought(exchange, step) => Fold::Thought(moved(exchange), step),
+                    Fold::Tool(exchange, step, tool) => Fold::Tool(moved(exchange), step, tool),
+                    Fold::Plan => Fold::Plan,
+                })
+                .collect(),
+        )
+    }
 }
 
 pub struct Context<'a> {
@@ -100,10 +117,21 @@ pub struct Context<'a> {
     pub plan: &'a model::plan::Plan,
     /// Whether a fork after this exchange is starting.
     pub forking: bool,
-    /// Whether the stream to the session's node is down, so a running turn can't be followed.
-    pub lost: bool,
+    /// What the running turn's status line says.
+    pub running: Running,
     /// Whether the exchange is one a fork carries from the chat it was forked from, shown to read.
     pub carried: Carried<'a>,
+}
+
+/// What a running turn's status line says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Running {
+    #[default]
+    Working,
+    /// The stream to the session's node is down, so the turn can't be followed.
+    Lost,
+    /// The turn waits on your answer or approval.
+    Waiting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,6 +272,20 @@ fn status(label: &str) -> AnyElement {
                 .with_easing(pulsating_between(0.45, 1.)),
             gpui::Styled::opacity,
         )
+        .into_any_element()
+}
+
+/// A running turn held until you answer.
+fn waiting_on_you() -> AnyElement {
+    div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(13.))
+        .text_color(Theme::warn())
+        .child(div().size(px(8.)).rounded(px(4.)).bg(Theme::warn()))
+        .child("Waiting for you")
         .into_any_element()
 }
 
@@ -519,7 +561,11 @@ pub fn exchange(view: &ExchangeView, cx: &Context<'_>, window: &Window) -> AnyEl
                 }
             })
             .unwrap_or("Thinking");
-        column = column.child(if cx.lost { disconnected() } else { status(label) });
+        column = column.child(match cx.running {
+            Running::Lost => disconnected(),
+            Running::Waiting => waiting_on_you(),
+            Running::Working => status(label),
+        });
     }
     div()
         .w_full()

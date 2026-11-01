@@ -345,21 +345,62 @@ impl Gateway {
         Ok(translate::summary(renamed))
     }
 
-    /// The session's transcript as its node reads it now.
-    pub async fn transcript(&self, session: &SessionId) -> Result<Vec<model::session::Turn>, GatewayError> {
+    /// The session's transcript as its node reads it now: from `from` on when given, else its
+    /// latest part.
+    pub async fn transcript(
+        &self,
+        session: &SessionId,
+        from: Option<u64>,
+    ) -> Result<Vec<model::session::Turn>, GatewayError> {
+        let query = from.map(|from| ("from", from));
+        Ok(translate::transcript(
+            self.read_transcript(session, query).await?.turns,
+        ))
+    }
+
+    /// The page of a long transcript that ends where `before` starts.
+    pub async fn earlier(
+        &self,
+        session: &SessionId,
+        before: u64,
+    ) -> Result<model::session::EarlierPage, GatewayError> {
+        let read = self.read_transcript(session, Some(("before", before))).await?;
+        Ok(model::session::EarlierPage {
+            turns: translate::transcript(read.turns),
+            earlier: read.earlier,
+        })
+    }
+
+    async fn read_transcript(
+        &self,
+        session: &SessionId,
+        query: Option<(&str, u64)>,
+    ) -> Result<wire::gateway::sessions::HarnessSessionTranscriptResponse, GatewayError> {
         let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
-        let url = format!("{}/api/harness-sessions/{segment}/transcript", self.base_url);
-        let read: wire::gateway::sessions::HarnessSessionTranscriptResponse =
-            Self::read_json(self.http.get(url).send().await)?.await?;
-        Ok(translate::transcript(read.turns))
+        let url = match query {
+            Some((name, offset)) => format!(
+                "{}/api/harness-sessions/{segment}/transcript?{name}={offset}",
+                self.base_url
+            ),
+            None => format!("{}/api/harness-sessions/{segment}/transcript", self.base_url),
+        };
+        Self::read_json(self.http.get(url).send().await)?.await
     }
 
     /// Starts a new chat that carries this session's conversation up to the reply to its
-    /// `prompts`th prompt.
-    pub async fn fork(&self, session: &SessionId, prompts: u32) -> Result<SessionSummary, GatewayError> {
+    /// `prompts`th prompt, counted from `from`.
+    pub async fn fork(
+        &self,
+        session: &SessionId,
+        prompts: u32,
+        from: u64,
+    ) -> Result<SessionSummary, GatewayError> {
         let segment = wire::session_id::encode_segment(&translate::wire_session(session)?);
         let url = format!("{}/api/harness-sessions/{segment}/fork", self.base_url);
-        let body = wire::gateway::sessions::HarnessSessionForkRequest { prompts };
+        let body = wire::gateway::sessions::HarnessSessionForkRequest {
+            prompts,
+            from: Some(from),
+        };
         let forked: wire::harness::HarnessSessionSummary =
             Self::read_json(self.http.post(url).json(&body).send().await)?.await?;
         Ok(translate::summary(forked))

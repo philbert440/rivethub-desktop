@@ -12,6 +12,9 @@ pub struct ForkOrigin {
     pub title: Option<String>,
     /// The fork carries the source's conversation up to the reply to this many prompts.
     pub prompts: u32,
+    /// Where in the source's transcript those prompts are counted from; none for a fork
+    /// remembered before that was kept, counted in the source's latest part.
+    pub from: Option<u64>,
 }
 
 /// The source's exchanges the fork carries: everything up to and including the reply to its

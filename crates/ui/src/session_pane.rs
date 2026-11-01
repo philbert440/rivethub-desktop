@@ -15,11 +15,12 @@ use crate::input::{PastedImage, Submitted, TextInput};
 use crate::question_card::QuestionCard;
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
-use crate::transcript::{ExchangeView, Folds};
+use crate::transcript::{ExchangeView, Folds, Running};
 
 mod attach;
 mod composer;
 mod driving;
+mod earlier;
 mod header;
 mod keys;
 pub(crate) mod plan;
@@ -83,7 +84,7 @@ pub struct SessionPane {
     forked_from: Option<String>,
     fork_source: Option<SessionSummary>,
     /// Whether the session's stream was down when the transcript was last folded.
-    lost: bool,
+    running: Running,
     awaiting_title: bool,
     /// When Esc was last pressed in the composer during a turn; a second one soon after stops it.
     escaped: Option<std::time::Instant>,
@@ -118,7 +119,7 @@ impl SessionPane {
         Self::read_fork(&hub, &summary, cx);
         let questions = cx.new(|cx| QuestionCard::new(handle.clone(), cx));
         let asking = cx.observe(&questions, |_, _, cx| cx.notify());
-        Self {
+        let pane = Self {
             hub,
             summary,
             mode: Mode::Chat,
@@ -147,7 +148,7 @@ impl SessionPane {
             carried: Vec::new(),
             forked_from: None,
             fork_source: None,
-            lost: false,
+            running: Running::Working,
             awaiting_title: false,
             escaped: None,
             _revisions: watcher,
@@ -155,7 +156,9 @@ impl SessionPane {
             _pasted: pasted,
             _typed: typed,
             _asking: asking,
-        }
+        };
+        pane.watch_top(cx);
+        pane
     }
 
     /// What the session's harness takes with a prompt: images, and a switch of model or effort
@@ -247,16 +250,39 @@ impl SessionPane {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let (own, lost) = {
+        let (own, running) = {
             let view = self.handle.view();
             let view = view.read();
+            let running = if view.lost() {
+                Running::Lost
+            } else if view.needs_you() {
+                Running::Waiting
+            } else {
+                Running::Working
+            };
             (
                 exchanges(view.turns(), view.live(), view.busy() || view.driving().busy),
-                view.lost(),
+                running,
             )
         };
         let folded: Vec<_> = self.carried.iter().cloned().chain(own).collect();
         let previous = Arc::clone(&self.exchanges);
+        let at = self.carried.len();
+        let inserted = read_back(&folded, &previous, at);
+        if inserted > 0 {
+            self.turns.splice(at..at, inserted);
+            self.turns.remeasure_items(at + inserted..at + inserted + 1);
+            self.folds = Arc::new(self.folds.shifted(at, inserted));
+            self.forking = self
+                .forking
+                .map(|index| if index < at { index } else { index + inserted });
+            self.hovered_turn = None;
+        }
+        let before = |index: usize| match index {
+            index if index < at => previous.get(index),
+            index if index < at + inserted => None,
+            index => previous.get(index - inserted),
+        };
         let turn_ended = previous.last().map(|view| view.exchange.state) == Some(ExchangeState::Working)
             && folded
                 .last()
@@ -266,14 +292,14 @@ impl SessionPane {
         }
         let jump = self.hub.preferences().jump_to_newest
             && arrived(
-                previous.len(),
+                previous.len() + inserted,
                 previous.last().map(|view| view.exchange.state),
                 &folded,
             );
         let views: Vec<ExchangeView> = folded
             .into_iter()
             .enumerate()
-            .map(|(index, exchange)| match previous.get(index) {
+            .map(|(index, exchange)| match before(index) {
                 Some(old) if old.exchange == exchange => old.clone(),
                 Some(old) => ExchangeView::advance(old, exchange),
                 None => ExchangeView::new(exchange),
@@ -283,12 +309,14 @@ impl SessionPane {
         let known = self.turns.item_count();
         let mut first_changed = views
             .iter()
-            .zip(previous.iter())
-            .position(|(new, old)| new != old)
-            .unwrap_or(known.min(count));
-        // A running exchange shows whether its stream is down, so the newest one draws again.
-        if lost != self.lost {
-            self.lost = lost;
+            .enumerate()
+            .filter(|(index, _)| !(at..at + inserted).contains(index))
+            .find(|(index, new)| before(*index).is_none_or(|old| old != *new))
+            .map_or(known.min(count), |(index, _)| index);
+        // A running exchange shows whether its stream is down or it waits on you, so the newest
+        // one draws again.
+        if running != self.running {
+            self.running = running;
             first_changed = first_changed.min(count.saturating_sub(1));
         }
         if count < known {
@@ -335,6 +363,18 @@ impl SessionPane {
         })
         .detach();
     }
+}
+
+/// How many exchanges a page read back put in front of the ones `previous` showed from `at` on;
+/// none when the newest changed the way a turn does.
+fn read_back(folded: &[model::chat::Exchange], previous: &[ExchangeView], at: usize) -> usize {
+    let Some(first) = previous.get(at) else {
+        return 0;
+    };
+    let grown = folded.len().saturating_sub(previous.len());
+    (0..=grown)
+        .find(|shift| folded.get(at + shift) == Some(&first.exchange))
+        .unwrap_or(0)
 }
 
 /// The transcript column: 64% of the pane, kept between 680 and 920px, and never wider than the pane allows.
