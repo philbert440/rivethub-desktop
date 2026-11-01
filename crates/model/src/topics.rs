@@ -33,6 +33,41 @@ pub enum Directory {
     Shared { path: String },
 }
 
+impl Directory {
+    /// A directory from what was typed: a path on `node`, or on every node when there is none. A
+    /// session's working directory is a full path, so anything else is refused.
+    pub fn typed(path: &str, node: Option<String>) -> Option<Self> {
+        let path = path.trim();
+        let path = if path.len() > 1 {
+            path.trim_end_matches('/')
+        } else {
+            path
+        };
+        if !path.starts_with('/') {
+            return None;
+        }
+        let path = path.to_owned();
+        Some(match node {
+            Some(node) => Self::Local { node, path },
+            None => Self::Shared { path },
+        })
+    }
+
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Local { path, .. } | Self::Shared { path } => path,
+        }
+    }
+
+    /// The node it is on, or `None` when every node has it.
+    pub fn node(&self) -> Option<&str> {
+        match self {
+            Self::Local { node, .. } => Some(node),
+            Self::Shared { .. } => None,
+        }
+    }
+}
+
 impl Topic {
     /// Closed, and nothing in it has been active since.
     pub fn is_closed(&self, active_ms: i64) -> bool {

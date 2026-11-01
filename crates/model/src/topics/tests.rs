@@ -132,6 +132,23 @@ fn a_topic_nests_anywhere_but_its_own_subtree_and_never_past_four_levels() {
 }
 
 #[test]
+fn a_typed_directory_is_a_full_path_on_one_node_or_every_node() {
+    assert_eq!(
+        Directory::typed(" /srv/work/ ", Some("ct115".into())),
+        Some(Directory::Local {
+            node: "ct115".into(),
+            path: "/srv/work".into()
+        })
+    );
+    assert_eq!(
+        Directory::typed("/", None),
+        Some(Directory::Shared { path: "/".into() })
+    );
+    assert_eq!(Directory::typed("~/work", None), None);
+    assert_eq!(Directory::typed("", Some("ct115".into())), None);
+}
+
+#[test]
 fn names_fold_to_the_slugs_rh_files_them_under() {
     assert_eq!(slug("Alpha Sub"), "alpha-sub");
     assert_eq!(slug("  alpha--SUB! "), "alpha-sub");

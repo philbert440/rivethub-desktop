@@ -8,6 +8,7 @@ mod navigate;
 mod new_topic;
 mod placing;
 mod sharing;
+mod topic_directory;
 mod topic_edit;
 mod topic_path;
 mod topic_rows;
@@ -105,6 +106,7 @@ pub struct Workspace {
     screen: TopicScreen,
     naming: Option<new_topic::Naming>,
     retitling: Option<topic_edit::Retitling>,
+    rooting: Option<topic_directory::Rooting>,
     choosing: Option<topic_edit::Choosing>,
     suggestions: HashMap<SessionId, Suggestion>,
     subagents: HashMap<SessionId, usize>,
@@ -219,6 +221,7 @@ impl Workspace {
             screen: TopicScreen::default(),
             naming: None,
             retitling: None,
+            rooting: None,
             choosing: None,
             suggestions: HashMap::new(),
             subagents: HashMap::new(),

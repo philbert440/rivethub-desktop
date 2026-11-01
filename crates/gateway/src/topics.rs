@@ -286,6 +286,30 @@ impl Gateway {
         .await
     }
 
+    /// Sets where the topic's sessions start, or clears it so they start where the topic above it
+    /// says.
+    pub async fn set_topic_directory(
+        &self,
+        topic: &TopicId,
+        directory: Option<&Directory>,
+    ) -> Result<(), GatewayError> {
+        let directory = directory.map(|directory| match directory {
+            Directory::Local { node, path } => TopicDirectory::Local {
+                node: node.clone(),
+                path: path.clone(),
+            },
+            Directory::Shared { path } => TopicDirectory::Shared { path: path.clone() },
+        });
+        self.update_topic(
+            topic,
+            TopicUpdate {
+                directory: Some(directory),
+                ..TopicUpdate::default()
+            },
+        )
+        .await
+    }
+
     async fn update_topic(&self, topic: &TopicId, update: TopicUpdate) -> Result<(), GatewayError> {
         let url = self.api_url(&["api", "topics", topic.as_str()])?;
         let _: TopicRecord = Self::refusable(self.http.patch(url).json(&update).send().await).await?;

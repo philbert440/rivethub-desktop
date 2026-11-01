@@ -307,7 +307,7 @@ impl Workspace {
     }
 
     /// Runs a topic change, then `then` once rh has taken it; a refusal shows rh's own words.
-    fn edit_topics(
+    pub(super) fn edit_topics(
         &mut self,
         work: impl Future<Output = Result<(), GatewayError>> + 'static,
         failure: &'static str,
